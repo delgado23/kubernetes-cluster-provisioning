@@ -143,7 +143,7 @@
 # Controlplane firewall rules
 # =============================================================================
 - name: Configure controlplane firewall rules
-  hosts: controlplane
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
 
   tasks:
@@ -188,7 +188,7 @@
 # Worker node firewall rules
 # =============================================================================
 - name: Configure worker node firewall rules
-  hosts: workers
+  hosts: foreman_almalinux10_kubernetesworkernode
   become: true
 
   tasks:
