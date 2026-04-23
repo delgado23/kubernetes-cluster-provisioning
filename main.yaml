@@ -150,6 +150,12 @@
         permanent: true
         state: enabled
 
+    - name: Open HAProxy Server port (7443/tcp)
+      firewalld:
+        port: 7443/tcp
+        permanent: true
+        state: enabled
+
     - name: Open etcd server client API ports (2379-2380/tcp)
       firewalld:
         port: "{{ item }}/tcp"
