@@ -1,0 +1,209 @@
+---
+- name: Kubernetes Node Prerequisites Setup
+  hosts: all
+  become: true
+
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # Swap
+    # -------------------------------------------------------------------------
+    - name: Disable swap immediately
+      command: swapoff -a
+      changed_when: false
+
+    - name: Disable swap permanently in /etc/fstab
+      replace:
+        path: /etc/fstab
+        regexp: '^([^#].*\sswap\s.*)$'
+        replace: '#\1'
+
+    # -------------------------------------------------------------------------
+    # Kernel modules
+    # -------------------------------------------------------------------------
+    - name: Configure kernel modules to load at boot
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Load overlay kernel module
+      modprobe:
+        name: overlay
+        state: present
+
+    - name: Load br_netfilter kernel module
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    # -------------------------------------------------------------------------
+    # sysctl
+    # -------------------------------------------------------------------------
+    - name: Configure sysctl parameters for Kubernetes
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward                 = 1
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Apply sysctl parameters
+      command: sysctl --system
+      changed_when: false
+
+    # -------------------------------------------------------------------------
+    # System packages
+    # -------------------------------------------------------------------------
+    - name: Update all system packages
+      dnf:
+        name: '*'
+        state: latest
+        update_cache: true
+
+    # -------------------------------------------------------------------------
+    # containerd
+    # -------------------------------------------------------------------------
+    - name: Install containerd
+      dnf:
+        name: containerd.io
+        state: present
+
+    - name: Ensure /etc/containerd directory exists
+      file:
+        path: /etc/containerd
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Generate default containerd config
+      shell: containerd config default > /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+
+    - name: Enable SystemdCgroup in containerd config
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+      notify: Restart containerd
+
+    - name: Enable and start containerd
+      systemd:
+        name: containerd
+        enabled: true
+        state: started
+
+    # -------------------------------------------------------------------------
+    # Kubernetes components
+    # -------------------------------------------------------------------------
+    - name: Install Kubernetes components
+      dnf:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        disable_excludes: kubernetes
+
+    - name: Enable and start kubelet
+      systemd:
+        name: kubelet
+        enabled: true
+        state: started
+
+    # -------------------------------------------------------------------------
+    # Firewall rules — common to all nodes
+    # -------------------------------------------------------------------------
+    - name: Trust pod network CIDR in firewalld
+      firewalld:
+        source: 10.244.0.0/16
+        zone: trusted
+        permanent: true
+        state: enabled
+
+  # ---------------------------------------------------------------------------
+  # Handlers
+  # ---------------------------------------------------------------------------
+  handlers:
+    - name: Restart containerd
+      systemd:
+        name: containerd
+        state: restarted
+
+# =============================================================================
+# Controlplane firewall rules
+# =============================================================================
+- name: Configure controlplane firewall rules
+  hosts: controlplane
+  become: true
+
+  tasks:
+    - name: Open Kubernetes API Server port (6443/tcp)
+      firewalld:
+        port: 6443/tcp
+        permanent: true
+        state: enabled
+
+    - name: Open etcd server client API ports (2379-2380/tcp)
+      firewalld:
+        port: "{{ item }}/tcp"
+        permanent: true
+        state: enabled
+      loop:
+        - 2379
+        - 2380
+
+    - name: Open Kubelet API port (10250/tcp)
+      firewalld:
+        port: 10250/tcp
+        permanent: true
+        state: enabled
+
+    - name: Open kube-scheduler port (10259/tcp)
+      firewalld:
+        port: 10259/tcp
+        permanent: true
+        state: enabled
+
+    - name: Open kube-controller-manager port (10257/tcp)
+      firewalld:
+        port: 10257/tcp
+        permanent: true
+        state: enabled
+
+    - name: Reload firewalld
+      command: firewall-cmd --reload
+      changed_when: false
+
+# =============================================================================
+# Worker node firewall rules
+# =============================================================================
+- name: Configure worker node firewall rules
+  hosts: workers
+  become: true
+
+  tasks:
+    - name: Open Kubelet API port (10250/tcp)
+      firewalld:
+        port: 10250/tcp
+        permanent: true
+        state: enabled
+
+    - name: Open NodePort Services range (30000-32767/tcp)
+      firewalld:
+        port: 30000-32767/tcp
+        permanent: true
+        state: enabled
+
+    - name: Reload firewalld
+      command: firewall-cmd --reload
+      changed_when: false
