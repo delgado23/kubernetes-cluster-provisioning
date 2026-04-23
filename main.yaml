@@ -137,7 +137,7 @@
         state: restarted
 
 # =============================================================================
-# Controlplane firewall rules
+# Controlplane setup
 # =============================================================================
 - name: Configure controlplane firewall rules
   hosts: foreman_almalinux10_kubernetescontrolplanenode
@@ -180,6 +180,13 @@
     - name: Reload firewalld
       command: firewall-cmd --reload
       changed_when: false
+
+    - name: Install Kubernetes components
+      dnf:
+        name:
+          - keepalived
+          - haproxy
+        state: present
 
 # =============================================================================
 # Worker node firewall rules
