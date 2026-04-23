@@ -194,6 +194,20 @@
           - haproxy
         state: present
 
+    - name: Deploy containerd config.toml from template
+      copy:
+        src: files/haproxy/conf.d/k8s.cfg
+        dest: /etc/haproxy/conf.d/k8s.cfg
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Allow HAProxy to connect to any port (SELinux)
+      ansible.posix.seboolean:
+        name: haproxy_connect_any
+        state: true
+        persistent: yes
+
 # =============================================================================
 # Worker node firewall rules
 # =============================================================================
