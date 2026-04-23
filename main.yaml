@@ -73,7 +73,7 @@
     # -------------------------------------------------------------------------
     - name: Install containerd
       dnf:
-        name: containerd
+        name: containerd.io
         state: present
 
     - name: Ensure /etc/containerd directory exists
@@ -84,16 +84,13 @@
         group: root
         mode: '0755'
 
-    - name: Generate default containerd config
-      shell: containerd config default > /etc/containerd/config.toml
-      args:
-        creates: /etc/containerd/config.toml
-
-    - name: Enable SystemdCgroup in containerd config
-      replace:
-        path: /etc/containerd/config.toml
-        regexp: 'SystemdCgroup = false'
-        replace: 'SystemdCgroup = true'
+    - name: Deploy containerd config.toml from template
+      copy:
+        src: files/containerd/config.toml
+        dest: /etc/containerd/config.toml
+        owner: root
+        group: root
+        mode: '0644'
       notify: Restart containerd
 
     - name: Enable and start containerd
