@@ -120,12 +120,35 @@
     # -------------------------------------------------------------------------
     # Firewall rules — common to all nodes
     # -------------------------------------------------------------------------
-    - name: Trust pod network CIDR in firewalld
+    - name: Open Flannel VXLAN port
       firewalld:
-        source: 10.244.0.0/16
-        zone: trusted
+        port: 8472/udp
         permanent: true
         state: enabled
+        immediate: true
+
+    - name: Trust pod network CIDR
+      firewalld:
+        zone: trusted
+        source: 10.244.0.0/16
+        permanent: true
+        state: enabled
+        immediate: true
+
+    - name: Trust service network CIDR
+      firewalld:
+        zone: trusted
+        source: 10.96.0.0/12
+        permanent: true
+        state: enabled
+        immediate: true
+
+    - name: Enable masquerade
+      firewalld:
+        masquerade: true
+        permanent: true
+        state: enabled
+        immediate: true
 
   # ---------------------------------------------------------------------------
   # Handlers
