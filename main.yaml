@@ -73,7 +73,7 @@
     # -------------------------------------------------------------------------
     - name: Install containerd
       dnf:
-        name: containerd.io
+        name: containerd
         state: present
 
     - name: Ensure /etc/containerd directory exists
