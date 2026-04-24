@@ -17,7 +17,7 @@ vrrp_instance VI_1 {
     }
 
     virtual_ipaddress {
-        172.16.0.29/23      # your chosen VIP
+        {{ foreman_params.keepalived_vip }}     # your chosen VIP
     }
 
     track_script {
