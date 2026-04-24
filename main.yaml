@@ -157,6 +157,12 @@
 - name: Configure controlplane firewall rules
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
+  vars:
+    keepalived_state: "BACKUP"
+    keepalived_priority: 100
+    keepalived_router_id: 51
+    keepalived_vip: "172.16.0.29/23"
+    keepalived_auth_pass: "secretpass"
 
   tasks:
     - name: Open Kubernetes API Server port (6443/tcp)
