@@ -122,7 +122,7 @@
     - name: Trust pod network CIDR
       firewalld:
         zone: trusted
-        source: "{{ k8s_pod_cidr | default('10.244.0.0/16') }}"
+        source: "{{ foreman_params.k8s_pod_cidr }}"
         permanent: true
         state: enabled
         immediate: true
@@ -130,7 +130,7 @@
     - name: Trust service network CIDR
       firewalld:
         zone: trusted
-        source: "{{ k8s_service_cidr | default('10.96.0.0/12') }}"
+        source: "{{ foreman_params.k8s_service_cidr }}"
         permanent: true
         state: enabled
         immediate: true
@@ -168,7 +168,7 @@
 
     - name: Open HAProxy port
       firewalld:
-        port: "{{ haproxy_port | default('7443') }}/tcp"
+        port: "{{ foreman_params.haproxy_port }}/tcp"
         permanent: true
         state: enabled
         immediate: true
