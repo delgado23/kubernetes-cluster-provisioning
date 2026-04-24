@@ -230,7 +230,7 @@
 
     - name: Deploy HAProxy k8s config
       copy:
-        src: files/haproxy/conf.d/k8s.cfg
+        src:  templates/k8s.cfg.j2
         dest: /etc/haproxy/conf.d/k8s.cfg
         owner: root
         group: root
