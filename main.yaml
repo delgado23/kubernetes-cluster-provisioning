@@ -229,8 +229,8 @@
         state: present
 
     - name: Deploy HAProxy k8s config
-      copy:
-        src:  templates/k8s.cfg.j2
+      template:
+        src: templates/k8s.cfg.j2
         dest: /etc/haproxy/conf.d/k8s.cfg
         owner: root
         group: root
