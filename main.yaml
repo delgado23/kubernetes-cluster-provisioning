@@ -59,14 +59,6 @@
       command: sysctl --system
       changed_when: false
 
-    # -------------------------------------------------------------------------
-    # System packages
-    # -------------------------------------------------------------------------
-    - name: Update all system packages
-      dnf:
-        name: '*'
-        state: latest
-        update_cache: true
 
     # -------------------------------------------------------------------------
     # containerd
