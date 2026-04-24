@@ -1,0 +1,26 @@
+vrrp_script check_haproxy {
+    script "killall -0 haproxy"
+    interval 2
+    weight 2
+}
+
+vrrp_instance VI_1 {
+    state {{ keepalived_state | default(BACKUP) }}
+    interface {{ ansible_default_ipv4.interface }}         # change to your actual interface
+    virtual_router_id {{ keepalived_router_id | default(51) }}
+    priority {{ keepalived_priority }}
+    advert_int 1
+
+    authentication {
+        auth_type PASS
+        auth_pass nRKASksGAq3UjlnJLrXPIsyEs
+    }
+
+    virtual_ipaddress {
+        172.16.0.29/23      # your chosen VIP
+    }
+
+    track_script {
+        check_haproxy
+    }
+}
