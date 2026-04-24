@@ -130,7 +130,7 @@
     - name: Trust pod network CIDR
       firewalld:
         zone: trusted
-        source: 10.244.0.0/16
+        source: "{{ k8s_pod_cidr | default('10.244.0.0/16') }}"
         permanent: true
         state: enabled
         immediate: true
@@ -138,7 +138,7 @@
     - name: Trust service network CIDR
       firewalld:
         zone: trusted
-        source: 10.96.0.0/12
+        source: "{{ k8s_service_cidr | default('10.96.0.0/12') }}"
         permanent: true
         state: enabled
         immediate: true
@@ -172,18 +172,21 @@
         port: 6443/tcp
         permanent: true
         state: enabled
+        immediate: true
 
-    - name: Open HAProxy Server port (7443/tcp)
+    - name: Open HAProxy port
       firewalld:
-        port: 7443/tcp
+        port: "{{ haproxy_port | default('7443') }}/tcp"
         permanent: true
         state: enabled
+        immediate: true
 
     - name: Open etcd server client API ports (2379-2380/tcp)
       firewalld:
         port: "{{ item }}/tcp"
         permanent: true
         state: enabled
+        immediate: true
       loop:
         - 2379
         - 2380
@@ -193,43 +196,92 @@
         port: 10250/tcp
         permanent: true
         state: enabled
+        immediate: true
 
     - name: Open kube-scheduler port (10259/tcp)
       firewalld:
         port: 10259/tcp
         permanent: true
         state: enabled
+        immediate: true
 
     - name: Open kube-controller-manager port (10257/tcp)
       firewalld:
         port: 10257/tcp
         permanent: true
         state: enabled
+        immediate: true
+
+    - name: Allow VRRP protocol for keepalived
+      firewalld:
+        rich_rule: 'rule protocol value="vrrp" accept'
+        permanent: true
+        state: enabled
+        immediate: true
 
     - name: Reload firewalld
       command: firewall-cmd --reload
       changed_when: false
 
-    - name: Install Kubernetes components
+    - name: Install controlplane packages
       dnf:
         name:
           - keepalived
           - haproxy
         state: present
 
-    - name: Deploy containerd config.toml from template
+    - name: Deploy HAProxy k8s config
       copy:
         src: files/haproxy/conf.d/k8s.cfg
         dest: /etc/haproxy/conf.d/k8s.cfg
         owner: root
         group: root
         mode: '0644'
+      notify:
+        - Validate haproxy config
+        - Restart haproxy
+
+    - name: Deploy keepalived config
+      template:
+        src: templates/keepalived.conf.j2
+        dest: /etc/keepalived/keepalived.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart keepalived
 
     - name: Allow HAProxy to connect to any port (SELinux)
       ansible.posix.seboolean:
         name: haproxy_connect_any
         state: true
-        persistent: yes
+        persistent: true
+
+    - name: Enable and start HAProxy
+      systemd:
+        name: haproxy
+        enabled: true
+        state: started
+
+    - name: Enable and start keepalived
+      systemd:
+        name: keepalived
+        enabled: true
+        state: started
+
+  handlers:
+    - name: Validate haproxy config
+      command: haproxy -f /etc/haproxy/haproxy.cfg -f /etc/haproxy/conf.d/k8s.cfg -c
+      changed_when: false
+
+    - name: Restart haproxy
+      systemd:
+        name: haproxy
+        state: restarted
+
+    - name: Restart keepalived
+      systemd:
+        name: keepalived
+        state: restarted
 
 # =============================================================================
 # Worker node firewall rules
@@ -244,12 +296,14 @@
         port: 10250/tcp
         permanent: true
         state: enabled
+        immediate: true
 
     - name: Open NodePort Services range (30000-32767/tcp)
       firewalld:
         port: 30000-32767/tcp
         permanent: true
         state: enabled
+        immediate: true
 
     - name: Reload firewalld
       command: firewall-cmd --reload
