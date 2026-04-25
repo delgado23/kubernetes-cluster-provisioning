@@ -16,69 +16,8 @@
   vars_files:
     - vars/foreman.yml      # Foreman connection settings
     - vars/vm_defaults.yml  # Default VM hardware specs
+    - vars/vms.yml          # Node definitions (names, IPs, hostgroups)
 
-  vars:
-    # ---------------------------------------------------------------
-    # Hostgroup constants — edit these if the Foreman names change
-    # ---------------------------------------------------------------
-    hg_controlplane: "AlmaLinux 10/Kubernetes Controlplane Node"
-    hg_worker:       "AlmaLinux 10/Kubernetes Worker Node"
-
-    # ---------------------------------------------------------------
-    # Define your Kubernetes nodes here.
-    # Required  : name, ip, hostgroup (use the constants above)
-    # Optional  : cores, memory_mb, disk_gb
-    # ---------------------------------------------------------------
-    vms:
-      # --- Controlplane nodes ---
-      - name: arthas
-        ip: 172.16.0.30
-        hostgroup: "{{ hg_controlplane }}"
-
-      - name: kel-thuzad
-        ip: 172.16.0.31
-        hostgroup: "{{ hg_controlplane }}"
-
-      - name: sapphiron
-        ip: 172.16.0.32
-        hostgroup: "{{ hg_controlplane }}"
-
-      # --- Worker nodes ---
-      - name: noth
-        ip: 172.16.0.33
-        hostgroup: "{{ hg_worker }}"
-
-      - name: heigan
-        ip: 172.16.0.34
-        hostgroup: "{{ hg_worker }}"
-
-      - name: loatheb
-        ip: 172.16.0.35
-        hostgroup: "{{ hg_worker }}"
-
-      - name: patchwerk
-        ip: 172.16.0.36
-        hostgroup: "{{ hg_worker }}"
-
-      - name: grobbulus
-        ip: 172.16.0.37
-        hostgroup: "{{ hg_worker }}"
-
-      - name: gluth
-        ip: 172.16.0.38
-        hostgroup: "{{ hg_worker }}"
-
-      - name: thaddius
-        ip: 172.16.0.39
-        hostgroup: "{{ hg_worker }}"
-
-      - name: razuvious
-        ip: 172.16.0.40
-        hostgroup: "{{ hg_worker }}"
-
-      - name: gothik
-        ip: 172.16.0.41
-        hostgroup: "{{ hg_worker }}"
   tasks:
 
     # ------------------------------------------------------------------
@@ -102,7 +41,7 @@
     # ------------------------------------------------------------------
     - name: Look up Foreman hostgroup IDs
       ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hostgroups?search=name%3D{{ item.hostgroup | urlencode }}&per_page=1"
+        url: "{{ foreman_url }}/api/hostgroups"
         method: GET
         user: "{{ foreman_user }}"
         password: "{{ foreman_password }}"
@@ -112,6 +51,12 @@
         headers:
           Content-Type: application/json
           Accept: application/json
+        # Using 'title' matches nested groups like "Parent/Child".
+        # The uri module handles encoding of the query string automatically.
+        body_format: form-urlencoded
+        body:
+          search: "title = \"{{ item }}\""
+          per_page: 1
       register: hostgroup_results
       loop: "{{ vms | map(attribute='hostgroup') | unique | list }}"
       loop_control:
