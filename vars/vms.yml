@@ -15,6 +15,11 @@ vms:
   - name: arthas
     ip: 172.16.0.30
     hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+    host_parameters:
+      - name: keepalived_state
+        value: MASTER
+      - name: keepalived_priority
+        value: 101
 
   - name: kel-thuzad
     ip: 172.16.0.31
