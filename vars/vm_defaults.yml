@@ -11,5 +11,5 @@
 # Override cores/memory_mb downward on individual worker entries if needed.
 
 default_cores: 4
-default_memory_mb: 8192   # 8 GB
-default_disk_gb: 80
+default_memory_mb: 3072   # 8 GB
+default_disk_gb: 150
