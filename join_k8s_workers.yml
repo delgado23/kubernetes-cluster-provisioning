@@ -165,7 +165,7 @@
       retries: 12
       delay: 10
       until: >-
-        groups['k8s_workers'] | map('extract', hostvars, 'inventory_hostname') | list
+        groups['foreman_almalinux10_kubernetesworkernode'] | map('extract', hostvars, 'inventory_hostname') | list
         | difference(node_list.stdout_lines | map('regex_search', '^(\S+)') | list)
         | length == 0
       changed_when: false
