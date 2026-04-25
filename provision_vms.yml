@@ -55,22 +55,52 @@
       loop_control:
         label: "{{ item }}"
 
-    - name: Build hostgroup lookup map (id, location_id, organization_id)
+    - name: Build hostgroup name-to-id map (from search results)
       ansible.builtin.set_fact:
         hostgroup_id_map: >-
           {{
             hostgroup_id_map | default({}) | combine({
-              item.item: {
-                'id':              item.json.results[0].id | string,
-                'location_id':     item.json.results[0].locations[0].id | string,
-                'organization_id': item.json.results[0].organizations[0].id | string
-              }
+              item.item: { 'id': item.json.results[0].id | string }
             })
           }}
       loop: "{{ hostgroup_results.results }}"
       loop_control:
         label: "{{ item.item }}"
       when: item.json.results | length > 0
+
+    # Fetch each hostgroup individually — the show endpoint returns
+    # locations and organizations, the search/index endpoint does not.
+    - name: Fetch full hostgroup details (location and organization)
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hostgroups/{{ hostgroup_id_map[item].id }}"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        return_content: true
+        headers:
+          Accept: application/json
+      register: hostgroup_details
+      loop: "{{ vms | map(attribute='hostgroup') | unique | list }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Enrich hostgroup map with location_id and organization_id
+      ansible.builtin.set_fact:
+        hostgroup_id_map: >-
+          {{
+            hostgroup_id_map | combine({
+              item.item: hostgroup_id_map[item.item] | combine({
+                'location_id':     item.json.locations[0].id | string,
+                'organization_id': item.json.organizations[0].id | string
+              })
+            })
+          }}
+      loop: "{{ hostgroup_details.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.json.locations | length > 0 and item.json.organizations | length > 0
 
     - name: Fail if any hostgroup was not found
       ansible.builtin.fail:
