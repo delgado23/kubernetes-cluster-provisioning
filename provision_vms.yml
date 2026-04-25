@@ -16,8 +16,69 @@
   vars_files:
     - vars/foreman.yml      # Foreman connection settings
     - vars/vm_defaults.yml  # Default VM hardware specs
-    - vars/vms.yml          # Node definitions (names, IPs, hostgroups)
 
+  vars:
+    # ---------------------------------------------------------------
+    # Hostgroup constants — edit these if the Foreman names change
+    # ---------------------------------------------------------------
+    hg_controlplane: "AlmaLinux 10/Kubernetes Controlplane Node"
+    hg_worker:       "AlmaLinux 10/Kubernetes Worker Node"
+
+    # ---------------------------------------------------------------
+    # Define your Kubernetes nodes here.
+    # Required  : name, ip, hostgroup (use the constants above)
+    # Optional  : cores, memory_mb, disk_gb
+    # ---------------------------------------------------------------
+    vms:
+      # --- Controlplane nodes ---
+      - name: arthas
+        ip: 172.16.0.30
+        hostgroup: "{{ hg_controlplane }}"
+
+      - name: kel-thuzad
+        ip: 172.16.0.31
+        hostgroup: "{{ hg_controlplane }}"
+
+      - name: sapphiron
+        ip: 172.16.0.32
+        hostgroup: "{{ hg_controlplane }}"
+
+      # --- Worker nodes ---
+      - name: noth
+        ip: 172.16.0.33
+        hostgroup: "{{ hg_worker }}"
+
+      - name: heigan
+        ip: 172.16.0.34
+        hostgroup: "{{ hg_worker }}"
+
+      - name: loatheb
+        ip: 172.16.0.35
+        hostgroup: "{{ hg_worker }}"
+
+      - name: patchwerk
+        ip: 172.16.0.36
+        hostgroup: "{{ hg_worker }}"
+
+      - name: grobbulus
+        ip: 172.16.0.37
+        hostgroup: "{{ hg_worker }}"
+
+      - name: gluth
+        ip: 172.16.0.38
+        hostgroup: "{{ hg_worker }}"
+
+      - name: thaddius
+        ip: 172.16.0.39
+        hostgroup: "{{ hg_worker }}"
+
+      - name: razuvious
+        ip: 172.16.0.40
+        hostgroup: "{{ hg_worker }}"
+
+      - name: gothik
+        ip: 172.16.0.41
+        hostgroup: "{{ hg_worker }}"
   tasks:
 
     # ------------------------------------------------------------------
@@ -41,7 +102,7 @@
     # ------------------------------------------------------------------
     - name: Look up Foreman hostgroup IDs
       ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hostgroups?search=title+%3D+%22{{ item | urlencode }}%22&per_page=1"
+        url: "{{ foreman_url }}/api/hostgroups?search=name%3D{{ item.hostgroup | urlencode }}&per_page=1"
         method: GET
         user: "{{ foreman_user }}"
         password: "{{ foreman_password }}"
@@ -49,58 +110,25 @@
         validate_certs: "{{ foreman_validate_certs }}"
         return_content: true
         headers:
+          Content-Type: application/json
           Accept: application/json
       register: hostgroup_results
       loop: "{{ vms | map(attribute='hostgroup') | unique | list }}"
       loop_control:
         label: "{{ item }}"
 
-    - name: Build hostgroup name-to-id map (from search results)
+    - name: Build hostgroup name-to-id map
       ansible.builtin.set_fact:
         hostgroup_id_map: >-
           {{
-            hostgroup_id_map | default({}) | combine({
-              item.item: { 'id': item.json.results[0].id | string }
-            })
+            hostgroup_id_map | default({}) | combine(
+              { item.item: (item.json.results[0].id | string) }
+            )
           }}
       loop: "{{ hostgroup_results.results }}"
       loop_control:
         label: "{{ item.item }}"
       when: item.json.results | length > 0
-
-    # Fetch each hostgroup individually — the show endpoint returns
-    # locations and organizations, the search/index endpoint does not.
-    - name: Fetch full hostgroup details (location and organization)
-      ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hostgroups/{{ hostgroup_id_map[item].id }}"
-        method: GET
-        user: "{{ foreman_user }}"
-        password: "{{ foreman_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ foreman_validate_certs }}"
-        return_content: true
-        headers:
-          Accept: application/json
-      register: hostgroup_details
-      loop: "{{ vms | map(attribute='hostgroup') | unique | list }}"
-      loop_control:
-        label: "{{ item }}"
-
-    - name: Enrich hostgroup map with location_id and organization_id
-      ansible.builtin.set_fact:
-        hostgroup_id_map: >-
-          {{
-            hostgroup_id_map | combine({
-              item.item: hostgroup_id_map[item.item] | combine({
-                'location_id':     item.json.locations[0].id | string,
-                'organization_id': item.json.organizations[0].id | string
-              })
-            })
-          }}
-      loop: "{{ hostgroup_details.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-      when: item.json.locations | length > 0 and item.json.organizations | length > 0
 
     - name: Fail if any hostgroup was not found
       ansible.builtin.fail:
@@ -149,14 +177,27 @@
         body:
           host:
             name: "{{ item.0.name }}"
-            hostgroup_id: "{{ hostgroup_id_map[item.0.hostgroup].id }}"
-            location_id: "{{ hostgroup_id_map[item.0.hostgroup].location_id }}"
-            organization_id: "{{ hostgroup_id_map[item.0.hostgroup].organization_id }}"
+            hostgroup_id: "{{ hostgroup_id_map[item.0.hostgroup] }}"
+            domain_id: "{{ foreman_domain_id }}"
+            subnet_id: "{{ foreman_subnet_id }}"
+            operatingsystem_id: "{{ foreman_os_id }}"
+            ptable_id: "{{ foreman_ptable_id }}"
+            medium_id: "{{ foreman_medium_id }}"
+            environment_id: "{{ foreman_environment_id }}"
             compute_resource_id: "{{ foreman_compute_resource_id }}"
             compute_profile_id: "{{ foreman_compute_profile_id }}"
-            ip: "{{ item.0.ip }}"
             build: true
             managed: true
+            ip: "{{ item.0.ip }}"
+            compute_attributes:
+              cores: "{{ item.0.cores | default(default_cores) }}"
+              memory: "{{ ((item.0.memory_mb | default(default_memory_mb)) * 1024 * 1024) | int }}"
+              # Proxmox-specific disk config — adjust pool/storage name as needed
+              volumes_attributes:
+                "0":
+                  size_gb: "{{ item.0.disk_gb | default(default_disk_gb) }}"
+                  storage: "{{ proxmox_storage }}"
+                  cache: "{{ proxmox_disk_cache }}"
       loop: "{{ vms | zip(existing_hosts.results) | list }}"
       loop_control:
         label: "{{ item.0.name }}"
@@ -210,36 +251,4 @@
         label: "{{ item.name }}"
       when:
         - wait_for_build | default(false)
-        - created_hosts is define
-
-    # ------------------------------------------------------------------
-    # 7. Power on VMs
-    # ------------------------------------------------------------------
-    - name: Power on VMs
-      ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
-        method: PUT
-        user: "{{ foreman_user }}"
-        password: "{{ foreman_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ foreman_validate_certs }}"
-        body_format: json
-        status_code: [200, 201]
-        headers:
-          Content-Type: application/json
-          Accept: application/json
-        body:
-          power_action: "start"
-      loop: "{{ vms }}"
-      loop_control:
-        label: "{{ item.name }}"
-      register: power_results
- 
-    - name: Report power on results
-      ansible.builtin.debug:
-        msg: "POWERED ON — {{ item.item.name }}: {{ item.json.power | default('started') }}"
-      loop: "{{ power_results.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
-      when: item.skipped is not defined or not item.skipped
- 
+        - created_hosts is defined
