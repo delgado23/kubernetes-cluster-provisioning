@@ -116,21 +116,16 @@
           host:
             name: "{{ item.0.name }}"
             hostgroup_id: "{{ hostgroup_id_map[item.0.hostgroup] }}"
-            domain_id: "{{ foreman_domain_id }}"
-            subnet_id: "{{ foreman_subnet_id }}"
-            operatingsystem_id: "{{ foreman_os_id }}"
-            ptable_id: "{{ foreman_ptable_id }}"
-            medium_id: "{{ foreman_medium_id }}"
-            environment_id: "{{ foreman_environment_id }}"
             compute_resource_id: "{{ foreman_compute_resource_id }}"
             compute_profile_id: "{{ foreman_compute_profile_id }}"
+            ip: "{{ item.0.ip }}"
             build: true
             managed: true
-            ip: "{{ item.0.ip }}"
+            # domain, subnet, OS, ptable, medium, environment are all
+            # inherited from the hostgroup and do not need to be set here.
             compute_attributes:
               cores: "{{ item.0.cores | default(default_cores) }}"
               memory: "{{ ((item.0.memory_mb | default(default_memory_mb)) * 1024 * 1024) | int }}"
-              # Proxmox-specific disk config — adjust pool/storage name as needed
               volumes_attributes:
                 "0":
                   size_gb: "{{ item.0.disk_gb | default(default_disk_gb) }}"
