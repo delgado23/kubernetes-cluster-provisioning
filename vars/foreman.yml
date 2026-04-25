@@ -1,0 +1,35 @@
+---
+# vars/foreman.yml
+# Foreman connection and resource identifiers.
+# Sensitive values (foreman_user, foreman_password) should be moved
+# to an Ansible Vault file in production.
+
+foreman_url: "https://foreman.example.com"
+foreman_user: "admin"
+foreman_password: "{{ vault_foreman_password }}"   # store in vault
+foreman_validate_certs: false
+foreman_domain: "example.com"               # used for host existence check
+
+# Location and Organization — required by Foreman on every host
+# Find with: curl -sk -u admin:pass https://foreman.example.com/api/locations | python3 -m json.tool
+# Find with: curl -sk -u admin:pass https://foreman.example.com/api/organizations | python3 -m json.tool
+foreman_location_id: 3
+foreman_organization_id: 4
+
+# Proxmox compute resource registered in Foreman
+# Find with: curl -sk -u admin:pass https://foreman.example.com/api/compute_resources | python3 -m json.tool
+foreman_compute_resource_id: 1
+
+# Compute profile (maps to a Proxmox VM sizing template)
+# Find with: curl -sk -u admin:pass https://foreman.example.com/api/compute_profiles | python3 -m json.tool
+foreman_compute_profile_id: 6
+
+# Proxmox storage pool for VM disks
+proxmox_storage: "linstor"
+proxmox_disk_cache: "none"   # none | writeback | writethrough | unsafe
+
+# Build polling (used when wait_for_build: true)
+wait_for_build: false
+build_wait_retries: 60
+build_wait_delay_seconds: 30
+
