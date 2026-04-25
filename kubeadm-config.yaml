@@ -24,9 +24,9 @@ apiServer:
     - "arthas.example.com"
     - "kel-thuzad.example.com"
     - "sapphiron.example.com"
-    - "172.16.1.11"
-    - "172.16.1.146"
-    - "172.16.0.148"
+    - "172.16.0.30"
+    - "172.16.0.31"
+    - "172.16.0.32"
     - "127.0.0.1"
     - "localhost"
 ---
