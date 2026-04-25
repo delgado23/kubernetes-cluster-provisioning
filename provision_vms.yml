@@ -157,17 +157,6 @@
             ip: "{{ item.0.ip }}"
             build: true
             managed: true
-            # location and organization are read from the hostgroup automatically.
-            # domain, subnet, OS, ptable, medium, environment are also
-            # inherited from the hostgroup and do not need to be set here.
-            compute_attributes:
-              cores: "{{ item.0.cores | default(default_cores) }}"
-              memory: "{{ ((item.0.memory_mb | default(default_memory_mb)) * 1024 * 1024) | int }}"
-              volumes_attributes:
-                "0":
-                  size_gb: "{{ item.0.disk_gb | default(default_disk_gb) }}G"
-                  storage: "{{ proxmox_storage }}"
-                  cache: "{{ proxmox_disk_cache }}"
       loop: "{{ vms | zip(existing_hosts.results) | list }}"
       loop_control:
         label: "{{ item.0.name }}"
