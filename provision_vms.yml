@@ -164,13 +164,22 @@
       register: created_hosts
 
     - name: Set host parameters in Foreman
-      theforeman.foreman.host_param:
-        username: "{{ foreman_user }}"
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ item.0.name }}.{{ foreman_domain }}/parameters"
+        method: POST
+        user: "{{ foreman_user }}"
         password: "{{ foreman_password }}"
-        server_url: "{{ foreman_url }}"
-        host: "{{ item.0.name }}"
-        name: "{{ item.1.name }}"
-        value: "{{ item.1.value }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        body_format: json
+        status_code: [201, 422]  # 422 = parameter already exists
+        headers:
+          Content-Type: application/json
+          Accept: application/json
+        body:
+          parameter:
+            name: "{{ item.1.name }}"
+            value: "{{ item.1.value | string }}"
       loop: >-
         {{
           vms
