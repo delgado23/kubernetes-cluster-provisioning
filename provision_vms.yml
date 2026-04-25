@@ -168,10 +168,17 @@
         username: "{{ foreman_user }}"
         password: "{{ foreman_password }}"
         server_url: "{{ foreman_url }}"
-        host: "{{ vm.name }}"
-        name: "{{ item.name }}"
-        value: "{{ item.value }}"
-      loop: "{{ vm.host_parameters | default([]) }}"
+        host: "{{ item.0.name }}"
+        name: "{{ item.1.name }}"
+        value: "{{ item.1.value }}"
+      loop: >-
+        {{
+          vms
+          | selectattr('host_parameters', 'defined')
+          | subelements('host_parameters')
+        }}
+      loop_control:
+        label: "{{ item.0.name }} — {{ item.1.name }}"
 
     # ------------------------------------------------------------------
     # 5. Report results
@@ -220,7 +227,7 @@
         label: "{{ item.name }}"
       when:
         - wait_for_build | default(false)
-        - created_hosts is define
+        - created_hosts is defined
 
     # ------------------------------------------------------------------
     # 7. Power on VMs
@@ -244,7 +251,7 @@
       loop_control:
         label: "{{ item.name }}"
       register: power_results
- 
+
     - name: Report power on results
       ansible.builtin.debug:
         msg: "POWERED ON — {{ item.item.name }}: {{ item.json.power | default('started') }}"
@@ -252,4 +259,3 @@
       loop_control:
         label: "{{ item.item.name }}"
       when: item.skipped is not defined or not item.skipped
- 
