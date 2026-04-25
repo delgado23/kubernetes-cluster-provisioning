@@ -6,7 +6,7 @@
 
 foreman_url: "https://foreman.garaventaville.com"
 foreman_user: "admin"
-foreman_password: "{{ vault_foreman_password }}"   # store in vault
+foreman_password: REMOVED_FOREMAN_PASSWORD   # store in vault
 foreman_validate_certs: false
 foreman_domain: "garaventaville.com"               # used for host existence check
 
