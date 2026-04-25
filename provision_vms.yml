@@ -55,13 +55,17 @@
       loop_control:
         label: "{{ item }}"
 
-    - name: Build hostgroup name-to-id map
+    - name: Build hostgroup lookup map (id, location_id, organization_id)
       ansible.builtin.set_fact:
         hostgroup_id_map: >-
           {{
-            hostgroup_id_map | default({}) | combine(
-              { item.item: (item.json.results[0].id | string) }
-            )
+            hostgroup_id_map | default({}) | combine({
+              item.item: {
+                'id':              item.json.results[0].id | string,
+                'location_id':     item.json.results[0].locations[0].id | string,
+                'organization_id': item.json.results[0].organizations[0].id | string
+              }
+            })
           }}
       loop: "{{ hostgroup_results.results }}"
       loop_control:
@@ -115,13 +119,16 @@
         body:
           host:
             name: "{{ item.0.name }}"
-            hostgroup_id: "{{ hostgroup_id_map[item.0.hostgroup] }}"
+            hostgroup_id: "{{ hostgroup_id_map[item.0.hostgroup].id }}"
+            location_id: "{{ hostgroup_id_map[item.0.hostgroup].location_id }}"
+            organization_id: "{{ hostgroup_id_map[item.0.hostgroup].organization_id }}"
             compute_resource_id: "{{ foreman_compute_resource_id }}"
             compute_profile_id: "{{ foreman_compute_profile_id }}"
             ip: "{{ item.0.ip }}"
             build: true
             managed: true
-            # domain, subnet, OS, ptable, medium, environment are all
+            # location and organization are read from the hostgroup automatically.
+            # domain, subnet, OS, ptable, medium, environment are also
             # inherited from the hostgroup and do not need to be set here.
             compute_attributes:
               cores: "{{ item.0.cores | default(default_cores) }}"
