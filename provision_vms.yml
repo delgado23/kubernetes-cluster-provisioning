@@ -163,6 +163,16 @@
       when: item.1.status == 404
       register: created_hosts
 
+    - name: Set host parameters in Foreman
+      theforeman.foreman.host_param:
+        username: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        server_url: "{{ foreman_url }}"
+        host: "{{ vm.name }}"
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+      loop: "{{ vm.host_parameters | default([]) }}"
+
     # ------------------------------------------------------------------
     # 5. Report results
     # ------------------------------------------------------------------
