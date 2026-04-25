@@ -41,7 +41,7 @@
     # ------------------------------------------------------------------
     - name: Look up Foreman hostgroup IDs
       ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hostgroups"
+        url: "{{ foreman_url }}/api/hostgroups?search=title+%3D+%22{{ item | urlencode }}%22&per_page=1"
         method: GET
         user: "{{ foreman_user }}"
         password: "{{ foreman_password }}"
@@ -49,14 +49,7 @@
         validate_certs: "{{ foreman_validate_certs }}"
         return_content: true
         headers:
-          Content-Type: application/json
           Accept: application/json
-        # Using 'title' matches nested groups like "Parent/Child".
-        # The uri module handles encoding of the query string automatically.
-        body_format: form-urlencoded
-        body:
-          search: "title = \"{{ item }}\""
-          per_page: 1
       register: hostgroup_results
       loop: "{{ vms | map(attribute='hostgroup') | unique | list }}"
       loop_control:
