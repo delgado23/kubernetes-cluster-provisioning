@@ -210,4 +210,36 @@
         label: "{{ item.name }}"
       when:
         - wait_for_build | default(false)
-        - created_hosts is defined
+        - created_hosts is define
+
+    # ------------------------------------------------------------------
+    # 7. Power on VMs
+    # ------------------------------------------------------------------
+    - name: Power on VMs
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
+        method: PUT
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        body_format: json
+        status_code: [200, 201]
+        headers:
+          Content-Type: application/json
+          Accept: application/json
+        body:
+          power_action: "start"
+      loop: "{{ vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: power_results
+ 
+    - name: Report power on results
+      ansible.builtin.debug:
+        msg: "POWERED ON — {{ item.item.name }}: {{ item.json.power | default('started') }}"
+      loop: "{{ power_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: item.skipped is not defined or not item.skipped
+ 
