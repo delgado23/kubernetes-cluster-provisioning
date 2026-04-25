@@ -1,0 +1,62 @@
+---
+# vars/vms.yml
+# Kubernetes node definitions.
+# Required per entry : name, ip, hostgroup (must be a literal string — no Jinja
+#                      variable references, as this list is parsed before
+#                      play-level vars are interpolated)
+# Optional per entry : cores, memory_mb, disk_gb  (overrides vars/vm_defaults.yml)
+#
+# Hostgroup values:
+#   Controlplane : "AlmaLinux 10/Kubernetes Controlplane Node"
+#   Worker       : "AlmaLinux 10/Kubernetes Worker Node"
+
+vms:
+  # --- Controlplane nodes ---
+  - name: arthas
+    ip: 172.16.0.30
+    hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+
+  - name: kel-thuzad
+    ip: 172.16.0.31
+    hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+
+  - name: sapphiron
+    ip: 172.16.0.32
+    hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+
+  # --- Worker nodes ---
+  - name: noth
+    ip: 172.16.0.33
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+
+  - name: heigan
+    ip: 172.16.0.34
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+
+  - name: loatheb
+    ip: 172.16.0.35
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+
+  - name: patchwerk
+    ip: 172.16.0.36
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+
+  - name: grobbulus
+    ip: 172.16.0.37
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+
+  - name: gluth
+    ip: 172.16.0.38
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+
+  - name: thaddius
+    ip: 172.16.0.39
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+
+  - name: razuvious
+    ip: 172.16.0.40
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+
+  - name: gothik
+    ip: 172.16.0.41
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
