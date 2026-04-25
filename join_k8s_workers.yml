@@ -18,8 +18,6 @@
 - name: Generate kubeadm join command on master
   hosts: arthas.example.com
   become: true
-  vars:
-    k8s_master: arthas.example.com
   gather_facts: false
 
   tasks:
