@@ -1,0 +1,15 @@
+---
+# vars/vm_defaults.yml
+# Default hardware specs applied to every node unless overridden
+# per-host in the `vms` list in provision_vms.yml.
+#
+# Kubernetes minimum recommendations:
+#   Controlplane : 4 vCPU / 8 GB RAM / 80 GB disk
+#   Worker       : 2 vCPU / 4 GB RAM / 80 GB disk
+#
+# These defaults match the controlplane recommendation.
+# Override cores/memory_mb downward on individual worker entries if needed.
+
+default_cores: 4
+default_memory_mb: 8192   # 8 GB
+default_disk_gb: 80
