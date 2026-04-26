@@ -212,34 +212,9 @@
       when:
         - created_hosts is defined
         - item.skipped is not defined or not item.skipped
-
+    
     # ------------------------------------------------------------------
-    # 6. Optional — wait for hosts to finish building
-    # ------------------------------------------------------------------
-    - name: Wait for hosts to finish building (build flag clears)
-      ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}"
-        method: GET
-        user: "{{ foreman_user }}"
-        password: "{{ foreman_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ foreman_validate_certs }}"
-        headers:
-          Accept: application/json
-        return_content: true
-      register: build_status
-      until: build_status.json.build == false
-      retries: "{{ build_wait_retries }}"
-      delay: "{{ build_wait_delay_seconds }}"
-      loop: "{{ vms }}"
-      loop_control:
-        label: "{{ item.name }}"
-      when:
-        - wait_for_build | default(false)
-        - created_hosts is defined
-
-    # ------------------------------------------------------------------
-    # 7. Power on VMs
+    # 6. Power on VMs
     # ------------------------------------------------------------------
     - name: Power on VMs
       ansible.builtin.uri:
@@ -268,3 +243,28 @@
       loop_control:
         label: "{{ item.item.name }}"
       when: item.skipped is not defined or not item.skipped
+
+    # ------------------------------------------------------------------
+    # 7. Optional — wait for hosts to finish building
+    # ------------------------------------------------------------------
+    - name: Wait for hosts to finish building (build flag clears)
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+        return_content: true
+      register: build_status
+      until: build_status.json.build == false
+      retries: "{{ build_wait_retries }}"
+      delay: "{{ build_wait_delay_seconds }}"
+      loop: "{{ vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - wait_for_build | default(false)
+        - created_hosts is defined
