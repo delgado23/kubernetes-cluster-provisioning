@@ -16,7 +16,7 @@
 # PLAY 1: Retrieve join command from the control plane
 # -----------------------------------------------------------------------------
 - name: Generate kubeadm join command on master
-  hosts: arthas.example.com
+  hosts: controlplane_primary
   become: true
   gather_facts: false
 
@@ -50,7 +50,7 @@
 
   vars:
     kubeadm_join_command: >-
-      {{ hostvars[groups['k8s_master'][0]]['join_command'] }}
+      {{ hostvars[groups['controlplane_primary'][0]]['join_command'] }}
 
   pre_tasks:
     - name: Verify kubelet service exists
@@ -154,7 +154,7 @@
 # PLAY 3: Verify new nodes are visible from the master
 # -----------------------------------------------------------------------------
 - name: Verify worker nodes are registered in the cluster
-  hosts: arthas.example.com
+  hosts: controlplane_primary
   become: true
   gather_facts: false
 
