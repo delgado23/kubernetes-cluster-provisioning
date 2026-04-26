@@ -108,3 +108,202 @@
         cp /etc/kubernetes/admin.conf /root/.kube/config
         chown root:root /root/.kube/config
       changed_when: true
+
+
+- name: Install cert-manager and auto approver on primary control plane
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Wait for all control plane nodes to be ready before proceeding
+      ansible.builtin.command:
+        cmd: kubectl wait --for=condition=Ready nodes --selector=node-role.kubernetes.io/control-plane --timeout=300s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+    - name: Add cert-manager Helm repo
+      ansible.builtin.command:
+        cmd: helm repo add jetstack https://charts.jetstack.io
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: true
+
+    - name: Update Helm repos
+      ansible.builtin.command:
+        cmd: helm repo update
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: true
+
+    - name: Install cert-manager via Helm
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install cert-manager jetstack/cert-manager
+          --namespace cert-manager
+          --create-namespace
+          --set crds.enabled=true
+          --wait
+          --timeout 5m
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: cert_manager_output
+      changed_when: true
+
+    - name: Print cert-manager install output
+      ansible.builtin.debug:
+        var: cert_manager_output.stdout_lines
+
+    - name: Wait for cert-manager webhook to be ready
+      ansible.builtin.command:
+        cmd: >
+          kubectl wait --for=condition=Available deployment/cert-manager-webhook
+          --namespace cert-manager
+          --timeout=120s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+    - name: Add approver-policy Helm repo
+      ansible.builtin.command:
+        cmd: helm repo add cert-manager-approver-policy https://charts.jetstack.io
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: true
+
+    - name: Install cert-manager approver-policy via Helm
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install cert-manager-approver-policy jetstack/cert-manager-approver-policy
+          --namespace cert-manager
+          --wait
+          --timeout 5m
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: approver_output
+      changed_when: true
+
+    - name: Print approver-policy install output
+      ansible.builtin.debug:
+        var: approver_output.stdout_lines
+
+    - name: Wait for approver-policy to be ready
+      ansible.builtin.command:
+        cmd: >
+          kubectl wait --for=condition=Available deployment/cert-manager-approver-policy
+          --namespace cert-manager
+          --timeout=120s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+
+- name: Install metrics-server on primary control plane
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Add metrics-server Helm repo
+      ansible.builtin.command:
+        cmd: helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: true
+
+    - name: Update Helm repos
+      ansible.builtin.command:
+        cmd: helm repo update
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: true
+
+    - name: Install metrics-server via Helm
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install metrics-server metrics-server/metrics-server
+          --namespace kube-system
+          --wait
+          --timeout 5m
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: metrics_server_output
+      changed_when: true
+
+    - name: Print metrics-server install output
+      ansible.builtin.debug:
+        var: metrics_server_output.stdout_lines
+
+    - name: Wait for metrics-server to be ready
+      ansible.builtin.command:
+        cmd: >
+          kubectl wait --for=condition=Available deployment/metrics-server
+          --namespace kube-system
+          --timeout=120s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+
+- name: Install helm and k9s on all control plane nodes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Install helm
+      ansible.builtin.shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Verify helm installation
+      ansible.builtin.command:
+        cmd: helm version --short
+      register: helm_version
+      changed_when: false
+
+    - name: Print helm version
+      ansible.builtin.debug:
+        var: helm_version.stdout
+
+    - name: Get latest k9s version
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/derailed/k9s/releases/latest
+        return_content: true
+      register: k9s_release
+
+    - name: Set k9s version fact
+      ansible.builtin.set_fact:
+        k9s_version: "{{ k9s_release.json.tag_name }}"
+
+    - name: Download k9s archive
+      ansible.builtin.get_url:
+        url: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/k9s_Linux_amd64.tar.gz"
+        dest: /tmp/k9s.tar.gz
+        mode: "0644"
+
+    - name: Extract k9s binary
+      ansible.builtin.unarchive:
+        src: /tmp/k9s.tar.gz
+        dest: /usr/local/bin
+        include:
+          - k9s
+        remote_src: true
+        mode: "0755"
+
+    - name: Clean up k9s archive
+      ansible.builtin.file:
+        path: /tmp/k9s.tar.gz
+        state: absent
+
+    - name: Verify k9s installation
+      ansible.builtin.command:
+        cmd: k9s version --short
+      register: k9s_version_output
+      changed_when: false
+
+    - name: Print k9s version
+      ansible.builtin.debug:
+        var: k9s_version_output.stdout
