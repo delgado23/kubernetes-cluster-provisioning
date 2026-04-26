@@ -7,9 +7,13 @@
     - name: Group by k8s_role foreman parameter
       ansible.builtin.group_by:
         key: "k8s_role_{{ foreman.parameters.k8s_role }}"
+      when:
+        - foreman is defined
+        - foreman.parameters is defined
+        - foreman.parameters.k8s_role is defined
 
 
-- name: Initialize primary control plane (arthas)
+- name: Initialize primary control plane
   hosts: k8s_role_primary
   become: true
   gather_facts: false
@@ -80,7 +84,7 @@
       changed_when: false
 
 
-- name: Join secondary control planes (kel-thuzad, sapphiron)
+- name: Join secondary control planes
   hosts: k8s_role_secondary
   become: true
   gather_facts: false
