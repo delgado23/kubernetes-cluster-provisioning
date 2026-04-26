@@ -17,7 +17,7 @@
   tasks:
     - name: Download kubeadm config
       ansible.builtin.get_url:
-        url: https://git.example.com/example/kubernetes-node-provisioning/raw/branch/master/kubeadm-config.yaml
+        url: https://git.example.com/example/kubernetes-node-provisioning/raw/branch/master/kubeadm-config.yml
         dest: /tmp/kubeadm-config.yaml
         mode: "0644"
         force: true
