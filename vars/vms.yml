@@ -20,14 +20,22 @@ vms:
         value: MASTER
       - name: keepalived_priority
         value: 101
+      - name: k8s_role
+        value: primary
 
   - name: kel-thuzad
     ip: 172.16.0.31
     hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+    host_parameters:
+      - name: k8s_role
+        value: secondary
 
   - name: sapphiron
     ip: 172.16.0.32
     hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+    host_parameters:
+      - name: k8s_role
+        value: secondary
 
   # --- Worker nodes ---
   - name: noth
