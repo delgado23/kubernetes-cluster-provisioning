@@ -6,7 +6,7 @@
   tasks:
     - name: Group by k8s_role host variable
       ansible.builtin.group_by:
-        key: "foreman_params.k8s_role_{{ k8s_role }}"
+        key: "k8s_role_{{ foreman_params.k8s_role }}"
 
 
 - name: Initialize primary control plane
@@ -81,7 +81,7 @@
 
 
 - name: Join secondary control planes
-  hosts: foreman_params.k8s_role_secondary
+  hosts: k8s_role_secondary
   become: true
   gather_facts: false
   serial: 1
