@@ -186,3 +186,33 @@
     - name: Print node list
       ansible.builtin.debug:
         var: nodes_wide.stdout_lines
+
+# -----------------------------------------------------------------------------
+# PLAY 5: Label worker nodes with node-role.kubernetes.io/worker
+# -----------------------------------------------------------------------------
+- name: Label worker nodes
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Label each worker node
+      ansible.builtin.command: >
+        kubectl label node {{ item }}
+        node-role.kubernetes.io/worker=worker
+        --overwrite
+      loop: "{{ groups['foreman_almalinux10_kubernetesworkernode'] }}"
+      changed_when: true
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Verify worker labels applied
+      ansible.builtin.command: kubectl get nodes -o wide
+      changed_when: false
+      register: nodes_labeled
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Print labeled node list
+      ansible.builtin.debug:
+        var: nodes_labeled.stdout_lines
