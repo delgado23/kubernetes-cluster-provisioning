@@ -13,7 +13,7 @@
   tasks:
     - name: Group by k8s_role foreman parameter
       ansible.builtin.group_by:
-        key: "k8s_role_{{ foreman.param.k8s_role }}"
+        key: "k8s_role_{{ foreman_params.k8s_role }}"
 
 
 # -----------------------------------------------------------------------------
