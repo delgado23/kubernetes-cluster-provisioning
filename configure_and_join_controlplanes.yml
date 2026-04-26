@@ -1,6 +1,6 @@
 ---
 - name: Group hosts by Foreman k8s_role parameter
-  hosts: all
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   gather_facts: false
 
   tasks:
