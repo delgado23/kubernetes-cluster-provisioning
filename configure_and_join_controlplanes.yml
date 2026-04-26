@@ -1,0 +1,103 @@
+---
+# inventory should have [controlplane] with arthas, kel-thuzad, sapphiron
+# and [controlplane_primary] with just arthas
+
+- name: Initialize primary control plane (arthas)
+  hosts: controlplane_primary
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Download kubeadm config
+      ansible.builtin.get_url:
+        url: https://git.example.com/example/kubernetes-node-provisioning/raw/branch/master/kubeadm-config.yaml
+        dest: /tmp/kubeadm-config.yaml
+        mode: "0644"
+        force: true
+
+    - name: Run kubeadm init
+      ansible.builtin.command:
+        cmd: kubeadm init --config /tmp/kubeadm-config.yaml --upload-certs
+      register: kubeadm_init_output
+      changed_when: true
+
+    - name: Print kubeadm init output
+      ansible.builtin.debug:
+        var: kubeadm_init_output.stdout_lines
+
+    - name: Extract certificate key
+      ansible.builtin.set_fact:
+        certificate_key: >-
+          {{ kubeadm_init_output.stdout
+             | regex_search('--certificate-key ([a-f0-9]+)', '\1')
+             | first }}
+
+    - name: Extract join token
+      ansible.builtin.set_fact:
+        join_token: >-
+          {{ kubeadm_init_output.stdout
+             | regex_search('--token ([a-z0-9]+\.[a-z0-9]+)', '\1')
+             | first }}
+
+    - name: Extract discovery token CA cert hash
+      ansible.builtin.set_fact:
+        discovery_hash: >-
+          {{ kubeadm_init_output.stdout
+             | regex_search('--discovery-token-ca-cert-hash (sha256:[a-f0-9]+)', '\1')
+             | first }}
+
+    - name: Set up kubeconfig for root
+      ansible.builtin.shell: |
+        mkdir -p /root/.kube
+        cp /etc/kubernetes/admin.conf /root/.kube/config
+        chown root:root /root/.kube/config
+      changed_when: true
+
+    - name: Install Flannel CNI
+      ansible.builtin.command:
+        cmd: kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: flannel_output
+      changed_when: true
+
+    - name: Print Flannel install output
+      ansible.builtin.debug:
+        var: flannel_output.stdout_lines
+
+    - name: Wait for control plane to be ready
+      ansible.builtin.command:
+        cmd: kubectl wait --for=condition=Ready node/arthas.example.com --timeout=120s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+
+- name: Join secondary control planes (kel-thuzad, sapphiron)
+  hosts: controlplane_secondary
+  become: true
+  gather_facts: false
+  serial: 1
+
+  tasks:
+    - name: Join cluster as control plane
+      ansible.builtin.command:
+        cmd: >
+          kubeadm join naxxramas.example.com:6443
+          --token {{ hostvars[groups['controlplane_primary'][0]]['join_token'] }}
+          --discovery-token-ca-cert-hash {{ hostvars[groups['controlplane_primary'][0]]['discovery_hash'] }}
+          --control-plane
+          --certificate-key {{ hostvars[groups['controlplane_primary'][0]]['certificate_key'] }}
+      register: join_output
+      changed_when: true
+
+    - name: Print join output
+      ansible.builtin.debug:
+        var: join_output.stdout_lines
+
+    - name: Set up kubeconfig for root
+      ansible.builtin.shell: |
+        mkdir -p /root/.kube
+        cp /etc/kubernetes/admin.conf /root/.kube/config
+        chown root:root /root/.kube/config
+      changed_when: true
