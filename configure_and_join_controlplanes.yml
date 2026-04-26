@@ -10,7 +10,7 @@
 
 
 - name: Initialize primary control plane
-  hosts: foreman_params.k8s_role_primary
+  hosts: k8s_role_primary
   become: true
   gather_facts: false
 
