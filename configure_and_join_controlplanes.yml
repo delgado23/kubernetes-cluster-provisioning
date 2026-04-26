@@ -1,16 +1,23 @@
 ---
-# inventory should have [controlplane] with arthas, kel-thuzad, sapphiron
-# and [controlplane_primary] with just arthas
+- name: Group hosts by Foreman k8s_role parameter
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Group by k8s_role foreman parameter
+      ansible.builtin.group_by:
+        key: "k8s_role_{{ foreman.parameters.k8s_role }}"
+
 
 - name: Initialize primary control plane (arthas)
-  hosts: controlplane_primary
+  hosts: k8s_role_primary
   become: true
   gather_facts: false
 
   tasks:
     - name: Download kubeadm config
       ansible.builtin.get_url:
-        url: https://git.example.com/example/kubernetes-node-provisioning/raw/branch/master/kubeadm-config.yml
+        url: https://git.example.com/example/kubernetes-node-provisioning/raw/branch/master/kubeadm-config.yaml
         dest: /tmp/kubeadm-config.yaml
         mode: "0644"
         force: true
@@ -67,14 +74,14 @@
 
     - name: Wait for control plane to be ready
       ansible.builtin.command:
-        cmd: kubectl wait --for=condition=Ready node/arthas.example.com --timeout=120s
+        cmd: "kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=120s"
       environment:
         KUBECONFIG: /root/.kube/config
       changed_when: false
 
 
 - name: Join secondary control planes (kel-thuzad, sapphiron)
-  hosts: controlplane_secondary
+  hosts: k8s_role_secondary
   become: true
   gather_facts: false
   serial: 1
@@ -84,10 +91,10 @@
       ansible.builtin.command:
         cmd: >
           kubeadm join naxxramas.example.com:6443
-          --token {{ hostvars[groups['controlplane_primary'][0]]['join_token'] }}
-          --discovery-token-ca-cert-hash {{ hostvars[groups['controlplane_primary'][0]]['discovery_hash'] }}
+          --token {{ hostvars[groups['k8s_role_primary'][0]]['join_token'] }}
+          --discovery-token-ca-cert-hash {{ hostvars[groups['k8s_role_primary'][0]]['discovery_hash'] }}
           --control-plane
-          --certificate-key {{ hostvars[groups['controlplane_primary'][0]]['certificate_key'] }}
+          --certificate-key {{ hostvars[groups['k8s_role_primary'][0]]['certificate_key'] }}
       register: join_output
       changed_when: true
 
