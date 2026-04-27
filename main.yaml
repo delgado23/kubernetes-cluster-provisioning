@@ -2,6 +2,7 @@
 - name: Kubernetes Node Prerequisites Setup
   hosts: all
   become: true
+  strategy: free
 
   tasks:
 
