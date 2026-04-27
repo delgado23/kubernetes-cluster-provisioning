@@ -15,18 +15,15 @@ apiVersion: kubeadm.k8s.io/v1beta3
 kind: ClusterConfiguration
 controlPlaneEndpoint: "naxxramas.garaventaville.com:6443"
 networking:
-  podSubnet: "10.244.0.0/16"
-  serviceSubnet: "10.96.0.0/12"
+  podSubnet: "{{ foreman_params.k8s_pod_cidr }}"
+  serviceSubnet: "{{ foreman_params.k8s_service_cidr }}"
 apiServer:
   certSANs:
+  {% for host in groups['foreman_almalinux10_kubernetescontrolplanenode'] %}
+    - {{ hostvars[host]['ansible_hostname'] }} 
+    - {{ hostvars[host]['ansible_default_ipv4']['address'] }}
+  {% endfor %}
     - "172.16.0.29"
-    - "naxxramas.garaventaville.com"
-    - "arthas.garaventaville.com"
-    - "kel-thuzad.garaventaville.com"
-    - "sapphiron.garaventaville.com"
-    - "172.16.0.30"
-    - "172.16.0.31"
-    - "172.16.0.32"
     - "127.0.0.1"
     - "localhost"
 ---
