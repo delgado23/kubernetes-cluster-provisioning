@@ -1,22 +1,5 @@
 ---
 # modify_vms.yml
-# Adds an EFI disk to all Kubernetes nodes (controlplane + workers) via
-# Foreman → Proxmox, applies Proxmox tags from Foreman host parameters,
-# then performs a graceful shutdown and power-on cycle.
-#
-# Requirements:
-#   vars/foreman.yml  — foreman_url, foreman_user, foreman_password,
-#                       foreman_validate_certs, foreman_domain
-#   vars/vms.yml      — vms list; each entry must carry a proxmox_tags
-#                       host_parameter e.g:
-#
-#                       vms:
-#                         - name: kel-thuzad
-#                           ip: 192.168.1.10
-#                           hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
-#                           host_parameters:
-#                             - name: proxmox_tags
-#                               value: "k8s;controlplane"
 
 - name: Add EFI disk, apply tags, graceful shutdown and power on all Kubernetes nodes
   hosts: localhost
@@ -40,8 +23,9 @@
 
     # -------------------------------------------------------------------------
     # 1. Resolve Foreman host records for all nodes
-    #    The host record already includes the parameters array so we don't
-    #    need a separate parameters API call.
+    #    Run synchronously — fast API call, avoids async nesting complexity.
+    #
+    #    Nesting: item = original VM dict, item.name = "arthas"
     # -------------------------------------------------------------------------
     - name: Look up Foreman host records
       ansible.builtin.uri:
@@ -54,28 +38,10 @@
         status_code: [200, 404]
         headers:
           Accept: application/json
-      register: host_lookups
+      register: host_records
       loop: "{{ vms }}"
       loop_control:
         label: "{{ item.name }}"
-      async: 60
-      poll: 0
-
-    # Nesting at this point:
-    #   item                 = async_status result
-    #   item.item            = host_lookups.results[] entry
-    #   item.item.item       = original VM dict
-    #   item.item.item.name  = "arthas"
-    - name: Wait for host lookups to complete
-      ansible.builtin.async_status:
-        jid: "{{ item.ansible_job_id }}"
-      register: host_records
-      until: host_records.finished
-      retries: 30
-      delay: 2
-      loop: "{{ host_lookups.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
 
     - name: Fail if any host was not found in Foreman
       ansible.builtin.fail:
@@ -86,22 +52,19 @@
         label: "{{ item.item.name }}"
 
     # -------------------------------------------------------------------------
-    # 2. Build hostname-to-tags map directly from the host record
-    #    parameters array — no extra API call needed.
+    # 2. Build hostname-to-tags map from host record parameters
     #
-    # Nesting at this point:
-    #   item                       = host_records.results[] entry (async_status result)
-    #   item.item                  = host_lookups.results[] entry (async job result)
-    #   item.item.item             = original loop entry from host_lookups async job
-    #   item.item.item.item        = original VM dict
-    #   item.item.item.item.name   = "arthas"
+    #    Nesting: item = host_records.results[] entry
+    #             item.item = original VM dict
+    #             item.item.name = "arthas"
+    #             item.json = Foreman API response body
     # -------------------------------------------------------------------------
     - name: Build hostname-to-tags map from host records
       ansible.builtin.set_fact:
         host_tags_map: >-
           {{
             host_tags_map | default({}) | combine({
-              item.item.item.item.name: (
+              item.item.name: (
                 item.json.parameters
                 | selectattr('name', 'equalto', 'proxmox_tags')
                 | map(attribute='value')
@@ -112,13 +75,11 @@
           }}
       loop: "{{ host_records.results }}"
       loop_control:
-        label: "{{ item.item.item.item.name }}"
+        label: "{{ item.item.name }}"
 
     - name: Warn if any host has no proxmox_tags parameter set
       ansible.builtin.debug:
-        msg: >-
-          WARNING — host '{{ item.key }}' has no proxmox_tags parameter
-          in Foreman. No tags will be applied to this VM.
+        msg: "WARNING — host '{{ item.key }}' has no proxmox_tags parameter in Foreman. No tags will be applied."
       when: item.value == ''
       loop: "{{ host_tags_map | dict2items }}"
       loop_control:
@@ -126,10 +87,14 @@
 
     # -------------------------------------------------------------------------
     # 3. Add EFI disk and tags via a single PUT per host
+    #    Async here is worthwhile — Proxmox VM config updates can be slow.
+    #
+    #    Nesting: item = host_records.results[] entry
+    #             item.item.name = "arthas"
     # -------------------------------------------------------------------------
     - name: Add EFI disk and tags to each VM
       ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.item.item.item.name }}.{{ foreman_domain }}"
+        url: "{{ foreman_url }}/api/hosts/{{ item.item.name }}.{{ foreman_domain }}"
         method: PUT
         user: "{{ foreman_user }}"
         password: "{{ foreman_password }}"
@@ -144,18 +109,18 @@
           host:
             compute_attributes:
               efidisk0: "{{ efi_disk_storage }}:{{ efi_disk_size_mb }},efitype=4m,pre-enrolled-keys=1"
-              tags: "{{ host_tags_map[item.item.item.item.name] }}"
+              tags: "{{ host_tags_map[item.item.name] }}"
       register: update_jobs
       loop: "{{ host_records.results }}"
       loop_control:
-        label: "{{ item.item.item.item.name }}"
-      when: host_tags_map[item.item.item.item.name] | default('') != ''
+        label: "{{ item.item.name }}"
+      when: host_tags_map[item.item.name] | default('') != ''
       async: 60
       poll: 0
 
     - name: Add EFI disk only (no proxmox_tags parameter found)
       ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.item.item.item.name }}.{{ foreman_domain }}"
+        url: "{{ foreman_url }}/api/hosts/{{ item.item.name }}.{{ foreman_domain }}"
         method: PUT
         user: "{{ foreman_user }}"
         password: "{{ foreman_password }}"
@@ -173,13 +138,16 @@
       register: update_notags_jobs
       loop: "{{ host_records.results }}"
       loop_control:
-        label: "{{ item.item.item.item.name }}"
-      when: host_tags_map[item.item.item.item.name] | default('') == ''
+        label: "{{ item.item.name }}"
+      when: host_tags_map[item.item.name] | default('') == ''
       async: 60
       poll: 0
 
-    # Nesting at this point adds one more level from the async_status wrapper:
-    #   item.item.item.item.item.name = VM name
+    # Nesting: item = async_status result
+    #          item.item = update_jobs.results[] entry
+    #          item.item.item = host_records.results[] entry
+    #          item.item.item.item = original VM dict
+    #          item.item.item.item.name = "arthas"
     - name: Wait for VM updates (with tags) to complete
       ansible.builtin.async_status:
         jid: "{{ item.ansible_job_id }}"
@@ -189,7 +157,7 @@
       delay: 2
       loop: "{{ update_jobs.results }}"
       loop_control:
-        label: "{{ item.item.item.item.item.name }}"
+        label: "{{ item.item.item.name }}"
       when: item.ansible_job_id is defined
 
     - name: Wait for VM updates (no tags) to complete
@@ -201,21 +169,21 @@
       delay: 2
       loop: "{{ update_notags_jobs.results }}"
       loop_control:
-        label: "{{ item.item.item.item.item.name }}"
+        label: "{{ item.item.item.name }}"
       when: item.ansible_job_id is defined
 
     - name: Report completed VM updates
       ansible.builtin.debug:
         msg: >-
-          UPDATED — {{ item.item.item.item.item.name }}
-          tags: {{ host_tags_map[item.item.item.item.item.name] | default('none') }}
+          UPDATED — {{ item.item.item.name }}
+          tags: {{ host_tags_map[item.item.item.name] | default('none') }}
       loop: >-
         {{
           (updates_done.results | default([]))
           + (updates_notags_done.results | default([]))
         }}
       loop_control:
-        label: "{{ item.item.item.item.item.name }}"
+        label: "{{ item.item.item.name }}"
       when: item.skipped is not defined or not item.skipped
 
     # -------------------------------------------------------------------------
