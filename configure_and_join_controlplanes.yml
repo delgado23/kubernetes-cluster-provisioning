@@ -145,6 +145,35 @@
         KUBECONFIG: /root/.kube/config
       changed_when: false
 
+- name: Configure kubectl bash completion on all control plane nodes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Ensure bash-completion is installed
+      ansible.builtin.dnf:
+        name: bash-completion
+        state: present
+
+    - name: Deploy kubectl bash completion to profile.d
+      ansible.builtin.copy:
+        dest: /etc/profile.d/kubectl_completion.sh
+        mode: "0644"
+        content: |
+          # kubectl bash completion
+          # Loaded for all interactive bash sessions via /etc/profile.d
+
+          # Ensure /usr/local/bin is in PATH
+          case ":${PATH}:" in
+            *":/usr/local/bin:"*) ;;
+            *) export PATH="/usr/local/bin:${PATH}" ;;
+          esac
+
+          if command -v kubectl &>/dev/null; then
+            source <(kubectl completion bash)
+          fi
+
 - name: Install Helm on all control plane nodes
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
@@ -240,27 +269,3 @@
         state: present
         create: true
         mode: "0644"
-
-
-- name: Configure kubectl bash completion on all control plane nodes
-  hosts: foreman_almalinux10_kubernetescontrolplanenode
-  become: true
-  gather_facts: false
-
-  tasks:
-    - name: Ensure bash-completion is installed
-      ansible.builtin.dnf:
-        name: bash-completion
-        state: present
-
-    - name: Deploy kubectl bash completion to profile.d
-      ansible.builtin.copy:
-        dest: /etc/profile.d/kubectl_completion.sh
-        mode: "0644"
-        content: |
-          # kubectl bash completion
-          # Loaded for all interactive bash sessions via /etc/profile.d
-          if command -v kubectl &>/dev/null; then
-            source <(kubectl completion bash)
-          fi
-
