@@ -61,6 +61,11 @@
       async: 60
       poll: 0
 
+    # Nesting at this point:
+    #   item                 = async_status result
+    #   item.item            = host_lookups.results[] entry
+    #   item.item.item       = original VM dict
+    #   item.item.item.name  = "arthas"
     - name: Wait for host lookups to complete
       ansible.builtin.async_status:
         jid: "{{ item.ansible_job_id }}"
@@ -83,13 +88,20 @@
     # -------------------------------------------------------------------------
     # 2. Build hostname-to-tags map directly from the host record
     #    parameters array — no extra API call needed.
+    #
+    # Nesting at this point:
+    #   item                       = host_records.results[] entry (async_status result)
+    #   item.item                  = host_lookups.results[] entry (async job result)
+    #   item.item.item             = original loop entry from host_lookups async job
+    #   item.item.item.item        = original VM dict
+    #   item.item.item.item.name   = "arthas"
     # -------------------------------------------------------------------------
     - name: Build hostname-to-tags map from host records
       ansible.builtin.set_fact:
         host_tags_map: >-
           {{
             host_tags_map | default({}) | combine({
-              item.item.item.name: (
+              item.item.item.item.name: (
                 item.json.parameters
                 | selectattr('name', 'equalto', 'proxmox_tags')
                 | map(attribute='value')
@@ -100,7 +112,7 @@
           }}
       loop: "{{ host_records.results }}"
       loop_control:
-        label: "{{ item.item.item.name }}"
+        label: "{{ item.item.item.item.name }}"
 
     - name: Warn if any host has no proxmox_tags parameter set
       ansible.builtin.debug:
@@ -117,7 +129,7 @@
     # -------------------------------------------------------------------------
     - name: Add EFI disk and tags to each VM
       ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.item.item.name }}.{{ foreman_domain }}"
+        url: "{{ foreman_url }}/api/hosts/{{ item.item.item.item.name }}.{{ foreman_domain }}"
         method: PUT
         user: "{{ foreman_user }}"
         password: "{{ foreman_password }}"
@@ -132,18 +144,18 @@
           host:
             compute_attributes:
               efidisk0: "{{ efi_disk_storage }}:{{ efi_disk_size_mb }},efitype=4m,pre-enrolled-keys=1"
-              tags: "{{ host_tags_map[item.item.item.name] }}"
+              tags: "{{ host_tags_map[item.item.item.item.name] }}"
       register: update_jobs
       loop: "{{ host_records.results }}"
       loop_control:
-        label: "{{ item.item.item.name }}"
-      when: host_tags_map[item.item.item.name] | default('') != ''
+        label: "{{ item.item.item.item.name }}"
+      when: host_tags_map[item.item.item.item.name] | default('') != ''
       async: 60
       poll: 0
 
     - name: Add EFI disk only (no proxmox_tags parameter found)
       ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.item.item.name }}.{{ foreman_domain }}"
+        url: "{{ foreman_url }}/api/hosts/{{ item.item.item.item.name }}.{{ foreman_domain }}"
         method: PUT
         user: "{{ foreman_user }}"
         password: "{{ foreman_password }}"
@@ -161,11 +173,13 @@
       register: update_notags_jobs
       loop: "{{ host_records.results }}"
       loop_control:
-        label: "{{ item.item.item.name }}"
-      when: host_tags_map[item.item.item.name] | default('') == ''
+        label: "{{ item.item.item.item.name }}"
+      when: host_tags_map[item.item.item.item.name] | default('') == ''
       async: 60
       poll: 0
 
+    # Nesting at this point adds one more level from the async_status wrapper:
+    #   item.item.item.item.item.name = VM name
     - name: Wait for VM updates (with tags) to complete
       ansible.builtin.async_status:
         jid: "{{ item.ansible_job_id }}"
@@ -175,7 +189,7 @@
       delay: 2
       loop: "{{ update_jobs.results }}"
       loop_control:
-        label: "{{ item.item.item.item.name }}"
+        label: "{{ item.item.item.item.item.name }}"
       when: item.ansible_job_id is defined
 
     - name: Wait for VM updates (no tags) to complete
@@ -187,7 +201,7 @@
       delay: 2
       loop: "{{ update_notags_jobs.results }}"
       loop_control:
-        label: "{{ item.item.item.item.name }}"
+        label: "{{ item.item.item.item.item.name }}"
       when: item.ansible_job_id is defined
 
     - name: Report completed VM updates
