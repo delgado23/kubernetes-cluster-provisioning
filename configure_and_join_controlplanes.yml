@@ -149,6 +149,7 @@
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
+  strategy: free
 
   tasks:
     - name: Ensure bash-completion is installed
@@ -178,6 +179,7 @@
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
+  strategy: free
 
   tasks:
     - name: Download Helm install script
@@ -220,6 +222,7 @@
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
+  strategy: free
 
   tasks:
     - name: Resolve latest k9s version from GitHub API
