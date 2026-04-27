@@ -1,5 +1,5 @@
 ---
-# add_efi_disk.yml
+# modify_vms.yml
 # Adds an EFI disk to all Kubernetes nodes (controlplane + workers) via
 # Foreman → Proxmox, applies Proxmox tags from Foreman host parameters,
 # then performs a graceful shutdown and power-on cycle.
@@ -7,10 +7,18 @@
 # Requirements:
 #   vars/foreman.yml  — foreman_url, foreman_user, foreman_password,
 #                       foreman_validate_certs, foreman_domain
-#   vars/vms.yml      — vms list; each entry may carry host_parameters
-#                       including a proxmox_tags entry
+#   vars/vms.yml      — vms list; each entry must carry a proxmox_tags
+#                       host_parameter e.g:
+#
+#                       vms:
+#                         - name: kel-thuzad
+#                           ip: 192.168.1.10
+#                           hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+#                           host_parameters:
+#                             - name: proxmox_tags
+#                               value: "k8s;controlplane"
 
-- name: Add EFI disk, apply tags, shutdown and power on all Kubernetes nodes
+- name: Add EFI disk, apply tags, graceful shutdown and power on all Kubernetes nodes
   hosts: localhost
   connection: local
   gather_facts: false
@@ -23,8 +31,8 @@
   vars:
     efi_disk_storage: "linstor"
     efi_disk_size_mb: 4
-    shutdown_wait_retries: 30
-    shutdown_wait_delay: 10
+    shutdown_wait_retries: 60
+    shutdown_wait_delay: 15
     poweron_wait_retries: 30
     poweron_wait_delay: 10
 
@@ -64,11 +72,11 @@
 
     - name: Fail if any host was not found in Foreman
       ansible.builtin.fail:
-        msg: "Host '{{ item.item.item.name }}' not found in Foreman (HTTP {{ item.status }})."
+        msg: "Host '{{ item.item.name }}' not found in Foreman (HTTP {{ item.status }})."
       when: item.status == 404
       loop: "{{ host_records.results }}"
       loop_control:
-        label: "{{ item.item.item.name }}"
+        label: "{{ item.item.name }}"
 
     # -------------------------------------------------------------------------
     # 2. Fetch host parameters from Foreman for each node
@@ -101,8 +109,6 @@
       loop_control:
         label: "{{ item.item.name }}"
 
-    # Build a map of { "hostname": "tag1;tag2" } by extracting the
-    # proxmox_tags parameter from each host's parameter list.
     - name: Build hostname-to-tags map from Foreman parameters
       ansible.builtin.set_fact:
         host_tags_map: >-
@@ -160,8 +166,7 @@
       async: 60
       poll: 0
 
-    # Handle hosts with no tags separately so EFI disk still gets added
-    - name: Add EFI disk only (no tags parameter found) 
+    - name: Add EFI disk only (no proxmox_tags parameter found)
       ansible.builtin.uri:
         url: "{{ foreman_url }}/api/hosts/{{ item.item.item.name }}.{{ foreman_domain }}"
         method: PUT
@@ -227,7 +232,7 @@
     # -------------------------------------------------------------------------
     # 4. Graceful shutdown
     # -------------------------------------------------------------------------
-    - name: Shut down all VMs
+    - name: Gracefully shut down all VMs
       ansible.builtin.uri:
         url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
         method: PUT
@@ -241,7 +246,7 @@
           Content-Type: application/json
           Accept: application/json
         body:
-          power_action: "stop"
+          power_action: "shutdown"
       register: shutdown_jobs
       loop: "{{ vms }}"
       loop_control:
@@ -262,6 +267,9 @@
 
     # -------------------------------------------------------------------------
     # 5. Poll until all VMs are confirmed off
+    #    Adjust the until condition below if your Foreman/Proxmox version
+    #    returns a different key — add a debug task to inspect the response
+    #    if this poll fails with an attribute error.
     # -------------------------------------------------------------------------
     - name: Poll until VMs are confirmed off
       ansible.builtin.uri:
@@ -274,7 +282,15 @@
         headers:
           Accept: application/json
       register: power_state
-      until: power_state.json.power_status == false or power_state.json.power_status == "off"
+      until: >-
+        (power_state.json.power is defined and
+          (power_state.json.power == false or power_state.json.power == 'off' or power_state.json.power == 'stopped'))
+        or
+        (power_state.json.state is defined and
+          (power_state.json.state == 'stopped' or power_state.json.state == 'off'))
+        or
+        (power_state.json.status is defined and
+          (power_state.json.status == false or power_state.json.status == 'off' or power_state.json.status == 'stopped'))
       retries: "{{ shutdown_wait_retries }}"
       delay: "{{ shutdown_wait_delay }}"
       loop: "{{ vms }}"
@@ -338,7 +354,15 @@
         headers:
           Accept: application/json
       register: poweron_state
-      until: poweron_state.json.power_status == true or poweron_state.json.power_status == "on"
+      until: >-
+        (poweron_state.json.power is defined and
+          (poweron_state.json.power == true or poweron_state.json.power == 'on' or poweron_state.json.power == 'running'))
+        or
+        (poweron_state.json.state is defined and
+          (poweron_state.json.state == 'running' or poweron_state.json.state == 'on'))
+        or
+        (poweron_state.json.status is defined and
+          (poweron_state.json.status == true or poweron_state.json.status == 'on' or poweron_state.json.status == 'running'))
       retries: "{{ poweron_wait_retries }}"
       delay: "{{ poweron_wait_delay }}"
       loop: "{{ vms }}"
