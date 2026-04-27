@@ -40,6 +40,8 @@
 
     # -------------------------------------------------------------------------
     # 1. Resolve Foreman host records for all nodes
+    #    The host record already includes the parameters array so we don't
+    #    need a separate parameters API call.
     # -------------------------------------------------------------------------
     - name: Look up Foreman host records
       ansible.builtin.uri:
@@ -79,43 +81,16 @@
         label: "{{ item.item.name }}"
 
     # -------------------------------------------------------------------------
-    # 2. Fetch host parameters from Foreman for each node
+    # 2. Build hostname-to-tags map directly from the host record
+    #    parameters array — no extra API call needed.
     # -------------------------------------------------------------------------
-    - name: Fetch host parameters from Foreman
-      ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/parameters"
-        method: GET
-        user: "{{ foreman_user }}"
-        password: "{{ foreman_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ foreman_validate_certs }}"
-        headers:
-          Accept: application/json
-      register: param_lookups
-      loop: "{{ vms }}"
-      loop_control:
-        label: "{{ item.name }}"
-      async: 60
-      poll: 0
-
-    - name: Wait for parameter fetches to complete
-      ansible.builtin.async_status:
-        jid: "{{ item.ansible_job_id }}"
-      register: param_results
-      until: param_results.finished
-      retries: 30
-      delay: 2
-      loop: "{{ param_lookups.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
-
-    - name: Build hostname-to-tags map from Foreman parameters
+    - name: Build hostname-to-tags map from host records
       ansible.builtin.set_fact:
         host_tags_map: >-
           {{
             host_tags_map | default({}) | combine({
               item.item.item.name: (
-                item.json.results
+                item.json.parameters
                 | selectattr('name', 'equalto', 'proxmox_tags')
                 | map(attribute='value')
                 | first
@@ -123,7 +98,7 @@
               )
             })
           }}
-      loop: "{{ param_results.results }}"
+      loop: "{{ host_records.results }}"
       loop_control:
         label: "{{ item.item.item.name }}"
 
@@ -267,9 +242,6 @@
 
     # -------------------------------------------------------------------------
     # 5. Poll until all VMs are confirmed off
-    #    Adjust the until condition below if your Foreman/Proxmox version
-    #    returns a different key — add a debug task to inspect the response
-    #    if this poll fails with an attribute error.
     # -------------------------------------------------------------------------
     - name: Poll until VMs are confirmed off
       ansible.builtin.uri:
@@ -284,13 +256,15 @@
       register: power_state
       until: >-
         (power_state.json.power is defined and
-          (power_state.json.power == false or power_state.json.power == 'off' or power_state.json.power == 'stopped'))
+          (power_state.json.power == false or power_state.json.power == 'off'
+           or power_state.json.power == 'stopped'))
         or
         (power_state.json.state is defined and
           (power_state.json.state == 'stopped' or power_state.json.state == 'off'))
         or
         (power_state.json.status is defined and
-          (power_state.json.status == false or power_state.json.status == 'off' or power_state.json.status == 'stopped'))
+          (power_state.json.status == false or power_state.json.status == 'off'
+           or power_state.json.status == 'stopped'))
       retries: "{{ shutdown_wait_retries }}"
       delay: "{{ shutdown_wait_delay }}"
       loop: "{{ vms }}"
@@ -356,13 +330,15 @@
       register: poweron_state
       until: >-
         (poweron_state.json.power is defined and
-          (poweron_state.json.power == true or poweron_state.json.power == 'on' or poweron_state.json.power == 'running'))
+          (poweron_state.json.power == true or poweron_state.json.power == 'on'
+           or poweron_state.json.power == 'running'))
         or
         (poweron_state.json.state is defined and
           (poweron_state.json.state == 'running' or poweron_state.json.state == 'on'))
         or
         (poweron_state.json.status is defined and
-          (poweron_state.json.status == true or poweron_state.json.status == 'on' or poweron_state.json.status == 'running'))
+          (poweron_state.json.status == true or poweron_state.json.status == 'on'
+           or poweron_state.json.status == 'running'))
       retries: "{{ poweron_wait_retries }}"
       delay: "{{ poweron_wait_delay }}"
       loop: "{{ vms }}"
