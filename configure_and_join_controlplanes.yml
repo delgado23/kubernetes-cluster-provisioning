@@ -180,6 +180,8 @@
   become: true
   gather_facts: false
   strategy: free
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
   tasks:
     - name: Download Helm install script
@@ -195,7 +197,6 @@
       environment:
         HELM_INSTALL_DIR: /usr/local/bin
         USE_SUDO: "false"
-        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
       register: helm_install_output
       changed_when: true
 
