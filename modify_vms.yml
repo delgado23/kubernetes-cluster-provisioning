@@ -157,7 +157,7 @@
       delay: 2
       loop: "{{ update_jobs.results }}"
       loop_control:
-        label: "{{ item.item.item.name }}"
+        label: "{{ item.item.item.name }}"   # item.item = update entry, item.item.item = VM dict
       when: item.ansible_job_id is defined
 
     - name: Wait for VM updates (no tags) to complete
@@ -175,15 +175,15 @@
     - name: Report completed VM updates
       ansible.builtin.debug:
         msg: >-
-          UPDATED — {{ item.item.item.name }}
-          tags: {{ host_tags_map[item.item.item.name] | default('none') }}
+          UPDATED — {{ item.item.item.item.name }}
+          tags: {{ host_tags_map[item.item.item.item.name] | default('none') }}
       loop: >-
         {{
           (updates_done.results | default([]))
           + (updates_notags_done.results | default([]))
         }}
       loop_control:
-        label: "{{ item.item.item.name }}"
+        label: "{{ item.item.item.item.name }}"
       when: item.skipped is not defined or not item.skipped
 
     # -------------------------------------------------------------------------
