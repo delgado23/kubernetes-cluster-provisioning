@@ -108,7 +108,7 @@
         host_tags_map: >-
           {{
             host_tags_map | default({}) | combine({
-              item.item.name: (
+              item.item.item.name: (
                 item.json.results
                 | selectattr('name', 'equalto', 'proxmox_tags')
                 | map(attribute='value')
@@ -119,7 +119,7 @@
           }}
       loop: "{{ param_results.results }}"
       loop_control:
-        label: "{{ item.item.name }}"
+        label: "{{ item.item.item.name }}"
 
     - name: Warn if any host has no proxmox_tags parameter set
       ansible.builtin.debug:
