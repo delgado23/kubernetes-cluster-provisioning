@@ -1,0 +1,353 @@
+---
+# add_efi_disk.yml
+# Adds an EFI disk to all Kubernetes nodes (controlplane + workers) via
+# Foreman → Proxmox, applies Proxmox tags from Foreman host parameters,
+# then performs a graceful shutdown and power-on cycle.
+#
+# Requirements:
+#   vars/foreman.yml  — foreman_url, foreman_user, foreman_password,
+#                       foreman_validate_certs, foreman_domain
+#   vars/vms.yml      — vms list; each entry may carry host_parameters
+#                       including a proxmox_tags entry
+
+- name: Add EFI disk, apply tags, shutdown and power on all Kubernetes nodes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  strategy: free
+
+  vars_files:
+    - vars/foreman.yml
+    - vars/vms.yml
+
+  vars:
+    efi_disk_storage: "linstor"
+    efi_disk_size_mb: 4
+    shutdown_wait_retries: 30
+    shutdown_wait_delay: 10
+    poweron_wait_retries: 30
+    poweron_wait_delay: 10
+
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # 1. Resolve Foreman host records for all nodes
+    # -------------------------------------------------------------------------
+    - name: Look up Foreman host records
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        status_code: [200, 404]
+        headers:
+          Accept: application/json
+      register: host_lookups
+      loop: "{{ vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      async: 60
+      poll: 0
+
+    - name: Wait for host lookups to complete
+      ansible.builtin.async_status:
+        jid: "{{ item.ansible_job_id }}"
+      register: host_records
+      until: host_records.finished
+      retries: 30
+      delay: 2
+      loop: "{{ host_lookups.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Fail if any host was not found in Foreman
+      ansible.builtin.fail:
+        msg: "Host '{{ item.item.item.name }}' not found in Foreman (HTTP {{ item.status }})."
+      when: item.status == 404
+      loop: "{{ host_records.results }}"
+      loop_control:
+        label: "{{ item.item.item.name }}"
+
+    # -------------------------------------------------------------------------
+    # 2. Fetch host parameters from Foreman for each node
+    # -------------------------------------------------------------------------
+    - name: Fetch host parameters from Foreman
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/parameters"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: param_lookups
+      loop: "{{ vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      async: 60
+      poll: 0
+
+    - name: Wait for parameter fetches to complete
+      ansible.builtin.async_status:
+        jid: "{{ item.ansible_job_id }}"
+      register: param_results
+      until: param_results.finished
+      retries: 30
+      delay: 2
+      loop: "{{ param_lookups.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # Build a map of { "hostname": "tag1;tag2" } by extracting the
+    # proxmox_tags parameter from each host's parameter list.
+    - name: Build hostname-to-tags map from Foreman parameters
+      ansible.builtin.set_fact:
+        host_tags_map: >-
+          {{
+            host_tags_map | default({}) | combine({
+              item.item.name: (
+                item.json.results
+                | selectattr('name', 'equalto', 'proxmox_tags')
+                | map(attribute='value')
+                | first
+                | default('')
+              )
+            })
+          }}
+      loop: "{{ param_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Warn if any host has no proxmox_tags parameter set
+      ansible.builtin.debug:
+        msg: >-
+          WARNING — host '{{ item.key }}' has no proxmox_tags parameter
+          in Foreman. No tags will be applied to this VM.
+      when: item.value == ''
+      loop: "{{ host_tags_map | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    # -------------------------------------------------------------------------
+    # 3. Add EFI disk and tags via a single PUT per host
+    # -------------------------------------------------------------------------
+    - name: Add EFI disk and tags to each VM
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ item.item.item.name }}.{{ foreman_domain }}"
+        method: PUT
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        body_format: json
+        status_code: [200, 201]
+        headers:
+          Content-Type: application/json
+          Accept: application/json
+        body:
+          host:
+            compute_attributes:
+              efidisk0: "{{ efi_disk_storage }}:{{ efi_disk_size_mb }},efitype=4m,pre-enrolled-keys=1"
+              tags: "{{ host_tags_map[item.item.item.name] }}"
+      register: update_jobs
+      loop: "{{ host_records.results }}"
+      loop_control:
+        label: "{{ item.item.item.name }}"
+      when: host_tags_map[item.item.item.name] | default('') != ''
+      async: 60
+      poll: 0
+
+    # Handle hosts with no tags separately so EFI disk still gets added
+    - name: Add EFI disk only (no tags parameter found) 
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ item.item.item.name }}.{{ foreman_domain }}"
+        method: PUT
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        body_format: json
+        status_code: [200, 201]
+        headers:
+          Content-Type: application/json
+          Accept: application/json
+        body:
+          host:
+            compute_attributes:
+              efidisk0: "{{ efi_disk_storage }}:{{ efi_disk_size_mb }},efitype=4m,pre-enrolled-keys=1"
+      register: update_notags_jobs
+      loop: "{{ host_records.results }}"
+      loop_control:
+        label: "{{ item.item.item.name }}"
+      when: host_tags_map[item.item.item.name] | default('') == ''
+      async: 60
+      poll: 0
+
+    - name: Wait for VM updates (with tags) to complete
+      ansible.builtin.async_status:
+        jid: "{{ item.ansible_job_id }}"
+      register: updates_done
+      until: updates_done.finished
+      retries: 30
+      delay: 2
+      loop: "{{ update_jobs.results }}"
+      loop_control:
+        label: "{{ item.item.item.item.name }}"
+      when: item.ansible_job_id is defined
+
+    - name: Wait for VM updates (no tags) to complete
+      ansible.builtin.async_status:
+        jid: "{{ item.ansible_job_id }}"
+      register: updates_notags_done
+      until: updates_notags_done.finished
+      retries: 30
+      delay: 2
+      loop: "{{ update_notags_jobs.results }}"
+      loop_control:
+        label: "{{ item.item.item.item.name }}"
+      when: item.ansible_job_id is defined
+
+    - name: Report completed VM updates
+      ansible.builtin.debug:
+        msg: >-
+          UPDATED — {{ item.item.item.item.item.name }}
+          tags: {{ host_tags_map[item.item.item.item.item.name] | default('none') }}
+      loop: >-
+        {{
+          (updates_done.results | default([]))
+          + (updates_notags_done.results | default([]))
+        }}
+      loop_control:
+        label: "{{ item.item.item.item.item.name }}"
+      when: item.skipped is not defined or not item.skipped
+
+    # -------------------------------------------------------------------------
+    # 4. Graceful shutdown
+    # -------------------------------------------------------------------------
+    - name: Shut down all VMs
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
+        method: PUT
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        body_format: json
+        status_code: [200, 201]
+        headers:
+          Content-Type: application/json
+          Accept: application/json
+        body:
+          power_action: "stop"
+      register: shutdown_jobs
+      loop: "{{ vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      async: 60
+      poll: 0
+
+    - name: Wait for shutdown requests to be accepted
+      ansible.builtin.async_status:
+        jid: "{{ item.ansible_job_id }}"
+      register: shutdown_accepted
+      until: shutdown_accepted.finished
+      retries: 30
+      delay: 2
+      loop: "{{ shutdown_jobs.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # -------------------------------------------------------------------------
+    # 5. Poll until all VMs are confirmed off
+    # -------------------------------------------------------------------------
+    - name: Poll until VMs are confirmed off
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: power_state
+      until: power_state.json.power_status == false or power_state.json.power_status == "off"
+      retries: "{{ shutdown_wait_retries }}"
+      delay: "{{ shutdown_wait_delay }}"
+      loop: "{{ vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Confirm all VMs are off
+      ansible.builtin.debug:
+        msg: "POWERED OFF — {{ item.item.name }}"
+      loop: "{{ power_state.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # -------------------------------------------------------------------------
+    # 6. Power back on
+    # -------------------------------------------------------------------------
+    - name: Power on all VMs
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
+        method: PUT
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        body_format: json
+        status_code: [200, 201]
+        headers:
+          Content-Type: application/json
+          Accept: application/json
+        body:
+          power_action: "start"
+      register: poweron_jobs
+      loop: "{{ vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      async: 60
+      poll: 0
+
+    - name: Wait for power-on requests to be accepted
+      ansible.builtin.async_status:
+        jid: "{{ item.ansible_job_id }}"
+      register: poweron_accepted
+      until: poweron_accepted.finished
+      retries: 30
+      delay: 2
+      loop: "{{ poweron_jobs.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # -------------------------------------------------------------------------
+    # 7. Poll until all VMs are confirmed on
+    # -------------------------------------------------------------------------
+    - name: Poll until VMs are confirmed on
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: poweron_state
+      until: poweron_state.json.power_status == true or poweron_state.json.power_status == "on"
+      retries: "{{ poweron_wait_retries }}"
+      delay: "{{ poweron_wait_delay }}"
+      loop: "{{ vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Report final power state
+      ansible.builtin.debug:
+        msg: "POWERED ON — {{ item.item.name }}"
+      loop: "{{ poweron_state.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
