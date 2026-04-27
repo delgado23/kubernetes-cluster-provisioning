@@ -19,10 +19,10 @@ networking:
   serviceSubnet: "{{ foreman_params.k8s_service_cidr }}"
 apiServer:
   certSANs:
-  {% for host in groups['foreman_almalinux10_kubernetescontrolplanenode'] %}
-   - "{{ hostvars[host]['ansible_fqdn'] }}" 
+{% for host in groups['foreman_almalinux10_kubernetescontrolplanenode'] %}
+    - "{{ hostvars[host]['ansible_fqdn'] }}"
     - "{{ hostvars[host]['ansible_default_ipv4']['address'] }}"
-  {% endfor %}
+{% endfor %}
     - "172.16.0.29"
     - "127.0.0.1"
     - "localhost"
@@ -31,3 +31,4 @@ apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
 serverTLSBootstrap: true
 rotateCertificates: true
+
