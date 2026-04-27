@@ -22,6 +22,8 @@ vms:
         value: 101
       - name: k8s_role
         value: primary
+      - name: proxmox_tags
+        value: "k8s;controlplane"
 
   - name: kel-thuzad
     ip: 172.16.0.31
@@ -29,6 +31,8 @@ vms:
     host_parameters:
       - name: k8s_role
         value: secondary
+      - name: proxmox_tags
+        value: "k8s;controlplane"
 
   - name: sapphiron
     ip: 172.16.0.32
@@ -36,40 +40,69 @@ vms:
     host_parameters:
       - name: k8s_role
         value: secondary
+      - name: proxmox_tags
+        value: "k8s;controlplane"
 
   # --- Worker nodes ---
   - name: noth
     ip: 172.16.0.33
     hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
 
   - name: heigan
     ip: 172.16.0.34
     hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
 
   - name: loatheb
     ip: 172.16.0.35
     hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
 
   - name: patchwerk
     ip: 172.16.0.36
     hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
 
   - name: grobbulus
     ip: 172.16.0.37
     hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
 
   - name: gluth
     ip: 172.16.0.38
     hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
 
   - name: thaddius
     ip: 172.16.0.39
     hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
 
   - name: razuvious
     ip: 172.16.0.40
     hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
 
   - name: gothik
     ip: 172.16.0.41
     hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
