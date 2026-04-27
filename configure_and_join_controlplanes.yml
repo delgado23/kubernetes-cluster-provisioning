@@ -2,12 +2,10 @@
 - name: Group hosts by k8s_role host variable
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   gather_facts: true
-
   tasks:
     - name: Group by k8s_role host variable
       ansible.builtin.group_by:
         key: "k8s_role_{{ foreman_params.k8s_role }}"
-
 
 - name: Initialize primary control plane
   hosts: k8s_role_primary
