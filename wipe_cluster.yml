@@ -39,14 +39,14 @@
     # -------------------------------------------------------------------------
     # FreeIPA
     # -------------------------------------------------------------------------
-    - name: Remove host from FreeIPA
-      freeipa.ansible_freeipa.ipahost:
-        ipaadmin_principal: "{{ ipaadmin_principal }}@{{ kerberos_realm }}"
-        ipaadmin_password: "{{ ipaadmin_password }}"
-        name: "{{ item.name }}.{{ foreman_domain }}"
-        state: absent
-        updatedns: true   # removes forward A record and reverse PTR record
-      loop: "{{ vms }}"
-      loop_control:
-        label: "{{ item.name }}"
-      delegate_to: "{{ ipa_server }}"
+   # - name: Remove host from FreeIPA
+     # freeipa.ansible_freeipa.ipahost:
+      #  ipaadmin_principal: "{{ ipaadmin_principal }}@{{ kerberos_realm }}"
+      #  ipaadmin_password: "{{ ipaadmin_password }}"
+      #  name: "{{ item.name }}.{{ foreman_domain }}"
+      #  state: absent
+      #  updatedns: true   # removes forward A record and reverse PTR record
+     # loop: "{{ vms }}"
+     # loop_control:
+      #  label: "{{ item.name }}"
+     # delegate_to: "{{ ipa_server }}"
