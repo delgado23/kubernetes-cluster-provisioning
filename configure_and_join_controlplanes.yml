@@ -209,7 +209,6 @@
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
-  strategy: free
 
   tasks:
     - name: Ensure bash-completion is installed
@@ -246,7 +245,6 @@
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
-  strategy: free
   environment:
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
@@ -298,7 +296,6 @@
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
-  strategy: free
 
   tasks:
     - name: Resolve latest k9s version from GitHub API
