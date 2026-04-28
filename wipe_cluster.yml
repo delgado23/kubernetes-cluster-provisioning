@@ -43,7 +43,7 @@
       freeipa.ansible_freeipa.ipahost:
         ipaadmin_principal: "{{ ipaadmin_principal }}"
         ipaadmin_password: "{{ ipaadmin_password }}"
-        name: "{{ item.name }}.{{ domain }}"
+        name: "{{ item.name }}.{{ foreman_domain }}"
         state: absent
         updatedns: true   # removes the forward and reverse DNS records too
       loop: "{{ vms }}"
