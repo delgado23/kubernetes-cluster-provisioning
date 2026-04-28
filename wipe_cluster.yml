@@ -29,7 +29,7 @@
         username: "{{ foreman_user }}"
         password: "{{ foreman_password }}"
         server_url: "{{ foreman_url }}"
-        validate_certs: true
+        validate_certs: false
         name: "{{ item.name }}.{{ foreman_domain }}"
         state: absent
       loop: "{{ vms }}"
