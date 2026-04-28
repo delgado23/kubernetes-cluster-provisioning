@@ -22,6 +22,8 @@ vms:
         value: 101
       - name: k8s_role
         value: primary
+      - name: metallb_pool
+        value: "172.16.0.50-172.16.0.60"
       - name: proxmox_tags
         value: "k8s;controlplane"
 
