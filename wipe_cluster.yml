@@ -47,5 +47,6 @@
         state: absent
         updatedns: true   # removes the forward and reverse DNS records too
       loop: "{{ vms }}"
+      delegate_to: vek-lor.garaventaville.com
       loop_control:
         label: "{{ item.name }}"
