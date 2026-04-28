@@ -5,8 +5,8 @@
 # to an Ansible Vault file in production.
 
 foreman_url: "https://foreman.garaventaville.com"
-foreman_user: "admin"
-foreman_password: REMOVED_FOREMAN_PASSWORD   # store in vault
+foreman_user: "{{ foreman_user_vault }}"
+foreman_password: "{{ foreman_password_vault }}"   # store in vault
 foreman_validate_certs: false
 foreman_domain: "garaventaville.com"               # used for host existence check
 
@@ -29,7 +29,6 @@ proxmox_storage: "linstor"
 proxmox_disk_cache: "none"   # none | writeback | writethrough | unsafe
 
 # Build polling (used when wait_for_build: true)
-wait_for_build: false
-build_wait_retries: 60
-build_wait_delay_seconds: 30
-
+wait_for_build: true
+build_wait_retries: 100
+build_wait_delay_seconds: 60
