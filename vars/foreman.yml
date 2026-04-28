@@ -29,6 +29,6 @@ proxmox_storage: "linstor"
 proxmox_disk_cache: "none"   # none | writeback | writethrough | unsafe
 
 # Build polling (used when wait_for_build: true)
-wait_for_build: false
-build_wait_retries: 60
-build_wait_delay_seconds: 30
+wait_for_build: true
+build_wait_retries: 100
+build_wait_delay_seconds: 60
