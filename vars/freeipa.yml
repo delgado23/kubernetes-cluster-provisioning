@@ -1,0 +1,2 @@
+ipaadmin_principal: admin
+ipaadmin_password: "{{ ipa_password }}"
