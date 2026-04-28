@@ -24,6 +24,10 @@ vms:
         value: primary
       - name: metallb_pool
         value: "172.16.0.50-172.16.0.60"
+      - name: kubeadm_controlplaneendpoint
+        value: "k8s-api.example.com"
+      - name: clustername
+        value: naxxramas
       - name: proxmox_tags
         value: "k8s;controlplane"
 
