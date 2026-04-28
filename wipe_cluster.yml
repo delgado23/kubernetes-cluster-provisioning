@@ -30,7 +30,7 @@
         password: "{{ foreman_password }}"
         server_url: "{{ foreman_url }}"
         validate_certs: true
-        name: "{{ item.name }}.{{ domain }}"
+        name: "{{ item.name }}.{{ foreman_domain }}"
         state: absent
       loop: "{{ vms }}"
       loop_control:
