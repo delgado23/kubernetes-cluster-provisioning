@@ -3,6 +3,8 @@
   hosts: all
   become: true
   strategy: free
+  vars_files:
+    - vars/vault.yml
 
   tasks:
 
