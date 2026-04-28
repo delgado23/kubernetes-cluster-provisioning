@@ -15,6 +15,7 @@
   strategy: free
 
   vars_files:
+    - vars/vault.yml
     - vars/foreman.yml      # Foreman connection settings
     - vars/vm_defaults.yml  # Default VM hardware specs
     - vars/vms.yml          # Node definitions (names, IPs, hostgroups)
@@ -213,7 +214,7 @@
       when:
         - created_hosts is defined
         - item.skipped is not defined or not item.skipped
-    
+
     # ------------------------------------------------------------------
     # 6. Power on VMs
     # ------------------------------------------------------------------
