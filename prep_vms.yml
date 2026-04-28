@@ -3,8 +3,6 @@
   hosts: all
   become: true
   strategy: free
-  vars_files:
-    - vars/vault.yml
 
   tasks:
 
@@ -161,6 +159,8 @@
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   strategy: free
+  vars_files:
+    - vars/vault.yml
 
   tasks:
     - name: Open Kubernetes API Server port (6443/tcp)
