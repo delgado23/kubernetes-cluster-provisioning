@@ -2,7 +2,6 @@
 - name: Kubernetes Node Prerequisites Setup
   hosts: all
   become: true
-  strategy: free
 
   tasks:
 
@@ -158,7 +157,6 @@
 - name: Configure controlplane firewall rules
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
-  strategy: free
   vars_files:
     - vars/vault.yml
 
@@ -285,7 +283,6 @@
 - name: Configure worker node firewall rules
   hosts: foreman_almalinux10_kubernetesworkernode
   become: true
-  strategy: free
 
   tasks:
     - name: Open Kubelet API port (10250/tcp)
