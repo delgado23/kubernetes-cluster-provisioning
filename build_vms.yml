@@ -29,7 +29,7 @@
       ansible.builtin.assert:
         that:
           - item.name is defined and item.name | length > 0
-          - item.ip is defined and item.ip | ansible.utils.ipaddr | bool
+          - item.ip is defined and item.ip | ansible.utils.ipaddr != false
           - item.hostgroup is defined and item.hostgroup | length > 0
         fail_msg: >-
           VM entry is missing required fields (name, ip, hostgroup)
