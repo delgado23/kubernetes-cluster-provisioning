@@ -25,7 +25,7 @@ apiServer:
     - "{{ hostvars[host]['ansible_default_ipv4']['address'] }}"
 {% endfor %}
     - "{{ foreman_params.kubeadm_controlplaneendpoint }}"
-    - "{{ foreman_params.keepalived_vip }}"
+    - "{{ foreman_params.kubeadm_controlplaneendpoint_ip }}"
     - "127.0.0.1"
     - "localhost"
 ---
