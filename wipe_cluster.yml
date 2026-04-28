@@ -1,0 +1,51 @@
+---
+# =============================================================================
+# Ansible Playbook: Remove Hosts from Foreman and FreeIPA
+# =============================================================================
+# Reads the vms list from vars/vms.yml and removes every host from both
+# Foreman (via the foreman.foreman collection) and FreeIPA (via the
+# freeipa.ansible_freeipa collection). Safe to run repeatedly — both tasks
+# use failed_when logic to tolerate hosts that are already absent.
+# =============================================================================
+
+- name: Remove hosts from Foreman and FreeIPA
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/vault.yml
+    - vars/vms.yml
+    - vars/foreman.yml   # expects: foreman_url, foreman_user, foreman_password
+    - vars/freeipa.yml   # expects: ipaadmin_principal, ipaadmin_password, ipaserver_host (or set via environment)
+
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # Foreman
+    # -------------------------------------------------------------------------
+    - name: Remove host from Foreman
+      theforeman.foreman.host:
+        username: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        server_url: "{{ foreman_url }}"
+        validate_certs: true
+        name: "{{ item.name }}.{{ domain }}"
+        state: absent
+      loop: "{{ vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # -------------------------------------------------------------------------
+    # FreeIPA
+    # -------------------------------------------------------------------------
+    - name: Remove host from FreeIPA
+      freeipa.ansible_freeipa.ipahost:
+        ipaadmin_principal: "{{ ipaadmin_principal }}"
+        ipaadmin_password: "{{ ipaadmin_password }}"
+        name: "{{ item.name }}.{{ domain }}"
+        state: absent
+        updatedns: true   # removes the forward and reverse DNS records too
+      loop: "{{ vms }}"
+      loop_control:
+        label: "{{ item.name }}"
