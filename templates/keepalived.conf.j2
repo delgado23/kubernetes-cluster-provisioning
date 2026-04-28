@@ -13,7 +13,7 @@ vrrp_instance VI_1 {
 
     authentication {
         auth_type PASS
-        auth_pass nRKASksGAq3UjlnJLrXPIsyEs
+        auth_pass "{{ keepalived_password }}"
     }
 
     virtual_ipaddress {
