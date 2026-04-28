@@ -29,7 +29,7 @@
       ansible.builtin.assert:
         that:
           - item.name is defined and item.name | length > 0
-          - item.ip is defined and item.ip | ansible.utils.ipaddr
+          - item.ip is defined and item.ip | ansible.utils.ipaddr != false
           - item.hostgroup is defined and item.hostgroup | length > 0
         fail_msg: >-
           VM entry is missing required fields (name, ip, hostgroup)
@@ -214,7 +214,7 @@
       when:
         - created_hosts is defined
         - item.skipped is not defined or not item.skipped
-    
+
     # ------------------------------------------------------------------
     # 6. Power on VMs
     # ------------------------------------------------------------------

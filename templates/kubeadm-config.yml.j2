@@ -14,7 +14,7 @@ nodeRegistration:
 apiVersion: kubeadm.k8s.io/v1beta3
 kind: ClusterConfiguration
 clusterName: "naxxramas"
-controlPlaneEndpoint: "naxxramas.garaventaville.com:6443"
+controlPlaneEndpoint: "k8s-api.garaventaville.com:6443"
 networking:
   podSubnet: "{{ foreman_params.k8s_pod_cidr }}"
   serviceSubnet: "{{ foreman_params.k8s_service_cidr }}"
@@ -24,6 +24,7 @@ apiServer:
     - "{{ hostvars[host]['ansible_fqdn'] }}"
     - "{{ hostvars[host]['ansible_default_ipv4']['address'] }}"
 {% endfor %}
+    - "k8s-api.garaventaville.com"
     - "172.16.0.29"
     - "127.0.0.1"
     - "localhost"
