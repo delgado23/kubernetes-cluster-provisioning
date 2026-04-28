@@ -1,314 +1,328 @@
 ---
 # =============================================================================
-# Ansible Playbook: Join Kubernetes Worker Nodes to a Cluster
+# Ansible Playbook: Bootstrap Kubernetes Control Plane Nodes
+# =============================================================================
+# Reads k8s_role from Foreman host parameters to dynamically group nodes into
+# primary and secondary control planes, initializes the cluster, joins
+# secondary nodes, installs core cluster components, and configures tooling
+# (kubectl, Helm, k9s) across all control plane nodes.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # PLAY 1: Group hosts by Foreman k8s_role parameter
 # -----------------------------------------------------------------------------
-- name: Group hosts by Foreman k8s_role parameter
+# Reads the k8s_role Foreman parameter from each host and creates dynamic
+# groups (k8s_role_primary, k8s_role_secondary) used by the plays that follow.
+# -----------------------------------------------------------------------------
+- name: Group hosts by k8s_role host variable
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   gather_facts: true
-
   tasks:
-    - name: Group by k8s_role foreman parameter
+    - name: Group by k8s_role host variable
       ansible.builtin.group_by:
         key: "k8s_role_{{ foreman_params.k8s_role }}"
 
-
 # -----------------------------------------------------------------------------
-# PLAY 2: Retrieve join command from the primary control plane
+# PLAY 2: Bootstrap the primary control plane node
 # -----------------------------------------------------------------------------
-- name: Generate kubeadm join command on primary control plane
+# Runs kubeadm init, installs the Flannel CNI, and extracts the join
+# credentials (token, CA cert hash, certificate key) into host vars so
+# secondary nodes can reference them later via hostvars[].
+# -----------------------------------------------------------------------------
+- name: Initialize primary control plane
   hosts: k8s_role_primary
   become: true
   gather_facts: false
 
   tasks:
-    - name: Check that kubeadm is available
-      ansible.builtin.command: which kubeadm
-      changed_when: false
-
-    - name: Generate a fresh bootstrap token and join command
-      ansible.builtin.command: kubeadm token create --print-join-command
-      register: kubeadm_join_cmd
-      changed_when: true
-
-    - name: Store join command as a host fact for workers to consume
-      ansible.builtin.set_fact:
-        join_command: "{{ kubeadm_join_cmd.stdout }}"
-
-    - name: Display generated join command (for audit/debug)
-      ansible.builtin.debug:
-        msg: "Join command: {{ join_command }}"
-
-
-# -----------------------------------------------------------------------------
-# PLAY 3: Prepare and join each worker node
-# -----------------------------------------------------------------------------
-- name: Join worker nodes to the Kubernetes cluster
-  hosts: foreman_almalinux10_kubernetesworkernode
-  become: true
-  gather_facts: true
-  serial: 1
-
-  vars:
-    kubeadm_join_command: >-
-      {{ hostvars[groups['k8s_role_primary'][0]]['join_command'] }}
-
-  pre_tasks:
-    - name: Verify kubelet service exists
-      ansible.builtin.service_facts:
-
-    - name: Fail if kubelet is not installed
-      ansible.builtin.fail:
-        msg: "kubelet service not found on {{ inventory_hostname }}. Install kubeadm/kubelet first."
-      when: "'kubelet.service' not in ansible_facts.services"
-
-    - name: Check if node is already part of a cluster
-      ansible.builtin.stat:
-        path: /etc/kubernetes/kubelet.conf
-      register: kubelet_conf
-
-    - name: Skip join if node is already configured
-      ansible.builtin.debug:
-        msg: "Node {{ inventory_hostname }} already has kubelet.conf — skipping join."
-      when: kubelet_conf.stat.exists
-
-  tasks:
-    - name: Reset any previous kubeadm state (idempotent safety)
-      ansible.builtin.command: kubeadm reset --force
-      when: not kubelet_conf.stat.exists
-      changed_when: true
-
-    - name: Ensure required kernel modules are loaded
-      community.general.modprobe:
-        name: "{{ item }}"
-        state: present
-      loop:
-        - overlay
-        - br_netfilter
-
-    - name: Persist kernel modules across reboots
-      ansible.builtin.copy:
-        dest: /etc/modules-load.d/k8s.conf
-        content: |
-          overlay
-          br_netfilter
+    - name: Deploy kubeadm config
+      ansible.builtin.template:
+        src: templates/kubeadm-config.yml.j2
+        dest: /tmp/kubeadm-config.yml
         mode: "0644"
 
-    - name: Apply required sysctl parameters
-      ansible.posix.sysctl:
-        name: "{{ item.key }}"
-        value: "{{ item.value }}"
+    - name: Run kubeadm init
+      ansible.builtin.command:
+        cmd: kubeadm init --config /tmp/kubeadm-config.yml --upload-certs
+      register: kubeadm_init_output
+      changed_when: true
+
+    - name: Print kubeadm init output
+      ansible.builtin.debug:
+        var: kubeadm_init_output.stdout_lines
+
+    - name: Extract certificate key
+      ansible.builtin.set_fact:
+        certificate_key: >-
+          {{ kubeadm_init_output.stdout
+             | regex_search('--certificate-key ([a-f0-9]+)', '\1')
+             | first }}
+
+    - name: Extract join token
+      ansible.builtin.set_fact:
+        join_token: >-
+          {{ kubeadm_init_output.stdout
+             | regex_search('--token ([a-z0-9]+\.[a-z0-9]+)', '\1')
+             | first }}
+
+    - name: Extract discovery token CA cert hash
+      ansible.builtin.set_fact:
+        discovery_hash: >-
+          {{ kubeadm_init_output.stdout
+             | regex_search('--discovery-token-ca-cert-hash (sha256:[a-f0-9]+)', '\1')
+             | first }}
+
+    - name: Set up kubeconfig for root
+      ansible.builtin.shell: |
+        mkdir -p /root/.kube
+        cp /etc/kubernetes/admin.conf /root/.kube/config
+        chown root:root /root/.kube/config
+      changed_when: true
+
+    - name: Install Flannel CNI
+      ansible.builtin.command:
+        cmd: kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: flannel_output
+      changed_when: true
+
+    - name: Print Flannel install output
+      ansible.builtin.debug:
+        var: flannel_output.stdout_lines
+
+    - name: Wait for control plane to be ready
+      ansible.builtin.command:
+        cmd: "kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=120s"
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+
+# -----------------------------------------------------------------------------
+# PLAY 3: Join secondary control plane nodes one at a time
+# -----------------------------------------------------------------------------
+# Uses serial: 1 to join nodes sequentially, avoiding etcd membership race
+# conditions. Credentials are pulled from the primary node's hostvars.
+# -----------------------------------------------------------------------------
+- name: Join secondary control planes
+  hosts: k8s_role_secondary
+  become: true
+  gather_facts: false
+  serial: 1
+
+  tasks:
+    - name: Join cluster as control plane
+      ansible.builtin.command:
+        cmd: >
+          kubeadm join naxxramas.example.com:6443
+          --token {{ hostvars[groups['k8s_role_primary'][0]]['join_token'] }}
+          --discovery-token-ca-cert-hash {{ hostvars[groups['k8s_role_primary'][0]]['discovery_hash'] }}
+          --control-plane
+          --certificate-key {{ hostvars[groups['k8s_role_primary'][0]]['certificate_key'] }}
+      register: join_output
+      changed_when: true
+
+    - name: Print join output
+      ansible.builtin.debug:
+        var: join_output.stdout_lines
+
+    - name: Set up kubeconfig for root
+      ansible.builtin.shell: |
+        mkdir -p /root/.kube
+        cp /etc/kubernetes/admin.conf /root/.kube/config
+        chown root:root /root/.kube/config
+      changed_when: true
+
+    - name: Wait for secondary control plane to be ready
+      ansible.builtin.command:
+        cmd: "kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=120s"
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+
+# -----------------------------------------------------------------------------
+# PLAY 4: Deploy kubelet-serving-cert-approver
+# -----------------------------------------------------------------------------
+# Installs the controller that automatically approves kubelet serving
+# certificate CSRs — required for metrics-server and other components that
+# scrape kubelet endpoints over HTTPS. Only needs to run once from the primary.
+# -----------------------------------------------------------------------------
+- name: Install kubelet-serving-cert-approver
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Install kubelet-serving-cert-approver
+      ansible.builtin.command:
+        cmd: kubectl apply -f https://git.example.com/example/kubelet-serving-cert-approver/raw/branch/main/deploy/standalone-install.yaml
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: cert_approver_output
+      changed_when: true
+
+    - name: Print kubelet-serving-cert-approver install output
+      ansible.builtin.debug:
+        var: cert_approver_output.stdout_lines
+
+    - name: Wait for kubelet-serving-cert-approver to be ready
+      ansible.builtin.command:
+        cmd: >
+          kubectl wait --for=condition=Available deployment/kubelet-serving-cert-approver
+          --namespace kubelet-serving-cert-approver
+          --timeout=120s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+# -----------------------------------------------------------------------------
+# PLAY 5: Configure kubectl bash completion on all control plane nodes
+# -----------------------------------------------------------------------------
+# Drops a profile.d script that sources kubectl's bash completion at login,
+# and ensures /usr/local/bin is on PATH (where kubeadm installs kubectl).
+# -----------------------------------------------------------------------------
+- name: Configure kubectl bash completion on all control plane nodes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  gather_facts: false
+  strategy: free
+
+  tasks:
+    - name: Ensure bash-completion is installed
+      ansible.builtin.dnf:
+        name: bash-completion
         state: present
-        reload: true
-      loop:
-        - { key: "net.bridge.bridge-nf-call-iptables",  value: "1" }
-        - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
-        - { key: "net.ipv4.ip_forward",                 value: "1" }
 
-    - name: Disable swap (required by kubelet)
-      ansible.builtin.command: swapoff -a
-      changed_when: true
-      when: ansible_swaptotal_mb > 0
+    - name: Deploy kubectl bash completion to profile.d
+      ansible.builtin.copy:
+        dest: /etc/profile.d/kubectl_completion.sh
+        mode: "0644"
+        content: |
+          # kubectl bash completion
+          # Loaded for all interactive bash sessions via /etc/profile.d
 
-    - name: Remove swap entries from /etc/fstab
-      ansible.builtin.replace:
-        path: /etc/fstab
-        regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
-        replace: '# \1'
+          # Ensure /usr/local/bin is in PATH
+          case ":${PATH}:" in
+            *":/usr/local/bin:"*) ;;
+            *) export PATH="/usr/local/bin:${PATH}" ;;
+          esac
 
-    - name: Enable and start kubelet
-      ansible.builtin.service:
-        name: kubelet
-        enabled: true
-        state: started
-
-    - name: Join node to the cluster
-      ansible.builtin.command: "{{ kubeadm_join_command }}"
-      when: not kubelet_conf.stat.exists
-      register: join_result
-      changed_when: join_result.rc == 0
-
-    - name: Show join output
-      ansible.builtin.debug:
-        var: join_result.stdout_lines
-      when:
-        - join_result is defined
-        - not kubelet_conf.stat.exists
-
-  post_tasks:
-    - name: Pause to allow kubelet to initialize
-      ansible.builtin.pause:
-        seconds: 15
-      when: not kubelet_conf.stat.exists
-
-    - name: Confirm kubelet is running after join
-      ansible.builtin.service_facts:
-
-    - name: Assert kubelet is active
-      ansible.builtin.assert:
-        that: ansible_facts.services['kubelet.service'].state == 'running'
-        fail_msg: "kubelet is NOT running on {{ inventory_hostname }} after join!"
-        success_msg: "kubelet is running on {{ inventory_hostname }}."
-
+          if command -v kubectl &>/dev/null; then
+            source <(kubectl completion bash)
+          fi
 
 # -----------------------------------------------------------------------------
-# PLAY 4: Verify new nodes are visible from the primary control plane
+# PLAY 6: Install Helm on all control plane nodes
 # -----------------------------------------------------------------------------
-- name: Verify worker nodes are registered in the cluster
-  hosts: k8s_role_primary
+# Uses the official get-helm-3 installer script, targeting /usr/local/bin to
+# avoid needing sudo at runtime. Also drops a bash_completion.d entry so Helm
+# subcommands get tab completion alongside kubectl.
+# -----------------------------------------------------------------------------
+- name: Install Helm on all control plane nodes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
+  strategy: free
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
   tasks:
-    - name: Wait for all worker nodes to appear as Ready
-      ansible.builtin.command: kubectl get nodes --no-headers
-      register: node_list
-      retries: 12
-      delay: 10
-      until: >-
-        groups['foreman_almalinux10_kubernetesworkernode'] | map('extract', hostvars, 'inventory_hostname') | list
-        | difference(node_list.stdout_lines | map('regex_search', '^(\S+)') | list)
-        | length == 0
-      changed_when: false
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
+    - name: Download Helm install script
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /tmp/get-helm-3.sh
+        mode: "0700"
+        force: true
 
-    - name: Display current node status
-      ansible.builtin.command: kubectl get nodes -o wide
-      changed_when: false
-      register: nodes_wide
+    - name: Run Helm install script
+      ansible.builtin.command:
+        cmd: /tmp/get-helm-3.sh
       environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
+        HELM_INSTALL_DIR: /usr/local/bin
+        USE_SUDO: "false"
+      register: helm_install_output
+      changed_when: true
 
-    - name: Print node list
+    - name: Print Helm install output
       ansible.builtin.debug:
-        var: nodes_wide.stdout_lines
+        var: helm_install_output.stdout_lines
+
+    - name: Verify Helm installation
+      ansible.builtin.command:
+        cmd: helm version --short
+      register: helm_version_output
+      changed_when: false
+
+    - name: Print Helm version
+      ansible.builtin.debug:
+        var: helm_version_output.stdout_lines
+
+    - name: Configure Helm bash completion
+      ansible.builtin.shell: |
+        helm completion bash > /etc/bash_completion.d/helm
+      changed_when: true
+
 
 # -----------------------------------------------------------------------------
-# PLAY 5: Label worker nodes with node-role.kubernetes.io/worker
+# PLAY 7: Install k9s on all control plane nodes
 # -----------------------------------------------------------------------------
-- name: Label worker nodes
-  hosts: k8s_role_primary
+# Queries the GitHub Releases API to resolve the latest version dynamically,
+# then downloads and installs the RPM. Also exports KUBECONFIG in root's
+# .bashrc so k9s (and kubectl) work immediately after login without extra setup.
+# -----------------------------------------------------------------------------
+- name: Install k9s on all control plane nodes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
+  strategy: free
 
   tasks:
-    - name: Label each worker node
-      ansible.builtin.command: >
-        kubectl label node {{ item }}
-        node-role.kubernetes.io/worker=worker
-        --overwrite
-      loop: "{{ groups['foreman_almalinux10_kubernetesworkernode'] }}"
-      changed_when: true
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
+    - name: Resolve latest k9s version from GitHub API
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/derailed/k9s/releases/latest
+        return_content: true
+        headers:
+          Accept: application/vnd.github+json
+      register: k9s_release_info
 
-    - name: Verify worker labels applied
-      ansible.builtin.command: kubectl get nodes -o wide
-      changed_when: false
-      register: nodes_labeled
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
+    - name: Set k9s version fact
+      ansible.builtin.set_fact:
+        k9s_version: "{{ k9s_release_info.json.tag_name }}"
 
-    - name: Print labeled node list
+    - name: Print k9s version to be installed
       ansible.builtin.debug:
-        var: nodes_labeled.stdout_lines
+        msg: "Installing k9s {{ k9s_version }}"
 
-# -----------------------------------------------------------------------------
-# PLAY 6: Install metrics-server
-# -----------------------------------------------------------------------------
-- name: Install metrics-server
-  hosts: k8s_role_primary
-  become: true
-  gather_facts: false
+    - name: Download k9s RPM
+      ansible.builtin.get_url:
+        url: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/k9s_linux_amd64.rpm"
+        dest: "/tmp/k9s_linux_amd64.rpm"
+        mode: "0644"
+        force: true
 
-  tasks:
-    - name: Install metrics-server
+    - name: Install k9s RPM
+      ansible.builtin.dnf:
+        name: /tmp/k9s_linux_amd64.rpm
+        state: present
+        disable_gpg_check: true
+
+    - name: Verify k9s installation
       ansible.builtin.command:
-        cmd: kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-      environment:
-        KUBECONFIG: /root/.kube/config
-      register: metrics_server_output
-      changed_when: true
-
-    - name: Print metrics-server install output
-      ansible.builtin.debug:
-        var: metrics_server_output.stdout_lines
-
-    - name: Wait for metrics-server to be ready
-      ansible.builtin.command:
-        cmd: >
-          kubectl wait --for=condition=Available deployment/metrics-server
-          --namespace kube-system
-          --timeout=120s
-      environment:
-        KUBECONFIG: /root/.kube/config
+        cmd: k9s version --short
+      register: k9s_version_output
       changed_when: false
 
-# -----------------------------------------------------------------------------
-# PLAY 7: Install MetalLB and apply IP address pool
-# -----------------------------------------------------------------------------
-- name: Install MetalLB and configure IP address pool
-  hosts: k8s_role_primary
-  become: true
-  gather_facts: false
-
-  tasks:
-    - name: Install MetalLB
-      ansible.builtin.command:
-        cmd: kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml
-      environment:
-        KUBECONFIG: /root/.kube/config
-      register: metallb_install_output
-      changed_when: true
-
-    - name: Print MetalLB install output
+    - name: Print k9s version
       ansible.builtin.debug:
-        var: metallb_install_output.stdout_lines
+        var: k9s_version_output.stdout_lines
 
-    - name: Wait for MetalLB controller to be ready
-      ansible.builtin.command:
-        cmd: >
-          kubectl wait --for=condition=Available deployment/controller
-          --namespace metallb-system
-          --timeout=120s
-      environment:
-        KUBECONFIG: /root/.kube/config
-      changed_when: false
-
-    - name: Wait for MetalLB webhook service to be ready
-      ansible.builtin.command:
-        cmd: >
-          kubectl wait --for=condition=Ready pod
-          --selector=component=controller
-          --namespace metallb-system
-          --timeout=120s
-      environment:
-        KUBECONFIG: /root/.kube/config
-      changed_when: false
-
-    - name: Render and apply MetalLB IP address pool
-      ansible.builtin.template:
-        src: templates/metallb-pool.yml.j2
-        dest: /tmp/metallb-pool.yml
-        mode: "0600"
-
-    - name: Apply MetalLB IP address pool
-      ansible.builtin.command:
-        cmd: kubectl apply -f /tmp/metallb-pool.yml
-      environment:
-        KUBECONFIG: /root/.kube/config
-      register: metallb_pool_output
-      changed_when: true
-
-    - name: Print MetalLB pool apply output
-      ansible.builtin.debug:
-        var: metallb_pool_output.stdout_lines
-
-    - name: Remove rendered MetalLB pool manifest
-      ansible.builtin.file:
-        path: /tmp/metallb-pool.yml
-        state: absent
+    - name: Configure k9s KUBECONFIG for root in bash profile
+      ansible.builtin.lineinfile:
+        path: /root/.bashrc
+        line: export KUBECONFIG=/root/.kube/config
+        regexp: '^export KUBECONFIG='
+        state: present
+        create: true
+        mode: "0644"
