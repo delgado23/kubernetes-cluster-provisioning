@@ -26,6 +26,8 @@ vms:
         value: "172.16.0.50-172.16.0.60"
       - name: kubeadm_controlplaneendpoint
         value: "k8s-api.garaventaville.com"
+      - name: kubeadm_controlplaneendpoint_ip
+        value: "172.16.0.29"
       - name: clustername
         value: naxxramas
       - name: proxmox_tags
