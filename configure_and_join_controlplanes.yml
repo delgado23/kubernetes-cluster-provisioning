@@ -1,4 +1,19 @@
 ---
+# =============================================================================
+# Ansible Playbook: Bootstrap Kubernetes Control Plane Nodes
+# =============================================================================
+# Reads k8s_role from Foreman host parameters to dynamically group nodes into
+# primary and secondary control planes, initializes the cluster, joins
+# secondary nodes, installs core cluster components, and configures tooling
+# (kubectl, Helm, k9s) across all control plane nodes.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# PLAY 1: Group hosts by Foreman k8s_role parameter
+# -----------------------------------------------------------------------------
+# Reads the k8s_role Foreman parameter from each host and creates dynamic
+# groups (k8s_role_primary, k8s_role_secondary) used by the plays that follow.
+# -----------------------------------------------------------------------------
 - name: Group hosts by k8s_role host variable
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   gather_facts: true
@@ -7,6 +22,13 @@
       ansible.builtin.group_by:
         key: "k8s_role_{{ foreman_params.k8s_role }}"
 
+# -----------------------------------------------------------------------------
+# PLAY 2: Bootstrap the primary control plane node
+# -----------------------------------------------------------------------------
+# Runs kubeadm init, installs the Flannel CNI, and extracts the join
+# credentials (token, CA cert hash, certificate key) into host vars so
+# secondary nodes can reference them later via hostvars[].
+# -----------------------------------------------------------------------------
 - name: Initialize primary control plane
   hosts: k8s_role_primary
   become: true
@@ -77,6 +99,12 @@
       changed_when: false
 
 
+# -----------------------------------------------------------------------------
+# PLAY 3: Join secondary control plane nodes one at a time
+# -----------------------------------------------------------------------------
+# Uses serial: 1 to join nodes sequentially, avoiding etcd membership race
+# conditions. Credentials are pulled from the primary node's hostvars.
+# -----------------------------------------------------------------------------
 - name: Join secondary control planes
   hosts: k8s_role_secondary
   become: true
@@ -114,6 +142,13 @@
       changed_when: false
 
 
+# -----------------------------------------------------------------------------
+# PLAY 4: Deploy kubelet-serving-cert-approver
+# -----------------------------------------------------------------------------
+# Installs the controller that automatically approves kubelet serving
+# certificate CSRs — required for metrics-server and other components that
+# scrape kubelet endpoints over HTTPS. Only needs to run once from the primary.
+# -----------------------------------------------------------------------------
 - name: Install kubelet-serving-cert-approver
   hosts: k8s_role_primary
   become: true
@@ -142,6 +177,12 @@
         KUBECONFIG: /root/.kube/config
       changed_when: false
 
+# -----------------------------------------------------------------------------
+# PLAY 5: Configure kubectl bash completion on all control plane nodes
+# -----------------------------------------------------------------------------
+# Drops a profile.d script that sources kubectl's bash completion at login,
+# and ensures /usr/local/bin is on PATH (where kubeadm installs kubectl).
+# -----------------------------------------------------------------------------
 - name: Configure kubectl bash completion on all control plane nodes
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
@@ -172,6 +213,13 @@
             source <(kubectl completion bash)
           fi
 
+# -----------------------------------------------------------------------------
+# PLAY 6: Install Helm on all control plane nodes
+# -----------------------------------------------------------------------------
+# Uses the official get-helm-3 installer script, targeting /usr/local/bin to
+# avoid needing sudo at runtime. Also drops a bash_completion.d entry so Helm
+# subcommands get tab completion alongside kubectl.
+# -----------------------------------------------------------------------------
 - name: Install Helm on all control plane nodes
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
@@ -217,6 +265,13 @@
       changed_when: true
 
 
+# -----------------------------------------------------------------------------
+# PLAY 7: Install k9s on all control plane nodes
+# -----------------------------------------------------------------------------
+# Queries the GitHub Releases API to resolve the latest version dynamically,
+# then downloads and installs the RPM. Also exports KUBECONFIG in root's
+# .bashrc so k9s (and kubectl) work immediately after login without extra setup.
+# -----------------------------------------------------------------------------
 - name: Install k9s on all control plane nodes
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
