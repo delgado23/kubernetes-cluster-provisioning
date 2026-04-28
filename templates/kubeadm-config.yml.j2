@@ -24,6 +24,7 @@ apiServer:
     - "{{ hostvars[host]['ansible_fqdn'] }}"
     - "{{ hostvars[host]['ansible_default_ipv4']['address'] }}"
 {% endfor %}
+    - "k8s-api.example.com"
     - "172.16.0.29"
     - "127.0.0.1"
     - "localhost"
