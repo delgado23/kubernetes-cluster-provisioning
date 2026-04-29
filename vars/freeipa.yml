@@ -1,4 +1,5 @@
 ipaadmin_principal: admin
 ipaadmin_password: "{{ ipa_password }}"
 ipa_server: vek-lor.garaventaville.com
-kerberos_realm: GARAVENTAVILLE.COM 
+kerberos_realm: GARAVENTAVILLE.COM
+ipaserver_host: vek-lor.garaventaville.com
