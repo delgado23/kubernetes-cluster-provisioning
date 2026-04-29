@@ -40,15 +40,13 @@
     # FreeIPA
     # -------------------------------------------------------------------------
     - name: Remove host from FreeIPA
-      freeipa.ansible_freeipa.ipahost:
-        ipaadmin_principal: "admin"
-        ipaadmin_password: "{{ ipaadmin_password }}"
-        ipaserver_host: "{{ ipa_server }}"
-        ipadomain: "{{ ipadomain }}"          # ← add this
-        iparealm: "{{ iparealm }}"           # ← add this
+      community.general.ipa_host:
+        ipa_user: admin
+        ipa_pass: "{{ ipaadmin_password }}"
+        ipa_host: "{{ ipa_server }}"
         name: "{{ item.name }}.{{ foreman_domain }}"
         state: absent
-        updatedns: true
+        update_dns: true
       loop: "{{ vms }}"
       loop_control:
         label: "{{ item.name }}"
