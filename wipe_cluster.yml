@@ -41,11 +41,14 @@
     # -------------------------------------------------------------------------
     - name: Remove host from FreeIPA
       freeipa.ansible_freeipa.ipahost:
-        ipaadmin_principal: "{{ ipaadmin_principal }}"
+        ipaadmin_principal: "admin"
         ipaadmin_password: "{{ ipaadmin_password }}"
+        ipaserver_host: "{{ ipa_server }}"
+        ipadomain: "{{ ipadomain }}"          # ← add this
+        iparealm: "{{ iparealm }}"           # ← add this
         name: "{{ item.name }}.{{ foreman_domain }}"
         state: absent
-        updatedns: true   # removes forward A record and reverse PTR record
+        updatedns: true
       loop: "{{ vms }}"
       loop_control:
-       label: "{{ item.name }}"
+        label: "{{ item.name }}"
