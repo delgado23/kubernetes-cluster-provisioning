@@ -107,3 +107,38 @@ vms:
     host_parameters:
       - name: proxmox_tags
         value: "k8s;worker"
+
+  - name: gothik
+    ip: 172.16.0.41
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
+
+  - name: four-horesmen
+    ip: 172.16.0.42
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
+
+  - name: anub-rekhan
+    ip: 172.16.0.43
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
+
+  - name: faerlina
+    ip: 172.16.0.44
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
+
+  - name: maexxna
+    ip: 172.16.0.45
+    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+    host_parameters:
+      - name: proxmox_tags
+        value: "k8s;worker"
