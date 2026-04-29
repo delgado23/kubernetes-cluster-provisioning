@@ -1,5 +1,5 @@
 ipaadmin_principal: admin
 ipaadmin_password: "{{ ipa_password }}"
 ipa_server: vek-lor.example.com
-kerberos_realm: GARAVENTAVILLE.COM
-ipaserver_host: vek-lor.example.com
+ipadomain: example.com
+iparealm: GARAVENTAVILLE.COM
