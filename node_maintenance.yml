@@ -1,0 +1,320 @@
+---
+# =============================================================================
+# Kubernetes Node OS Maintenance Playbook
+# OS: AlmaLinux 10
+# Inventory Groups (AWX/Foreman):
+#   - foreman_almalinux10_kubernetesworkernode
+#   - foreman_almalinux10_kubernetescontrolplanenode
+#
+# Usage:
+#   ansible-playbook k8s_node_maintenance.yml
+#   ansible-playbook k8s_node_maintenance.yml --limit foreman_almalinux10_kubernetesworkernode
+#   ansible-playbook k8s_node_maintenance.yml -e "drain_timeout=600"
+# =============================================================================
+
+- name: OS Maintenance - Control Plane Nodes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  serial: 1                        # Roll through control plane ONE node at a time
+  gather_facts: true
+  become: true
+
+  vars:
+    drain_timeout: 300             # Seconds to wait for pod eviction
+    drain_grace_period: 60         # Pod termination grace period in seconds
+    reboot_timeout: 600            # Seconds to wait for node to come back after reboot
+    kubectl_bin: /usr/bin/kubectl
+    kubeconfig: /etc/kubernetes/admin.conf
+
+  pre_tasks:
+
+    - name: Confirm kubectl is available on the control plane node
+      ansible.builtin.command: "{{ kubectl_bin }} version --client --output=json"
+      register: kubectl_check
+      changed_when: false
+      failed_when: kubectl_check.rc != 0
+
+    - name: Verify node is registered in the cluster
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        get node {{ inventory_hostname }}
+        --output=jsonpath='{.metadata.name}'
+      register: node_check
+      changed_when: false
+      failed_when: node_check.stdout != inventory_hostname
+
+  tasks:
+
+    # ------------------------------------------------------------------
+    # 1. CORDON — mark node unschedulable
+    # ------------------------------------------------------------------
+    - name: Cordon node (mark unschedulable)
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        cordon {{ inventory_hostname }}
+      register: cordon_result
+      changed_when: "'cordoned' in cordon_result.stdout"
+
+    - name: Verify node is cordoned
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        get node {{ inventory_hostname }}
+        --output=jsonpath='{.spec.unschedulable}'
+      register: cordon_check
+      changed_when: false
+      failed_when: cordon_check.stdout != "true"
+
+    # ------------------------------------------------------------------
+    # 2. DRAIN — evict all workloads safely
+    # ------------------------------------------------------------------
+    - name: Drain node (evict pods)
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        drain {{ inventory_hostname }}
+        --ignore-daemonsets
+        --delete-emptydir-data
+        --grace-period={{ drain_grace_period }}
+        --timeout={{ drain_timeout }}s
+        --force
+      register: drain_result
+      changed_when: true
+
+    - name: Show drain output
+      ansible.builtin.debug:
+        var: drain_result.stdout_lines
+
+    # ------------------------------------------------------------------
+    # 3. OS UPDATE
+    # ------------------------------------------------------------------
+    - name: Update all packages (dnf upgrade)
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+      register: dnf_result
+
+    - name: Show updated packages
+      ansible.builtin.debug:
+        msg: "{{ dnf_result.results | default(['No package output available']) }}"
+
+    # ------------------------------------------------------------------
+    # 4. REBOOT (if needed)
+    # ------------------------------------------------------------------
+    - name: Check if reboot is required (needs-restarting)
+      ansible.builtin.command: needs-restarting -r
+      register: needs_restarting
+      changed_when: false
+      failed_when: false          # rc=1 means reboot required — not an error
+
+    - name: Reboot node if required
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ reboot_timeout }}"
+        msg: "Rebooting for OS maintenance"
+        pre_reboot_delay: 5
+        post_reboot_delay: 30
+      when: needs_restarting.rc == 1
+
+    # ------------------------------------------------------------------
+    # 5. WAIT — kubelet back online, node Ready
+    # ------------------------------------------------------------------
+    - name: Wait for kubelet service to be active
+      ansible.builtin.systemd:
+        name: kubelet
+      register: kubelet_status
+      until: kubelet_status.status.ActiveState == "active"
+      retries: 20
+      delay: 15
+
+    - name: Wait for node to become Ready in the cluster
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        get node {{ inventory_hostname }}
+        --output=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      register: node_ready
+      until: node_ready.stdout == "True"
+      retries: 30
+      delay: 15
+      changed_when: false
+
+    # ------------------------------------------------------------------
+    # 6. UNCORDON — return node to service
+    # ------------------------------------------------------------------
+    - name: Uncordon node (mark schedulable)
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        uncordon {{ inventory_hostname }}
+      register: uncordon_result
+      changed_when: "'uncordoned' in uncordon_result.stdout"
+
+    - name: Verify node is uncordoned and Ready
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        get node {{ inventory_hostname }}
+        --output=jsonpath='{.spec.unschedulable}'
+      register: uncordon_check
+      changed_when: false
+      # An empty string means the taint is absent (schedulable)
+      failed_when: uncordon_check.stdout == "true"
+
+  post_tasks:
+
+    - name: Control plane node maintenance summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================================"
+          - "Node         : {{ inventory_hostname }}"
+          - "Role         : control-plane"
+          - "Packages upd : {{ dnf_result.changed }}"
+          - "Rebooted     : {{ needs_restarting.rc == 1 }}"
+          - "Status       : Ready / Schedulable"
+          - "============================================================"
+
+
+# =============================================================================
+
+- name: OS Maintenance - Worker Nodes
+  hosts: foreman_almalinux10_kubernetesworkernode
+  serial: 2                        # Roll through workers TWO at a time
+  gather_facts: true
+  become: true
+
+  vars:
+    drain_timeout: 300
+    drain_grace_period: 60
+    reboot_timeout: 600
+    # Workers use kubectl from the first available control plane node
+    kubectl_bin: /usr/bin/kubectl
+    kubeconfig: /etc/kubernetes/admin.conf
+    # Override control plane host if kubectl is not installed on workers
+    # Set control_plane_host to a host that has kubectl + kubeconfig access
+    control_plane_host: "{{ groups['foreman_almalinux10_kubernetescontrolplanenode'][0] }}"
+
+  tasks:
+
+    # ------------------------------------------------------------------
+    # 1. CORDON — delegate to control plane node
+    # ------------------------------------------------------------------
+    - name: Cordon worker node (mark unschedulable)
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        cordon {{ inventory_hostname }}
+      delegate_to: "{{ control_plane_host }}"
+      register: cordon_result
+      changed_when: "'cordoned' in cordon_result.stdout"
+
+    - name: Verify worker node is cordoned
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        get node {{ inventory_hostname }}
+        --output=jsonpath='{.spec.unschedulable}'
+      delegate_to: "{{ control_plane_host }}"
+      register: cordon_check
+      changed_when: false
+      failed_when: cordon_check.stdout != "true"
+
+    # ------------------------------------------------------------------
+    # 2. DRAIN — delegate to control plane node
+    # ------------------------------------------------------------------
+    - name: Drain worker node (evict pods)
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        drain {{ inventory_hostname }}
+        --ignore-daemonsets
+        --delete-emptydir-data
+        --grace-period={{ drain_grace_period }}
+        --timeout={{ drain_timeout }}s
+        --force
+      delegate_to: "{{ control_plane_host }}"
+      register: drain_result
+      changed_when: true
+
+    - name: Show drain output
+      ansible.builtin.debug:
+        var: drain_result.stdout_lines
+
+    # ------------------------------------------------------------------
+    # 3. OS UPDATE
+    # ------------------------------------------------------------------
+    - name: Update all packages (dnf upgrade)
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+      register: dnf_result
+
+    - name: Show updated packages
+      ansible.builtin.debug:
+        msg: "{{ dnf_result.results | default(['No package output available']) }}"
+
+    # ------------------------------------------------------------------
+    # 4. REBOOT (if needed)
+    # ------------------------------------------------------------------
+    - name: Check if reboot is required (needs-restarting)
+      ansible.builtin.command: needs-restarting -r
+      register: needs_restarting
+      changed_when: false
+      failed_when: false
+
+    - name: Reboot node if required
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ reboot_timeout }}"
+        msg: "Rebooting for OS maintenance"
+        pre_reboot_delay: 5
+        post_reboot_delay: 30
+      when: needs_restarting.rc == 1
+
+    # ------------------------------------------------------------------
+    # 5. WAIT — kubelet back online, node Ready
+    # ------------------------------------------------------------------
+    - name: Wait for kubelet service to be active
+      ansible.builtin.systemd:
+        name: kubelet
+      register: kubelet_status
+      until: kubelet_status.status.ActiveState == "active"
+      retries: 20
+      delay: 15
+
+    - name: Wait for worker node to become Ready in the cluster
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        get node {{ inventory_hostname }}
+        --output=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      delegate_to: "{{ control_plane_host }}"
+      register: node_ready
+      until: node_ready.stdout == "True"
+      retries: 30
+      delay: 15
+      changed_when: false
+
+    # ------------------------------------------------------------------
+    # 6. UNCORDON — delegate to control plane node
+    # ------------------------------------------------------------------
+    - name: Uncordon worker node (mark schedulable)
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        uncordon {{ inventory_hostname }}
+      delegate_to: "{{ control_plane_host }}"
+      register: uncordon_result
+      changed_when: "'uncordoned' in uncordon_result.stdout"
+
+    - name: Verify worker node is uncordoned and Ready
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+        get node {{ inventory_hostname }}
+        --output=jsonpath='{.spec.unschedulable}'
+      delegate_to: "{{ control_plane_host }}"
+      register: uncordon_check
+      changed_when: false
+      failed_when: uncordon_check.stdout == "true"
+
+  post_tasks:
+
+    - name: Worker node maintenance summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================================"
+          - "Node         : {{ inventory_hostname }}"
+          - "Role         : worker"
+          - "Packages upd : {{ dnf_result.changed }}"
+          - "Rebooted     : {{ needs_restarting.rc == 1 }}"
+          - "Status       : Ready / Schedulable"
+          - "============================================================"
