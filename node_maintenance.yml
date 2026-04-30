@@ -97,21 +97,14 @@
         msg: "{{ dnf_result.results | default(['No package output available']) }}"
 
     # ------------------------------------------------------------------
-    # 4. REBOOT (if needed)
+    # 4. REBOOT
     # ------------------------------------------------------------------
-    - name: Check if reboot is required (needs-restarting)
-      ansible.builtin.command: needs-restarting -r
-      register: needs_restarting
-      changed_when: false
-      failed_when: false          # rc=1 means reboot required — not an error
-
-    - name: Reboot node if required
+    - name: Reboot node
       ansible.builtin.reboot:
         reboot_timeout: "{{ reboot_timeout }}"
         msg: "Rebooting for OS maintenance"
         pre_reboot_delay: 5
         post_reboot_delay: 30
-      when: needs_restarting.rc == 1
 
     # ------------------------------------------------------------------
     # 5. WAIT — kubelet back online, node Ready
@@ -164,7 +157,7 @@
           - "Node         : {{ inventory_hostname }}"
           - "Role         : control-plane"
           - "Packages upd : {{ dnf_result.changed }}"
-          - "Rebooted     : {{ needs_restarting.rc == 1 }}"
+          - "Rebooted     : true"
           - "Status       : Ready / Schedulable"
           - "============================================================"
 
@@ -248,19 +241,12 @@
     # ------------------------------------------------------------------
     # 4. REBOOT (if needed)
     # ------------------------------------------------------------------
-    - name: Check if reboot is required (needs-restarting)
-      ansible.builtin.command: needs-restarting -r
-      register: needs_restarting
-      changed_when: false
-      failed_when: false
-
-    - name: Reboot node if required
+    - name: Reboot node
       ansible.builtin.reboot:
         reboot_timeout: "{{ reboot_timeout }}"
         msg: "Rebooting for OS maintenance"
         pre_reboot_delay: 5
         post_reboot_delay: 30
-      when: needs_restarting.rc == 1
 
     # ------------------------------------------------------------------
     # 5. WAIT — kubelet back online, node Ready
@@ -315,6 +301,6 @@
           - "Node         : {{ inventory_hostname }}"
           - "Role         : worker"
           - "Packages upd : {{ dnf_result.changed }}"
-          - "Rebooted     : {{ needs_restarting.rc == 1 }}"
+          - "Rebooted     : true"
           - "Status       : Ready / Schedulable"
           - "============================================================"
