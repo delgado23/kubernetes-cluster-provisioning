@@ -155,7 +155,6 @@
             organization_id: "{{ hostgroup_id_map[item.0.hostgroup].organization_id }}"
             compute_resource_id: "{{ foreman_compute_resource_id }}"
             compute_profile_id: "{{ foreman_compute_profile_id }}"
-            #ip: "{{ item.0.ip }}"
             build: true
             managed: true
       loop: "{{ vms | zip(existing_hosts.results) | list }}"
