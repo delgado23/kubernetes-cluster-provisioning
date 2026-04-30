@@ -27,7 +27,7 @@
     - name: Validate VM definitions
       ansible.builtin.assert:
         that:
-         # - item.name is defined and item.name | length > 0
+          - item.name is defined and item.name | length > 0
           - item.hostgroup is defined and item.hostgroup | length > 0
         fail_msg: >-
           VM entry is missing required fields (name or hostgroup)
