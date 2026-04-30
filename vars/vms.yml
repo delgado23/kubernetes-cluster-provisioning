@@ -12,7 +12,7 @@
 
 vms:
   # --- Controlplane nodes ---
-  - name: lich-king
+  - name: null
     hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
     host_parameters:
       - name: keepalived_state
@@ -32,7 +32,7 @@ vms:
       - name: proxmox_tags
         value: "k8s;controlplane"
 
-  - name: kel-thuzad
+  - name: null
     hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
     host_parameters:
       - name: k8s_role
@@ -40,7 +40,7 @@ vms:
       - name: proxmox_tags
         value: "k8s;controlplane"
 
-  - name: sapphiron
+  - name: null
     hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
     host_parameters:
       - name: k8s_role
@@ -49,79 +49,7 @@ vms:
         value: "k8s;controlplane"
 
   # --- Worker nodes ---
-  - name: noth
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-    host_parameters:
-      - name: proxmox_tags
-        value: "k8s;worker"
-
-  - name: heigan
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-    host_parameters:
-      - name: proxmox_tags
-        value: "k8s;worker"
-
-  - name: loatheb
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-    host_parameters:
-      - name: proxmox_tags
-        value: "k8s;worker"
-
-  - name: patchwerk
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-    host_parameters:
-      - name: proxmox_tags
-        value: "k8s;worker"
-
-  - name: grobbulus
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-    host_parameters:
-      - name: proxmox_tags
-        value: "k8s;worker"
-
-  - name: gluth
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-    host_parameters:
-      - name: proxmox_tags
-        value: "k8s;worker"
-
-  - name: thaddius
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-    host_parameters:
-      - name: proxmox_tags
-        value: "k8s;worker"
-
-  - name: razuvious
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-    host_parameters:
-      - name: proxmox_tags
-        value: "k8s;worker"
-
-  - name: gothik
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-    host_parameters:
-      - name: proxmox_tags
-        value: "k8s;worker"
-
-  - name: four-horesmen
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-    host_parameters:
-      - name: proxmox_tags
-        value: "k8s;worker"
-
-  - name: anub-rekhan
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-    host_parameters:
-      - name: proxmox_tags
-        value: "k8s;worker"
-
-  - name: faerlina
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-    host_parameters:
-      - name: proxmox_tags
-        value: "k8s;worker"
-
-  - name: maexxna
+  - name: null
     hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
     host_parameters:
       - name: proxmox_tags
