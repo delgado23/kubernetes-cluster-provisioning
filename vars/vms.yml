@@ -42,8 +42,8 @@ vms:
       - name: proxmox_tags
         value: "k8s;controlplane"
 
-  - name: ""
-    ip: ""
+  - name: sapphiron
+    ip: 172.16.0.32
     hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
     host_parameters:
       - name: k8s_role
@@ -136,8 +136,8 @@ vms:
       - name: proxmox_tags
         value: "k8s;worker"
 
-  - name: ""
-    ip: ""
+  - name: maexxna
+    ip: 172.16.0.45
     hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
     host_parameters:
       - name: proxmox_tags
