@@ -5,15 +5,20 @@
 # Full lifecycle: provision Kubernetes nodes in Proxmox via Foreman, then
 # configure each VM (EFI disk, rename, tags) once the OS build completes.
 #
-# Play 1 runs on localhost
+# Play 1 — runs on localhost
 #   1. Validates VM definitions
 #   2. Resolves Foreman hostgroup IDs, location IDs, and organization IDs
 #   3. Skips hosts that already exist; creates new ones via Foreman → Proxmox
 #   4. Sets per-host Foreman parameters
 #   5. Powers VMs on so Foreman triggers the PXE/cloud-init build
 #   6. Waits for the Foreman build flag to clear (build complete)
+#   7. Registers all VMs into an in-memory group via add_host so Play 2
+#      can target them regardless of dynamic inventory timing.
 #
-# Play 2 runs against the freshly built hosts (Foreman dynamic inventory)
+# Play 2 — runs against the in-memory 'k8s_nodes' group built in Play 1
+#   Ansible loads inventory once at startup; hosts created during Play 1
+#   do not appear in Foreman dynamic inventory groups until the next run.
+#   add_host sidesteps this by injecting hosts into the live inventory.
 #   1. Discovers VMID by matching inventory hostname in Proxmox
 #   2. Gracefully shuts the VM down (ACPI)
 #   3. Adds a 4 M EFI disk with pre-enrolled Secure Boot keys on 'linstor'
@@ -22,19 +27,19 @@
 #   6. Powers the VM back on and waits until it reports running
 #
 # Requirements
-#   vars/vault.yml           vault_proxmox_api_token (and any other secrets)
-#   vars/foreman.yml         Foreman connection settings
-#   vars/vm_defaults.yml     default VM hardware specs
-#   vars/vms.yml             node definitions (names and hostgroups)
-#
-# Inventory groups consumed by Play 2 (Foreman dynamic inventory via AWX):
-#   foreman_almalinux10_kubernetescontrolplanenode
-#   foreman_almalinux10_kubernetesworkernode
+#   vars/vault.yml          — vault_proxmox_api_token (and any other secrets)
+#   vars/foreman.yml        — Foreman connection settings
+#   vars/vm_defaults.yml    — default VM hardware specs
+#   vars/vms.yml            — node definitions (names and hostgroups)
+#                             Each entry must include a 'hostgroup' field
+#                             matching one of the two AlmaLinux 10 groups:
+#                               AlmaLinux 10/Kubernetes Controlplane Node
+#                               AlmaLinux 10/Kubernetes Worker Node
 #
 # Proxmox API token setup (one-time):
 #   Datacenter → Permissions → API Tokens → Add
 #   User: root@pam  Token ID: ansible  Privilege Separation: No
-#   Copy the displayed secret it is shown only once.
+#   Copy the displayed secret — it is shown only once.
 # =============================================================================
 
 
@@ -60,8 +65,8 @@
     # How long to poll for the Foreman build flag to clear.
     # Override on the CLI: -e wait_for_build=true
     wait_for_build: true          # must be true for Play 2 to be safe
-    build_wait_retries: 100        
-    build_wait_delay_seconds: 60
+    build_wait_retries: 60        # 60 × 30 s = 30 min maximum wait
+    build_wait_delay_seconds: 30
 
   tasks:
 
@@ -286,9 +291,27 @@
       when: item.skipped is not defined or not item.skipped
 
     # ------------------------------------------------------------------
-    # 7. Wait for Foreman build flag to clear before Play 2 begins
+    # 7. Register hosts into in-memory inventory for Play 2
+    #    Done unconditionally so re-runs (where created_hosts is not
+    #    defined) still populate the group and Play 2 runs correctly.
+    #    The hostgroup name is stored as a host var so Play 2 can
+    #    derive the correct Proxmox tag without the Foreman inventory
+    #    group names being present.
+    # ------------------------------------------------------------------
+    - name: Add VMs to in-memory k8s_nodes group
+      ansible.builtin.add_host:
+        name: "{{ item.name }}.{{ foreman_domain }}"
+        groups: k8s_nodes
+        foreman_hostgroup: "{{ item.hostgroup }}"
+      loop: "{{ vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false   # add_host always reports changed; suppress noise
+
+    # ------------------------------------------------------------------
+    # 8. Wait for Foreman build flag to clear before Play 2 begins.
     #    Skipped when wait_for_build is false (e.g. re-runs, debugging).
-    #    Play 2 MUST NOT run until this step succeeds.
+    #    Play 2 MUST NOT run until this step succeeds for new builds.
     # ------------------------------------------------------------------
     - name: Wait for hosts to finish building (build flag clears)
       ansible.builtin.uri:
@@ -317,7 +340,7 @@
 # PLAY 2 — Configure Proxmox VMs after OS build completes
 # ---------------------------------------------------------------------------
 - name: Configure Proxmox K8s VMs
-  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
+  hosts: k8s_nodes    # populated by add_host in Play 1
   gather_facts: false
   serial: 1     # one VM at a time — safe for linstor disk allocation
 
@@ -489,16 +512,27 @@
 
     # ================================================================== #
     #  STEP 4 — Apply tags                                               #
+    #  foreman_hostgroup is set per-host by add_host in Play 1.         #
+    #  Matching on the hostgroup title avoids depending on Foreman       #
+    #  dynamic inventory group names being present at runtime.           #
     # ================================================================== #
     - name: Resolve tags for control plane nodes
       ansible.builtin.set_fact:
         vm_tags: "{{ controlplane_tags }}"
-      when: inventory_hostname in groups['foreman_almalinux10_kubernetescontrolplanenode']
+      when: "'Controlplane' in foreman_hostgroup"
 
     - name: Resolve tags for worker nodes
       ansible.builtin.set_fact:
         vm_tags: "{{ worker_tags }}"
-      when: inventory_hostname in groups['foreman_almalinux10_kubernetesworkernode']
+      when: "'Worker' in foreman_hostgroup"
+
+    - name: Fail if vm_tags could not be resolved
+      ansible.builtin.fail:
+        msg: >-
+          Could not determine Proxmox tags for '{{ inventory_hostname }}'.
+          foreman_hostgroup='{{ foreman_hostgroup }}' did not match
+          'Controlplane' or 'Worker'. Check vms.yml hostgroup values.
+      when: vm_tags is not defined
 
     - name: Apply tags to VM
       ansible.builtin.uri:
