@@ -126,7 +126,7 @@
     - name: Assert that primary join credentials are available
       ansible.builtin.assert:
         that:
-          - hostvars[groups['k8s_role_primary'][0]]['kubeadm_k8s_api_endpoint_ip'] is defined
+          - hostvars[groups['k8s_role_primary'][0]]['k8s_api_endpoint_ip'] is defined
           - hostvars[groups['k8s_role_primary'][0]]['join_token'] is defined
           - hostvars[groups['k8s_role_primary'][0]]['discovery_hash'] is defined
           - hostvars[groups['k8s_role_primary'][0]]['certificate_key'] is defined
