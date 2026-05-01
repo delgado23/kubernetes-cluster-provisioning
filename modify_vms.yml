@@ -27,10 +27,10 @@
     # ------------------------------------------------------------------
     # Proxmox connection — override these in AWX credentials / extra vars
     # ------------------------------------------------------------------
-    proxmox_host: "proxmox.example.com"       # FQDN or IP of your PVE host/cluster
-    proxmox_user: "root@pam"
-    proxmox_password: "{{ vault_proxmox_password }}"   # store in AWX credential / vault
-    proxmox_node: "pve"                        # Proxmox node name where VMs live
+    proxmox_host: "pve-01.example.com"       # FQDN or IP of your PVE host/cluster
+    proxmox_user: "user@Authentik!foreman"
+    proxmox_password: "356e2c28-7302-438e-8aa1-5731ba610058"   # store in AWX credential / vault
+    proxmox_node: "pve-01"                        # Proxmox node name where VMs live
     proxmox_validate_certs: true
 
     # ------------------------------------------------------------------
