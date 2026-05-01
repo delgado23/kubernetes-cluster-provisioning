@@ -55,7 +55,7 @@ vms:
       - { name: keepalived_priority, value: 99        }
 
   # --- Worker nodes ---
-  #- { name: noth,          hostgroup: *wk }
+  - { name: noth,          hostgroup: *wk }
   #- { name: heigan,        hostgroup: *wk }
   #- { name: loatheb,       hostgroup: *wk }
   #- { name: patchwerk,     hostgroup: *wk }
