@@ -35,11 +35,11 @@
     # ------------------------------------------------------------------
     # Proxmox connection — set in AWX extra vars or vault
     # ------------------------------------------------------------------
-    proxmox_host: "proxmox.example.com"       # PVE FQDN or IP
-    proxmox_user: "root@pam"                  # PVE user the token belongs to
-    proxmox_token_id: "ansible"               # token label (user@realm!token_id)
-    proxmox_api_token: "{{ vault_proxmox_api_token }}"  # token secret UUID
-    proxmox_node: "pve"                       # PVE node name
+    proxmox_host: "pve-01.garaventaville.com"       # PVE FQDN or IP
+    proxmox_user: "danielgaraventa@authentik"                  # PVE user the token belongs to
+    proxmox_token_id: "foreman"               # token label (user@realm!token_id)
+    proxmox_api_token: "356e2c28-7302-438e-8aa1-5731ba610058"  # token secret UUID
+    proxmox_node: "pve-01"                       # PVE node name
     proxmox_validate_certs: true
 
     # Convenience — built once, reused in every uri task
