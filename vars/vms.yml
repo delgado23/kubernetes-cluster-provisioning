@@ -1,83 +1,70 @@
 ---
 # vars/vms.yml
 # Kubernetes node definitions.
-# Required per entry : name, ip, hostgroup (must be a literal string — no Jinja
-#                      variable references, as this list is parsed before
-#                      play-level vars are interpolated)
-# Optional per entry : cores, memory_mb, disk_gb  (overrides vars/vm_defaults.yml)
 #
-# Hostgroup values:
-#   Controlplane : "AlmaLinux 10/Kubernetes Controlplane Node"
-#   Worker       : "AlmaLinux 10/Kubernetes Worker Node"
+# Top-level cluster vars (shared across all nodes):
+#   cluster_name                   – kubeadm cluster name
+#   k8s_api_endpoint               – control plane VIP FQDN
+#   k8s_api_endpoint_ip            – control plane VIP IP
+#   metallb_pool                   – MetalLB address range
+#
+# Per-VM keys:
+#   name        (required) – short hostname, no domain suffix
+#   hostgroup   (required) – Foreman hostgroup string
+#   host_parameters (optional) – list of {name, value} Foreman params
+#
+# Hostgroup anchors (edit here to rename for all nodes):
+#   &cp  →  "AlmaLinux 10/Kubernetes Controlplane Node"
+#   &wk  →  "AlmaLinux 10/Kubernetes Worker Node"
+# ------------------------------------------------------------------
+# YAML anchors — single source of truth for hostgroup strings
+# ------------------------------------------------------------------
+_hostgroups:
+  controlplane: &cp "AlmaLinux 10/Kubernetes Controlplane Node"
+  worker:       &wk "AlmaLinux 10/Kubernetes Worker Node"
 
+# ------------------------------------------------------------------
+# VM definitions
+# ------------------------------------------------------------------
 vms:
+
   # --- Controlplane nodes ---
   - name: lich-king
-    hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+    hostgroup: *cp
     host_parameters:
-      - name: keepalived_state
-        value: MASTER
-      - name: keepalived_priority
-        value: 101
-      - name: k8s_role
-        value: primary
-      - name: metallb_pool
-        value: "172.16.0.50-172.16.0.60"
-      - name: kubeadm_controlplaneendpoint
-        value: "k8s-api.garaventaville.com"
-      - name: kubeadm_controlplaneendpoint_ip
-        value: "172.16.0.29"
-      - name: clustername
-        value: naxxramas
+      - { name: k8s_role,            value: primary                    }
+      - { name: keepalived_state,    value: MASTER                     }
+      - { name: keepalived_priority, value: 101                        }
+      - { name: cluster_name,        value: naxxramas                  }
+      - { name: k8s_api_endpoint,    value: k8s-api.garaventaville.com }
+      - { name: k8s_api_endpoint_ip, value: 172.16.0.29                }
+      - { name: metallb_pool,        value: 172.16.0.50-172.16.0.60    }
 
   - name: kel-thuzad
-    hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+    hostgroup: *cp
     host_parameters:
-      - name: k8s_role
-        value: secondary
+      - { name: k8s_role,            value: secondary }
+      - { name: keepalived_state,    value: BACKUP    }
+      - { name: keepalived_priority, value: 100       }
 
   - name: sapphiron
-    hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+    hostgroup: *cp
     host_parameters:
-      - name: k8s_role
-        value: secondary
+      - { name: k8s_role,            value: secondary }
+      - { name: keepalived_state,    value: BACKUP    }
+      - { name: keepalived_priority, value: 99        }
 
   # --- Worker nodes ---
-  - name: noth
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-
-  - name: heigan
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-
-  - name: loatheb
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-
-  - name: patchwerk
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-
-  - name: grobbulus
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-
-  - name: gluth
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-
-  - name: thaddius
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-
-  - name: razuvious
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-
-  - name: gothik
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node""
-
-  - name: four-horesmen
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-
-  - name: anub-rekhan
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-
-  - name: faerlina
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-
-  - name: maexxna
-    hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+  - { name: noth,          hostgroup: *wk }
+  - { name: heigan,        hostgroup: *wk }
+  - { name: loatheb,       hostgroup: *wk }
+  - { name: patchwerk,     hostgroup: *wk }
+  - { name: grobbulus,     hostgroup: *wk }
+  - { name: gluth,         hostgroup: *wk }
+  - { name: thaddius,      hostgroup: *wk }
+  - { name: razuvious,     hostgroup: *wk }
+  - { name: gothik,        hostgroup: *wk }
+  - { name: four-horsemen, hostgroup: *wk }
+  - { name: anub-rekhan,   hostgroup: *wk }
+  - { name: faerlina,      hostgroup: *wk }
+  - { name: maexxna,       hostgroup: *wk }
