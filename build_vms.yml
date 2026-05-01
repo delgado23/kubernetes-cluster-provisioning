@@ -22,10 +22,10 @@
 #   6. Powers the VM back on and waits until it reports running
 #
 # Requirements
-#   vars/vault.yml          — vault_proxmox_api_token (and any other secrets)
-#   vars/foreman.yml        — Foreman connection settings
-#   vars/vm_defaults.yml    — default VM hardware specs
-#   vars/vms.yml            — node definitions (names and hostgroups)
+#   vars/vault.yml           vault_proxmox_api_token (and any other secrets)
+#   vars/foreman.yml         Foreman connection settings
+#   vars/vm_defaults.yml     default VM hardware specs
+#   vars/vms.yml             node definitions (names and hostgroups)
 #
 # Inventory groups consumed by Play 2 (Foreman dynamic inventory via AWX):
 #   foreman_almalinux10_kubernetescontrolplanenode
@@ -34,7 +34,7 @@
 # Proxmox API token setup (one-time):
 #   Datacenter → Permissions → API Tokens → Add
 #   User: root@pam  Token ID: ansible  Privilege Separation: No
-#   Copy the displayed secret — it is shown only once.
+#   Copy the displayed secret it is shown only once.
 # =============================================================================
 
 
