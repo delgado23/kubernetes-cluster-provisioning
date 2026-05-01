@@ -5,7 +5,7 @@
 # Full lifecycle: provision Kubernetes nodes in Proxmox via Foreman, then
 # configure each VM (EFI disk, rename, tags) once the OS build completes.
 #
-# Play 1 — runs on localhost
+# Play 1 runs on localhost
 #   1. Validates VM definitions
 #   2. Resolves Foreman hostgroup IDs, location IDs, and organization IDs
 #   3. Skips hosts that already exist; creates new ones via Foreman → Proxmox
@@ -13,7 +13,7 @@
 #   5. Powers VMs on so Foreman triggers the PXE/cloud-init build
 #   6. Waits for the Foreman build flag to clear (build complete)
 #
-# Play 2 — runs against the freshly built hosts (Foreman dynamic inventory)
+# Play 2 runs against the freshly built hosts (Foreman dynamic inventory)
 #   1. Discovers VMID by matching inventory hostname in Proxmox
 #   2. Gracefully shuts the VM down (ACPI)
 #   3. Adds a 4 M EFI disk with pre-enrolled Secure Boot keys on 'linstor'
