@@ -13,7 +13,7 @@ nodeRegistration:
 ---
 apiVersion: kubeadm.k8s.io/v1beta3
 kind: ClusterConfiguration
-clusterName: "{{ foreman_params.clustername }}"
+clusterName: "{{ foreman_params.cluster_name }}"
 controlPlaneEndpoint: "{{ foreman_params.kubeadm_controlplaneendpoint }}:6443"
 networking:
   podSubnet: "{{ foreman_params.k8s_pod_cidr }}"
