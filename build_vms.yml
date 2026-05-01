@@ -1,13 +1,46 @@
 ---
-# provision_vms.yml
-# Provisions Kubernetes nodes (controlplane + workers) in Proxmox via Foreman.
-# AlmaLinux 10 host groups:
-#   Controlplane : AlmaLinux 10/Kubernetes Controlplane Node
-#   Workers      : AlmaLinux 10/Kubernetes Worker Node
+# =============================================================================
+# site_k8s_provision.yml
+# =============================================================================
+# Full lifecycle: provision Kubernetes nodes in Proxmox via Foreman, then
+# configure each VM (EFI disk, rename, tags) once the OS build completes.
 #
-# Requirements:
-#   Foreman credentials set in vars/foreman.yml or Ansible Vault
+# Play 1 — runs on localhost
+#   1. Validates VM definitions
+#   2. Resolves Foreman hostgroup IDs, location IDs, and organization IDs
+#   3. Skips hosts that already exist; creates new ones via Foreman → Proxmox
+#   4. Sets per-host Foreman parameters
+#   5. Powers VMs on so Foreman triggers the PXE/cloud-init build
+#   6. Waits for the Foreman build flag to clear (build complete)
+#
+# Play 2 — runs against the freshly built hosts (Foreman dynamic inventory)
+#   1. Discovers VMID by matching inventory hostname in Proxmox
+#   2. Gracefully shuts the VM down (ACPI)
+#   3. Adds a 4 M EFI disk with pre-enrolled Secure Boot keys on 'linstor'
+#   4. Strips '.example.com' from the Proxmox VM name
+#   5. Applies tags: k8s;controlplane or k8s;worker
+#   6. Powers the VM back on and waits until it reports running
+#
+# Requirements
+#   vars/vault.yml          — vault_proxmox_api_token (and any other secrets)
+#   vars/foreman.yml        — Foreman connection settings
+#   vars/vm_defaults.yml    — default VM hardware specs
+#   vars/vms.yml            — node definitions (names and hostgroups)
+#
+# Inventory groups consumed by Play 2 (Foreman dynamic inventory via AWX):
+#   foreman_almalinux10_kubernetescontrolplanenode
+#   foreman_almalinux10_kubernetesworkernode
+#
+# Proxmox API token setup (one-time):
+#   Datacenter → Permissions → API Tokens → Add
+#   User: root@pam  Token ID: ansible  Privilege Separation: No
+#   Copy the displayed secret — it is shown only once.
+# =============================================================================
 
+
+# ---------------------------------------------------------------------------
+# PLAY 1 — Provision hosts in Foreman / Proxmox
+# ---------------------------------------------------------------------------
 - name: Provision Kubernetes nodes in Proxmox via Foreman
   hosts: localhost
   connection: local
@@ -15,9 +48,20 @@
 
   vars_files:
     - vars/vault.yml
-    - vars/foreman.yml      # Foreman connection settings
-    - vars/vm_defaults.yml  # Default VM hardware specs
-    - vars/vms.yml          # Node definitions (names and hostgroups)
+    - vars/foreman.yml      # foreman_url, foreman_user, foreman_password,
+                            # foreman_validate_certs, foreman_domain,
+                            # foreman_compute_resource_id,
+                            # foreman_compute_profile_id
+    - vars/vm_defaults.yml  # default VM hardware specs
+    - vars/vms.yml          # vms list — each entry: name, hostgroup,
+                            # optionally host_parameters[]
+
+  vars:
+    # How long to poll for the Foreman build flag to clear.
+    # Override on the CLI: -e wait_for_build=true
+    wait_for_build: true          # must be true for Play 2 to be safe
+    build_wait_retries: 60        # 60 × 30 s = 30 min maximum wait
+    build_wait_delay_seconds: 30
 
   tasks:
 
@@ -30,7 +74,7 @@
           - item.name is defined and item.name | length > 0
           - item.hostgroup is defined and item.hostgroup | length > 0
         fail_msg: >-
-          VM entry is missing required fields (name or hostgroup)
+          VM entry is missing required fields (name or hostgroup).
       loop: "{{ vms }}"
       loop_control:
         label: "{{ item.name }}"
@@ -54,7 +98,7 @@
       loop_control:
         label: "{{ item }}"
 
-    - name: Build hostgroup name-to-id map (from search results)
+    - name: Build hostgroup name-to-id map
       ansible.builtin.set_fact:
         hostgroup_id_map: >-
           {{
@@ -67,8 +111,7 @@
         label: "{{ item.item }}"
       when: item.json.results | length > 0
 
-    # Fetch each hostgroup individually — the show endpoint returns
-    # locations and organizations, the search/index endpoint does not.
+    # The index endpoint omits location/org; fetch each group individually.
     - name: Fetch full hostgroup details (location and organization)
       ansible.builtin.uri:
         url: "{{ foreman_url }}/api/hostgroups/{{ hostgroup_id_map[item].id }}"
@@ -101,7 +144,7 @@
         label: "{{ item.item }}"
       when: item.json.locations | length > 0 and item.json.organizations | length > 0
 
-    - name: Fail if any hostgroup was not found
+    - name: Fail if any hostgroup was not found in Foreman
       ansible.builtin.fail:
         msg: "Hostgroup '{{ item.hostgroup }}' not found in Foreman."
       when: item.hostgroup not in (hostgroup_id_map | default({}))
@@ -130,7 +173,7 @@
         label: "{{ item.name }}"
 
     # ------------------------------------------------------------------
-    # 4. Create hosts in Foreman (skips hosts that already exist)
+    # 4. Create hosts in Foreman / Proxmox (skips hosts that exist)
     # ------------------------------------------------------------------
     - name: Create VM in Foreman / Proxmox
       ansible.builtin.uri:
@@ -170,7 +213,7 @@
         force_basic_auth: true
         validate_certs: "{{ foreman_validate_certs }}"
         body_format: json
-        status_code: [201, 422]  # 422 = parameter already exists
+        status_code: [201, 422]   # 422 = parameter already exists
         headers:
           Content-Type: application/json
           Accept: application/json
@@ -188,9 +231,9 @@
         label: "{{ item.0.name }} — {{ item.1.name }}"
 
     # ------------------------------------------------------------------
-    # 5. Report results
+    # 5. Report pre-power-on status
     # ------------------------------------------------------------------
-    - name: Report skipped VMs (already exist)
+    - name: Report skipped VMs (already existed in Foreman)
       ansible.builtin.debug:
         msg: "SKIPPED — host already exists in Foreman: {{ item.0.name }}"
       loop: "{{ vms | zip(existing_hosts.results) | list }}"
@@ -212,7 +255,7 @@
         - item.skipped is not defined or not item.skipped
 
     # ------------------------------------------------------------------
-    # 6. Power on VMs
+    # 6. Power on VMs so Foreman triggers the PXE/cloud-init build
     # ------------------------------------------------------------------
     - name: Power on VMs
       ansible.builtin.uri:
@@ -234,7 +277,7 @@
         label: "{{ item.name }}"
       register: power_results
 
-    - name: Report power on results
+    - name: Report power-on results
       ansible.builtin.debug:
         msg: "POWERED ON — {{ item.item.name }}: {{ item.json.power | default('started') }}"
       loop: "{{ power_results.results }}"
@@ -243,7 +286,9 @@
       when: item.skipped is not defined or not item.skipped
 
     # ------------------------------------------------------------------
-    # 7. Optional — wait for hosts to finish building
+    # 7. Wait for Foreman build flag to clear before Play 2 begins
+    #    Skipped when wait_for_build is false (e.g. re-runs, debugging).
+    #    Play 2 MUST NOT run until this step succeeds.
     # ------------------------------------------------------------------
     - name: Wait for hosts to finish building (build flag clears)
       ansible.builtin.uri:
@@ -264,5 +309,246 @@
       loop_control:
         label: "{{ item.name }}"
       when:
-        - wait_for_build | default(false)
+        - wait_for_build | default(true)
         - created_hosts is defined
+
+
+# ---------------------------------------------------------------------------
+# PLAY 2 — Configure Proxmox VMs after OS build completes
+# ---------------------------------------------------------------------------
+- name: Configure Proxmox K8s VMs
+  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
+  gather_facts: false
+  serial: 1     # one VM at a time — safe for linstor disk allocation
+
+  vars_files:
+    - vars/vault.yml    # vault_proxmox_api_token
+
+  vars:
+    # ------------------------------------------------------------------
+    # Proxmox connection
+    # ------------------------------------------------------------------
+    proxmox_host: "pve-01.example.com:8006"
+    proxmox_user: "user@Authentik"
+    proxmox_token_id: "foreman"
+    proxmox_api_token: "{{ vault_proxmox_api_token }}"
+    proxmox_node: "pve-01"
+    proxmox_validate_certs: true
+
+    # Convenience — built once, reused in every uri task
+    _auth: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_api_token }}"
+    _base: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}"
+
+    # ------------------------------------------------------------------
+    # EFI disk
+    # ------------------------------------------------------------------
+    efi_storage: "linstor"
+
+    # ------------------------------------------------------------------
+    # Tags (Proxmox uses semicolon as separator)
+    # ------------------------------------------------------------------
+    controlplane_tags: "k8s;controlplane"
+    worker_tags: "k8s;worker"
+
+    # ------------------------------------------------------------------
+    # Timeouts (seconds)
+    # ------------------------------------------------------------------
+    shutdown_timeout: 120
+    startup_timeout: 120
+
+  tasks:
+
+    # ================================================================== #
+    #  STEP 0 — Discover VMID                                            #
+    # ================================================================== #
+    - name: Get full VM list from Proxmox node
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu"
+        method: GET
+        headers:
+          Authorization: "{{ _auth }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        return_content: true
+      register: proxmox_vm_list
+      delegate_to: localhost
+
+    - name: Resolve short hostname (strip domain suffix)
+      ansible.builtin.set_fact:
+        short_hostname: "{{ inventory_hostname | regex_replace('\\..*$', '') }}"
+
+    - name: Find VM entry matching this host
+      ansible.builtin.set_fact:
+        vm_info: >-
+          {{
+            proxmox_vm_list.json.data
+            | selectattr('name', 'defined')
+            | selectattr('name', 'search', short_hostname)
+            | list
+            | first
+          }}
+
+    - name: Fail clearly if VM not found in Proxmox
+      ansible.builtin.fail:
+        msg: >
+          Could not find a VM on node '{{ proxmox_node }}' whose name
+          contains '{{ short_hostname }}'. Verify proxmox_node and that
+          the VM exists.
+      when: vm_info is not defined or vm_info | length == 0
+
+    - name: Set VMID and current name as facts
+      ansible.builtin.set_fact:
+        vmid: "{{ vm_info.vmid }}"
+        vm_current_name: "{{ vm_info.name }}"
+
+    - name: Display discovered VM
+      ansible.builtin.debug:
+        msg: "Matched '{{ inventory_hostname }}' → '{{ vm_current_name }}' (VMID {{ vmid }})"
+
+    # ================================================================== #
+    #  STEP 1 — Graceful shutdown                                        #
+    # ================================================================== #
+    - name: Send ACPI shutdown signal
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu/{{ vmid }}/status/shutdown"
+        method: POST
+        headers:
+          Authorization: "{{ _auth }}"
+        body_format: form-urlencoded
+        body:
+          forceStop: 0
+          timeout: "{{ shutdown_timeout }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        status_code: [200]
+      delegate_to: localhost
+
+    - name: Wait for VM to reach stopped state
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu/{{ vmid }}/status/current"
+        method: GET
+        headers:
+          Authorization: "{{ _auth }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        return_content: true
+      register: vm_status
+      until: vm_status.json.data.status == 'stopped'
+      retries: "{{ (shutdown_timeout / 5) | int }}"
+      delay: 5
+      delegate_to: localhost
+
+    # ================================================================== #
+    #  STEP 2 — Add EFI disk on linstor                                  #
+    # ================================================================== #
+    - name: Check if efidisk0 already exists
+      ansible.builtin.set_fact:
+        efidisk_exists: "{{ 'efidisk0' in vm_info }}"
+
+    - name: Add EFI disk (skip if already present)
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu/{{ vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _auth }}"
+        body_format: form-urlencoded
+        body:
+          efidisk0: "{{ efi_storage }}:0,efitype=4m,pre-enrolled-keys=1"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        status_code: [200]
+      delegate_to: localhost
+      when: not efidisk_exists
+
+    - name: Skip EFI disk notice (already present)
+      ansible.builtin.debug:
+        msg: "efidisk0 already exists on VMID {{ vmid }} — skipping."
+      when: efidisk_exists
+
+    # ================================================================== #
+    #  STEP 3 — Rename VM: strip .example.com                     #
+    # ================================================================== #
+    - name: Compute cleaned VM name
+      ansible.builtin.set_fact:
+        vm_new_name: "{{ vm_current_name | regex_replace('\\.garaventaville\\.com$', '') }}"
+
+    - name: Rename VM (strip .example.com suffix)
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu/{{ vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _auth }}"
+        body_format: form-urlencoded
+        body:
+          name: "{{ vm_new_name }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        status_code: [200]
+      delegate_to: localhost
+      when: vm_new_name != vm_current_name
+
+    - name: Skip rename notice (name already clean)
+      ansible.builtin.debug:
+        msg: "VM name '{{ vm_current_name }}' has no .example.com suffix — skipping."
+      when: vm_new_name == vm_current_name
+
+    # ================================================================== #
+    #  STEP 4 — Apply tags                                               #
+    # ================================================================== #
+    - name: Resolve tags for control plane nodes
+      ansible.builtin.set_fact:
+        vm_tags: "{{ controlplane_tags }}"
+      when: inventory_hostname in groups['foreman_almalinux10_kubernetescontrolplanenode']
+
+    - name: Resolve tags for worker nodes
+      ansible.builtin.set_fact:
+        vm_tags: "{{ worker_tags }}"
+      when: inventory_hostname in groups['foreman_almalinux10_kubernetesworkernode']
+
+    - name: Apply tags to VM
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu/{{ vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _auth }}"
+        body_format: form-urlencoded
+        body:
+          tags: "{{ vm_tags }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        status_code: [200]
+      delegate_to: localhost
+
+    - name: Display applied tags
+      ansible.builtin.debug:
+        msg: "Applied tags '{{ vm_tags }}' to '{{ vm_new_name }}' (VMID {{ vmid }})"
+
+    # ================================================================== #
+    #  STEP 5 — Power on                                                 #
+    # ================================================================== #
+    - name: Start VM
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu/{{ vmid }}/status/start"
+        method: POST
+        headers:
+          Authorization: "{{ _auth }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        status_code: [200]
+      delegate_to: localhost
+
+    - name: Wait for VM to reach running state
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu/{{ vmid }}/status/current"
+        method: GET
+        headers:
+          Authorization: "{{ _auth }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        return_content: true
+      register: vm_started
+      until: vm_started.json.data.status == 'running'
+      retries: "{{ (startup_timeout / 5) | int }}"
+      delay: 5
+      delegate_to: localhost
+
+    # ================================================================== #
+    #  Summary                                                           #
+    # ================================================================== #
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >
+          ✓ VMID {{ vmid }} | Name: {{ vm_new_name }} | Tags: {{ vm_tags }}
+          | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Status: running
