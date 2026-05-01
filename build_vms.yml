@@ -60,8 +60,8 @@
     # How long to poll for the Foreman build flag to clear.
     # Override on the CLI: -e wait_for_build=true
     wait_for_build: true          # must be true for Play 2 to be safe
-    build_wait_retries: 60        # 60 × 30 s = 30 min maximum wait
-    build_wait_delay_seconds: 30
+    build_wait_retries: 100        
+    build_wait_delay_seconds: 60
 
   tasks:
 
