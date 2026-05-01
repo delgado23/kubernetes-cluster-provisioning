@@ -1,335 +1,240 @@
 ---
-# modify_vms.yml
+# =============================================================================
+# Proxmox K8s VM Configuration Playbook
+# =============================================================================
+# Prerequisites:
+#   ansible-galaxy collection install community.general
+#
+# What this playbook does (in order):
+#   1. Discovers VM IDs from Proxmox by matching inventory hostnames
+#   2. Shuts down each VM gracefully (ACPI) and waits for it to stop
+#   3. Adds a 4M EFI disk with pre-enrolled secure boot keys on 'linstor'
+#   4. Strips '.example.com' from the VM name
+#   5. Applies tags: k8s+worker (workers) or k8s+controlplane (control planes)
+#   6. Powers each VM back on and waits until the agent reports it running
+#
+# Inventory groups consumed (from Foreman via AWX):
+#   foreman_almalinux10_kubernetescontrolplanenode
+#   foreman_almalinux10_kubernetesworkernode
+# =============================================================================
 
-- name: Add EFI disk, apply tags, graceful shutdown and power on all Kubernetes nodes
-  hosts: localhost
-  connection: local
+- name: Configure Proxmox K8s VMs
+  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
   gather_facts: false
-  strategy: free
-
-  vars_files:
-    - vars/foreman.yml
-    - vars/vms.yml
+  serial: 1   # process one VM at a time to avoid hammering Proxmox API
 
   vars:
-    efi_disk_storage: "linstor"
-    efi_disk_size_mb: 4
-    shutdown_wait_retries: 60
-    shutdown_wait_delay: 15
-    poweron_wait_retries: 30
-    poweron_wait_delay: 10
+    # ------------------------------------------------------------------
+    # Proxmox connection — override these in AWX credentials / extra vars
+    # ------------------------------------------------------------------
+    proxmox_host: "proxmox.example.com"       # FQDN or IP of your PVE host/cluster
+    proxmox_user: "root@pam"
+    proxmox_password: "{{ vault_proxmox_password }}"   # store in AWX credential / vault
+    proxmox_node: "pve"                        # Proxmox node name where VMs live
+    proxmox_validate_certs: true
+
+    # ------------------------------------------------------------------
+    # EFI disk settings
+    # ------------------------------------------------------------------
+    efi_storage: "linstor"
+    efi_type: "4m"          # 4M with pre-enrolled secure boot keys
+
+    # ------------------------------------------------------------------
+    # Tag assignments (resolved per-host in tasks via group membership)
+    # ------------------------------------------------------------------
+    controlplane_tags: "k8s;controlplane"
+    worker_tags: "k8s;worker"
+
+    # ------------------------------------------------------------------
+    # Timeouts
+    # ------------------------------------------------------------------
+    shutdown_timeout: 120   # seconds to wait for VM to stop
+    startup_timeout: 120    # seconds to wait for VM to start
 
   tasks:
 
-    # -------------------------------------------------------------------------
-    # 1. Resolve Foreman host records for all nodes
-    #    Run synchronously — fast API call, avoids async nesting complexity.
-    #
-    #    Nesting: item = original VM dict, item.name = "arthas"
-    # -------------------------------------------------------------------------
-    - name: Look up Foreman host records
-      ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}"
-        method: GET
-        user: "{{ foreman_user }}"
-        password: "{{ foreman_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ foreman_validate_certs }}"
-        status_code: [200, 404]
-        headers:
-          Accept: application/json
-      register: host_records
-      loop: "{{ vms }}"
-      loop_control:
-        label: "{{ item.name }}"
+    # ------------------------------------------------------------------ #
+    #  STEP 0 — Discover the VM ID from Proxmox matching this inventory   #
+    #           hostname (strips domain suffix for the match)             #
+    # ------------------------------------------------------------------ #
+    - name: Get full VM list from Proxmox node
+      community.general.proxmox_vm_info:
+        api_host: "{{ proxmox_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        type: qemu
+      register: proxmox_vms
+      delegate_to: localhost
 
-    - name: Fail if any host was not found in Foreman
-      ansible.builtin.fail:
-        msg: "Host '{{ item.item.name }}' not found in Foreman (HTTP {{ item.status }})."
-      when: item.status == 404
-      loop: "{{ host_records.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
-
-    # -------------------------------------------------------------------------
-    # 2. Build hostname-to-tags map from host record parameters
-    #
-    #    Nesting: item = host_records.results[] entry
-    #             item.item = original VM dict
-    #             item.item.name = "arthas"
-    #             item.json = Foreman API response body
-    # -------------------------------------------------------------------------
-    - name: Build hostname-to-tags map from host records
+    - name: Resolve short hostname (strip domain suffix if present)
       ansible.builtin.set_fact:
-        host_tags_map: >-
+        short_hostname: "{{ inventory_hostname | regex_replace('\\..*$', '') }}"
+
+    - name: Find VM entry matching this host
+      ansible.builtin.set_fact:
+        vm_info: >-
           {{
-            host_tags_map | default({}) | combine({
-              item.item.name: (
-                item.json.parameters
-                | selectattr('name', 'equalto', 'proxmox_tags')
-                | map(attribute='value')
-                | first
-                | default('')
-              )
-            })
+            proxmox_vms.proxmox_vms
+            | selectattr('name', 'defined')
+            | selectattr('name', 'search', short_hostname)
+            | list
+            | first
           }}
-      loop: "{{ host_records.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
 
-    - name: Warn if any host has no proxmox_tags parameter set
+    - name: Fail clearly if VM was not found in Proxmox
+      ansible.builtin.fail:
+        msg: >
+          Could not find a VM on node '{{ proxmox_node }}' whose name
+          contains '{{ short_hostname }}'. Check that proxmox_node is correct
+          and that the VM exists.
+      when: vm_info is not defined or vm_info | length == 0
+
+    - name: Set VM ID and current name as facts
+      ansible.builtin.set_fact:
+        vmid: "{{ vm_info.vmid }}"
+        vm_current_name: "{{ vm_info.name }}"
+
+    - name: Display discovered VM details
       ansible.builtin.debug:
-        msg: "WARNING — host '{{ item.key }}' has no proxmox_tags parameter in Foreman. No tags will be applied."
-      when: item.value == ''
-      loop: "{{ host_tags_map | dict2items }}"
-      loop_control:
-        label: "{{ item.key }}"
+        msg: "Matched inventory host '{{ inventory_hostname }}' → VM '{{ vm_current_name }}' (VMID {{ vmid }})"
 
-    # -------------------------------------------------------------------------
-    # 3. Add EFI disk and tags via a single PUT per host
-    #    Async here is worthwhile — Proxmox VM config updates can be slow.
-    #
-    #    Nesting: item = host_records.results[] entry
-    #             item.item.name = "arthas"
-    # -------------------------------------------------------------------------
-    - name: Add EFI disk and tags to each VM
-      ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.item.name }}.{{ foreman_domain }}"
-        method: PUT
-        user: "{{ foreman_user }}"
-        password: "{{ foreman_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ foreman_validate_certs }}"
-        body_format: json
-        status_code: [200, 201]
-        headers:
-          Content-Type: application/json
-          Accept: application/json
-        body:
-          host:
-            compute_attributes:
-              efidisk0: "{{ efi_disk_storage }}:{{ efi_disk_size_mb }},efitype=4m,pre-enrolled-keys=1"
-              tags: "{{ host_tags_map[item.item.name] }}"
-      register: update_jobs
-      loop: "{{ host_records.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
-      when: host_tags_map[item.item.name] | default('') != ''
-      async: 60
-      poll: 0
+    # ------------------------------------------------------------------ #
+    #  STEP 1 — Graceful shutdown                                         #
+    # ------------------------------------------------------------------ #
+    - name: Shut down VM gracefully (ACPI)
+      community.general.proxmox_kvm:
+        api_host: "{{ proxmox_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid }}"
+        state: stopped
+        force: false        # false = ACPI shutdown, not hard kill
+        timeout: "{{ shutdown_timeout }}"
+      delegate_to: localhost
 
-    - name: Add EFI disk only (no proxmox_tags parameter found)
-      ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.item.name }}.{{ foreman_domain }}"
-        method: PUT
-        user: "{{ foreman_user }}"
-        password: "{{ foreman_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ foreman_validate_certs }}"
-        body_format: json
-        status_code: [200, 201]
-        headers:
-          Content-Type: application/json
-          Accept: application/json
-        body:
-          host:
-            compute_attributes:
-              efidisk0: "{{ efi_disk_storage }}:{{ efi_disk_size_mb }},efitype=4m,pre-enrolled-keys=1"
-      register: update_notags_jobs
-      loop: "{{ host_records.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
-      when: host_tags_map[item.item.name] | default('') == ''
-      async: 60
-      poll: 0
+    - name: Wait for VM to reach stopped state
+      community.general.proxmox_vm_info:
+        api_host: "{{ proxmox_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid }}"
+        type: qemu
+      register: vm_status
+      until: vm_status.proxmox_vms[0].status == 'stopped'
+      retries: "{{ (shutdown_timeout / 5) | int }}"
+      delay: 5
+      delegate_to: localhost
 
-    # Nesting: item = async_status result
-    #          item.item = update_jobs.results[] entry
-    #          item.item.item = host_records.results[] entry
-    #          item.item.item.item = original VM dict
-    #          item.item.item.item.name = "arthas"
-    - name: Wait for VM updates (with tags) to complete
-      ansible.builtin.async_status:
-        jid: "{{ item.ansible_job_id }}"
-      register: updates_done
-      until: updates_done.finished
-      retries: 30
-      delay: 2
-      loop: "{{ update_jobs.results }}"
-      loop_control:
-        label: "{{ item.item.item.name }}"   # item.item = update entry, item.item.item = VM dict
-      when: item.ansible_job_id is defined
+    # ------------------------------------------------------------------ #
+    #  STEP 2 — Add EFI disk on linstor storage                          #
+    # ------------------------------------------------------------------ #
+    - name: Add EFI disk (4M, pre-enrolled secure boot keys) on linstor
+      community.general.proxmox_kvm:
+        api_host: "{{ proxmox_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid }}"
+        efidisk0:
+          storage: "{{ efi_storage }}"
+          efitype: "{{ efi_type }}"
+          pre_enrolled_keys: true
+        update: true        # update existing VM config, don't recreate
+      delegate_to: localhost
 
-    - name: Wait for VM updates (no tags) to complete
-      ansible.builtin.async_status:
-        jid: "{{ item.ansible_job_id }}"
-      register: updates_notags_done
-      until: updates_notags_done.finished
-      retries: 30
-      delay: 2
-      loop: "{{ update_notags_jobs.results }}"
-      loop_control:
-        label: "{{ item.item.item.name }}"
-      when: item.ansible_job_id is defined
+    # ------------------------------------------------------------------ #
+    #  STEP 3 — Rename VM: remove .example.com                     #
+    # ------------------------------------------------------------------ #
+    - name: Compute cleaned VM name
+      ansible.builtin.set_fact:
+        vm_new_name: "{{ vm_current_name | regex_replace('\\.garaventaville\\.com$', '') }}"
 
-    - name: Report completed VM updates
+    - name: Rename VM (strip .example.com)
+      community.general.proxmox_kvm:
+        api_host: "{{ proxmox_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid }}"
+        name: "{{ vm_new_name }}"
+        update: true
+      delegate_to: localhost
+      when: vm_new_name != vm_current_name
+
+    - name: Skip rename notice (name already clean)
       ansible.builtin.debug:
-        msg: >-
-          UPDATED — {{ item.item.item.item.name }}
-          tags: {{ host_tags_map[item.item.item.item.name] | default('none') }}
-      loop: >-
-        {{
-          (updates_done.results | default([]))
-          + (updates_notags_done.results | default([]))
-        }}
-      loop_control:
-        label: "{{ item.item.item.item.name }}"
-      when: item.skipped is not defined or not item.skipped
+        msg: "VM name '{{ vm_current_name }}' does not contain .example.com — skipping rename."
+      when: vm_new_name == vm_current_name
 
-    # -------------------------------------------------------------------------
-    # 4. Graceful shutdown
-    # -------------------------------------------------------------------------
-    - name: Gracefully shut down all VMs
-      ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
-        method: PUT
-        user: "{{ foreman_user }}"
-        password: "{{ foreman_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ foreman_validate_certs }}"
-        body_format: json
-        status_code: [200, 201]
-        headers:
-          Content-Type: application/json
-          Accept: application/json
-        body:
-          power_action: "shutdown"
-      register: shutdown_jobs
-      loop: "{{ vms }}"
-      loop_control:
-        label: "{{ item.name }}"
-      async: 60
-      poll: 0
+    # ------------------------------------------------------------------ #
+    #  STEP 4 — Apply tags based on Foreman inventory group membership    #
+    # ------------------------------------------------------------------ #
+    - name: Resolve tags for control plane nodes
+      ansible.builtin.set_fact:
+        vm_tags: "{{ controlplane_tags }}"
+      when: inventory_hostname in groups['foreman_almalinux10_kubernetescontrolplanenode']
 
-    - name: Wait for shutdown requests to be accepted
-      ansible.builtin.async_status:
-        jid: "{{ item.ansible_job_id }}"
-      register: shutdown_accepted
-      until: shutdown_accepted.finished
-      retries: 30
-      delay: 2
-      loop: "{{ shutdown_jobs.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
+    - name: Resolve tags for worker nodes
+      ansible.builtin.set_fact:
+        vm_tags: "{{ worker_tags }}"
+      when: inventory_hostname in groups['foreman_almalinux10_kubernetesworkernode']
 
-    # -------------------------------------------------------------------------
-    # 5. Poll until all VMs are confirmed off
-    # -------------------------------------------------------------------------
-    - name: Poll until VMs are confirmed off
-      ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
-        method: GET
-        user: "{{ foreman_user }}"
-        password: "{{ foreman_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ foreman_validate_certs }}"
-        headers:
-          Accept: application/json
-      register: power_state
-      until: >-
-        (power_state.json.power is defined and
-          (power_state.json.power == false or power_state.json.power == 'off'
-           or power_state.json.power == 'stopped'))
-        or
-        (power_state.json.state is defined and
-          (power_state.json.state == 'stopped' or power_state.json.state == 'off'))
-        or
-        (power_state.json.status is defined and
-          (power_state.json.status == false or power_state.json.status == 'off'
-           or power_state.json.status == 'stopped'))
-      retries: "{{ shutdown_wait_retries }}"
-      delay: "{{ shutdown_wait_delay }}"
-      loop: "{{ vms }}"
-      loop_control:
-        label: "{{ item.name }}"
+    - name: Apply tags to VM
+      community.general.proxmox_kvm:
+        api_host: "{{ proxmox_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid }}"
+        tags: "{{ vm_tags }}"
+        update: true
+      delegate_to: localhost
 
-    - name: Confirm all VMs are off
+    - name: Display applied tags
       ansible.builtin.debug:
-        msg: "POWERED OFF — {{ item.item.name }}"
-      loop: "{{ power_state.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
+        msg: "Applied tags '{{ vm_tags }}' to VM '{{ vm_new_name }}' (VMID {{ vmid }})"
 
-    # -------------------------------------------------------------------------
-    # 6. Power back on
-    # -------------------------------------------------------------------------
-    - name: Power on all VMs
-      ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
-        method: PUT
-        user: "{{ foreman_user }}"
-        password: "{{ foreman_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ foreman_validate_certs }}"
-        body_format: json
-        status_code: [200, 201]
-        headers:
-          Content-Type: application/json
-          Accept: application/json
-        body:
-          power_action: "start"
-      register: poweron_jobs
-      loop: "{{ vms }}"
-      loop_control:
-        label: "{{ item.name }}"
-      async: 60
-      poll: 0
+    # ------------------------------------------------------------------ #
+    #  STEP 5 — Power VM back on                                          #
+    # ------------------------------------------------------------------ #
+    - name: Start VM
+      community.general.proxmox_kvm:
+        api_host: "{{ proxmox_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid }}"
+        state: started
+        timeout: "{{ startup_timeout }}"
+      delegate_to: localhost
 
-    - name: Wait for power-on requests to be accepted
-      ansible.builtin.async_status:
-        jid: "{{ item.ansible_job_id }}"
-      register: poweron_accepted
-      until: poweron_accepted.finished
-      retries: 30
-      delay: 2
-      loop: "{{ poweron_jobs.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
+    - name: Wait for VM to reach running state
+      community.general.proxmox_vm_info:
+        api_host: "{{ proxmox_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid }}"
+        type: qemu
+      register: vm_started
+      until: vm_started.proxmox_vms[0].status == 'running'
+      retries: "{{ (startup_timeout / 5) | int }}"
+      delay: 5
+      delegate_to: localhost
 
-    # -------------------------------------------------------------------------
-    # 7. Poll until all VMs are confirmed on
-    # -------------------------------------------------------------------------
-    - name: Poll until VMs are confirmed on
-      ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
-        method: GET
-        user: "{{ foreman_user }}"
-        password: "{{ foreman_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ foreman_validate_certs }}"
-        headers:
-          Accept: application/json
-      register: poweron_state
-      until: >-
-        (poweron_state.json.power is defined and
-          (poweron_state.json.power == true or poweron_state.json.power == 'on'
-           or poweron_state.json.power == 'running'))
-        or
-        (poweron_state.json.state is defined and
-          (poweron_state.json.state == 'running' or poweron_state.json.state == 'on'))
-        or
-        (poweron_state.json.status is defined and
-          (poweron_state.json.status == true or poweron_state.json.status == 'on'
-           or poweron_state.json.status == 'running'))
-      retries: "{{ poweron_wait_retries }}"
-      delay: "{{ poweron_wait_delay }}"
-      loop: "{{ vms }}"
-      loop_control:
-        label: "{{ item.name }}"
-
-    - name: Report final power state
+    - name: Summary
       ansible.builtin.debug:
-        msg: "POWERED ON — {{ item.item.name }}"
-      loop: "{{ poweron_state.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
+        msg: >
+          ✓ VMID {{ vmid }} | Name: {{ vm_new_name }} | Tags: {{ vm_tags }}
+          | EFI disk added on {{ efi_storage }} | Status: running
