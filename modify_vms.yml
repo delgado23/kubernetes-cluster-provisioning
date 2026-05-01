@@ -30,6 +30,8 @@
   hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
   gather_facts: false
   serial: 1   # one VM at a time — safe for linstor disk allocation
+  vars_files:
+    - vars/vault.yml
 
   vars:
     # ------------------------------------------------------------------
@@ -38,7 +40,7 @@
     proxmox_host: "pve-01.garaventaville.com:8006"       # PVE FQDN or IP
     proxmox_user: "danielgaraventa@Authentik"                  # PVE user the token belongs to
     proxmox_token_id: "foreman"               # token label (user@realm!token_id)
-    proxmox_api_token: "356e2c28-7302-438e-8aa1-5731ba610058"  # token secret UUID
+    proxmox_api_token: "{{ vault_proxmox_api_token }}"  # token secret UUID
     proxmox_node: "pve-01"                       # PVE node name
     proxmox_validate_certs: true
 
