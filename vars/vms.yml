@@ -11,7 +11,7 @@
 # Per-VM keys:
 #   name        (required) short hostname, no domain suffix
 #   hostgroup   (required) Foreman hostgroup string
-#   host_parameters (optional) – list of {name, value} Foreman params
+#   host_parameters (optional)  list of {name, value} Foreman params
 #
 # Hostgroup anchors (edit here to rename for all nodes):
 #   &cp  →  "AlmaLinux 10/Kubernetes Controlplane Node"
