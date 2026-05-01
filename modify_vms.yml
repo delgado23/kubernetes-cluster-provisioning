@@ -2,59 +2,57 @@
 # =============================================================================
 # Proxmox K8s VM Configuration Playbook
 # =============================================================================
-# Prerequisites:
-#   ansible-galaxy collection install community.general
+# No collection dependencies — uses only ansible.builtin.uri against the
+# Proxmox VE REST API with API token authentication throughout.
 #
 # What this playbook does (in order):
 #   1. Discovers VM IDs from Proxmox by matching inventory hostnames
 #   2. Shuts down each VM gracefully (ACPI) and waits for it to stop
 #   3. Adds a 4M EFI disk with pre-enrolled secure boot keys on 'linstor'
 #   4. Strips '.example.com' from the VM name
-#   5. Applies tags: k8s+worker (workers) or k8s+controlplane (control planes)
-#   6. Powers each VM back on and waits until the agent reports it running
+#   5. Applies tags: k8s;worker (workers) or k8s;controlplane (control planes)
+#   6. Powers each VM back on and waits until it reports running
 #
 # Inventory groups consumed (from Foreman via AWX):
 #   foreman_almalinux10_kubernetescontrolplanenode
 #   foreman_almalinux10_kubernetesworkernode
 #
-# Authentication:
-#   Uses Proxmox API tokens (recommended for AWX).
-#   Create a token in PVE: Datacenter → Permissions → API Tokens
-#   Set proxmox_api_token in AWX as a custom credential or vault secret.
-#   Token format expected: the token secret UUID only (not the full user!token=secret string).
-#   Full header built as: "PVEAPIToken=<user>!<token_id>=<token_secret>"
-#   If you prefer ticket (username+password) auth, see the commented
-#   alternative at the bottom of this file.
+# AWX credentials / vault secrets required:
+#   vault_proxmox_api_token  – the API token secret UUID
+#
+# Create the token in PVE:
+#   Datacenter → Permissions → API Tokens → Add
+#   User: root@pam  Token ID: ansible  Privilege Separation: No
+#   Copy the displayed secret — it is shown only once.
 # =============================================================================
 
 - name: Configure Proxmox K8s VMs
   hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
   gather_facts: false
-  serial: 1   # process one VM at a time to avoid hammering Proxmox API
+  serial: 1   # one VM at a time — safe for linstor disk allocation
 
   vars:
     # ------------------------------------------------------------------
-    # Proxmox connection — override in AWX extra vars / vault
+    # Proxmox connection — set in AWX extra vars or vault
     # ------------------------------------------------------------------
-    proxmox_host: "proxmox.example.com"
-    proxmox_user: "root@pam"
-    proxmox_token_id: "ansible"                        # the token ID (user@realm!token_id)
-    proxmox_api_token: "{{ vault_proxmox_api_token }}" # the token secret UUID
-    proxmox_password: "{{ vault_proxmox_password }}"   # only needed by proxmox_kvm module
-    proxmox_node: "pve"
+    proxmox_host: "proxmox.example.com"       # PVE FQDN or IP
+    proxmox_user: "root@pam"                  # PVE user the token belongs to
+    proxmox_token_id: "ansible"               # token label (user@realm!token_id)
+    proxmox_api_token: "{{ vault_proxmox_api_token }}"  # token secret UUID
+    proxmox_node: "pve"                       # PVE node name
     proxmox_validate_certs: true
 
-    # Convenience: full Authorization header value used by all uri tasks
-    _pve_auth_header: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_api_token }}"
+    # Convenience — built once, reused in every uri task
+    _auth: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_api_token }}"
+    _base: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}"
 
     # ------------------------------------------------------------------
-    # EFI disk settings
+    # EFI disk
     # ------------------------------------------------------------------
     efi_storage: "linstor"
-    efi_type: "4m"
 
     # ------------------------------------------------------------------
-    # Tag assignments
+    # Tags (Proxmox uses semicolon as separator)
     # ------------------------------------------------------------------
     controlplane_tags: "k8s;controlplane"
     worker_tags: "k8s;worker"
@@ -67,15 +65,15 @@
 
   tasks:
 
-    # ------------------------------------------------------------------ #
-    #  STEP 0 — Discover VMID via Proxmox API                            #
-    # ------------------------------------------------------------------ #
-    - name: Get full VM list from Proxmox node via API
+    # ================================================================== #
+    #  STEP 0 — Discover VMID                                            #
+    # ================================================================== #
+    - name: Get full VM list from Proxmox node
       ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}/qemu"
+        url: "{{ _base }}/qemu"
         method: GET
         headers:
-          Authorization: "{{ _pve_auth_header }}"
+          Authorization: "{{ _auth }}"
         validate_certs: "{{ proxmox_validate_certs }}"
         return_content: true
       register: proxmox_vm_list
@@ -96,12 +94,12 @@
             | first
           }}
 
-    - name: Fail clearly if VM was not found in Proxmox
+    - name: Fail clearly if VM not found
       ansible.builtin.fail:
         msg: >
           Could not find a VM on node '{{ proxmox_node }}' whose name
-          contains '{{ short_hostname }}'. Check that proxmox_node is correct
-          and that the VM exists.
+          contains '{{ short_hostname }}'. Verify proxmox_node and that
+          the VM exists.
       when: vm_info is not defined or vm_info | length == 0
 
     - name: Set VMID and current name as facts
@@ -109,32 +107,36 @@
         vmid: "{{ vm_info.vmid }}"
         vm_current_name: "{{ vm_info.name }}"
 
-    - name: Display discovered VM details
+    - name: Display discovered VM
       ansible.builtin.debug:
-        msg: "Matched '{{ inventory_hostname }}' → VM '{{ vm_current_name }}' (VMID {{ vmid }})"
+        msg: "Matched '{{ inventory_hostname }}' → '{{ vm_current_name }}' (VMID {{ vmid }})"
 
-    # ------------------------------------------------------------------ #
-    #  STEP 1 — Graceful shutdown                                         #
-    # ------------------------------------------------------------------ #
-    - name: Shut down VM gracefully (ACPI)
-      community.general.proxmox_kvm:
-        api_host: "{{ proxmox_host }}"
-        api_user: "{{ proxmox_user }}"
-        api_password: "{{ proxmox_password }}"
+    # ================================================================== #
+    #  STEP 1 — Graceful shutdown                                        #
+    #  POST /nodes/{node}/qemu/{vmid}/status/shutdown                    #
+    #  forceStop=0 triggers ACPI shutdown; the VM shuts itself down.     #
+    # ================================================================== #
+    - name: Send ACPI shutdown signal
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu/{{ vmid }}/status/shutdown"
+        method: POST
+        headers:
+          Authorization: "{{ _auth }}"
+        body_format: form-urlencoded
+        body:
+          forceStop: 0
+          timeout: "{{ shutdown_timeout }}"
         validate_certs: "{{ proxmox_validate_certs }}"
-        node: "{{ proxmox_node }}"
-        vmid: "{{ vmid }}"
-        state: stopped
-        force: false
-        timeout: "{{ shutdown_timeout }}"
+        status_code: [200]
+      register: shutdown_task
       delegate_to: localhost
 
     - name: Wait for VM to reach stopped state
       ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ vmid }}/status/current"
+        url: "{{ _base }}/qemu/{{ vmid }}/status/current"
         method: GET
         headers:
-          Authorization: "{{ _pve_auth_header }}"
+          Authorization: "{{ _auth }}"
         validate_certs: "{{ proxmox_validate_certs }}"
         return_content: true
       register: vm_status
@@ -143,41 +145,53 @@
       delay: 5
       delegate_to: localhost
 
-    # ------------------------------------------------------------------ #
-    #  STEP 2 — Add EFI disk on linstor storage                          #
-    # ------------------------------------------------------------------ #
-    - name: Add EFI disk (4M, pre-enrolled secure boot keys) on linstor
-      community.general.proxmox_kvm:
-        api_host: "{{ proxmox_host }}"
-        api_user: "{{ proxmox_user }}"
-        api_password: "{{ proxmox_password }}"
-        validate_certs: "{{ proxmox_validate_certs }}"
-        node: "{{ proxmox_node }}"
-        vmid: "{{ vmid }}"
-        efidisk0:
-          storage: "{{ efi_storage }}"
-          efitype: "{{ efi_type }}"
-          pre_enrolled_keys: true
-        update: true
-      delegate_to: localhost
+    # ================================================================== #
+    #  STEP 2 — Add EFI disk on linstor                                  #
+    #  PUT /nodes/{node}/qemu/{vmid}/config                              #
+    #  efidisk0 format: <storage>:0,efitype=4m,pre-enrolled-keys=1      #
+    # ================================================================== #
+    - name: Check if efidisk0 already exists
+      ansible.builtin.set_fact:
+        efidisk_exists: "{{ 'efidisk0' in vm_info }}"
 
-    # ------------------------------------------------------------------ #
-    #  STEP 3 — Rename VM: remove .example.com                     #
-    # ------------------------------------------------------------------ #
+    - name: Add EFI disk (skip if already present)
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu/{{ vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _auth }}"
+        body_format: form-urlencoded
+        body:
+          efidisk0: "{{ efi_storage }}:0,efitype=4m,pre-enrolled-keys=1"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        status_code: [200]
+      delegate_to: localhost
+      when: not efidisk_exists
+
+    - name: Skip EFI disk notice (already present)
+      ansible.builtin.debug:
+        msg: "efidisk0 already exists on VMID {{ vmid }} — skipping."
+      when: efidisk_exists
+
+    # ================================================================== #
+    #  STEP 3 — Rename VM: strip .example.com                     #
+    #  POST /nodes/{node}/qemu/{vmid}/config — name is a config field   #
+    # ================================================================== #
     - name: Compute cleaned VM name
       ansible.builtin.set_fact:
         vm_new_name: "{{ vm_current_name | regex_replace('\\.garaventaville\\.com$', '') }}"
 
     - name: Rename VM (strip .example.com)
-      community.general.proxmox_kvm:
-        api_host: "{{ proxmox_host }}"
-        api_user: "{{ proxmox_user }}"
-        api_password: "{{ proxmox_password }}"
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu/{{ vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _auth }}"
+        body_format: form-urlencoded
+        body:
+          name: "{{ vm_new_name }}"
         validate_certs: "{{ proxmox_validate_certs }}"
-        node: "{{ proxmox_node }}"
-        vmid: "{{ vmid }}"
-        name: "{{ vm_new_name }}"
-        update: true
+        status_code: [200]
       delegate_to: localhost
       when: vm_new_name != vm_current_name
 
@@ -186,9 +200,11 @@
         msg: "VM name '{{ vm_current_name }}' has no .example.com suffix — skipping rename."
       when: vm_new_name == vm_current_name
 
-    # ------------------------------------------------------------------ #
-    #  STEP 4 — Apply tags based on Foreman inventory group membership    #
-    # ------------------------------------------------------------------ #
+    # ================================================================== #
+    #  STEP 4 — Apply tags                                               #
+    #  PUT /nodes/{node}/qemu/{vmid}/config                              #
+    #  tags field: semicolon-separated string                            #
+    # ================================================================== #
     - name: Resolve tags for control plane nodes
       ansible.builtin.set_fact:
         vm_tags: "{{ controlplane_tags }}"
@@ -200,42 +216,42 @@
       when: inventory_hostname in groups['foreman_almalinux10_kubernetesworkernode']
 
     - name: Apply tags to VM
-      community.general.proxmox_kvm:
-        api_host: "{{ proxmox_host }}"
-        api_user: "{{ proxmox_user }}"
-        api_password: "{{ proxmox_password }}"
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu/{{ vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _auth }}"
+        body_format: form-urlencoded
+        body:
+          tags: "{{ vm_tags }}"
         validate_certs: "{{ proxmox_validate_certs }}"
-        node: "{{ proxmox_node }}"
-        vmid: "{{ vmid }}"
-        tags: "{{ vm_tags }}"
-        update: true
+        status_code: [200]
       delegate_to: localhost
 
     - name: Display applied tags
       ansible.builtin.debug:
-        msg: "Applied tags '{{ vm_tags }}' to VM '{{ vm_new_name }}' (VMID {{ vmid }})"
+        msg: "Applied tags '{{ vm_tags }}' to '{{ vm_new_name }}' (VMID {{ vmid }})"
 
-    # ------------------------------------------------------------------ #
-    #  STEP 5 — Power VM back on                                          #
-    # ------------------------------------------------------------------ #
+    # ================================================================== #
+    #  STEP 5 — Power on                                                 #
+    #  POST /nodes/{node}/qemu/{vmid}/status/start                       #
+    # ================================================================== #
     - name: Start VM
-      community.general.proxmox_kvm:
-        api_host: "{{ proxmox_host }}"
-        api_user: "{{ proxmox_user }}"
-        api_password: "{{ proxmox_password }}"
+      ansible.builtin.uri:
+        url: "{{ _base }}/qemu/{{ vmid }}/status/start"
+        method: POST
+        headers:
+          Authorization: "{{ _auth }}"
         validate_certs: "{{ proxmox_validate_certs }}"
-        node: "{{ proxmox_node }}"
-        vmid: "{{ vmid }}"
-        state: started
-        timeout: "{{ startup_timeout }}"
+        status_code: [200]
       delegate_to: localhost
 
     - name: Wait for VM to reach running state
       ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ vmid }}/status/current"
+        url: "{{ _base }}/qemu/{{ vmid }}/status/current"
         method: GET
         headers:
-          Authorization: "{{ _pve_auth_header }}"
+          Authorization: "{{ _auth }}"
         validate_certs: "{{ proxmox_validate_certs }}"
         return_content: true
       register: vm_started
@@ -244,8 +260,11 @@
       delay: 5
       delegate_to: localhost
 
+    # ================================================================== #
+    #  Summary                                                           #
+    # ================================================================== #
     - name: Summary
       ansible.builtin.debug:
         msg: >
           ✓ VMID {{ vmid }} | Name: {{ vm_new_name }} | Tags: {{ vm_tags }}
-          | EFI disk added on {{ efi_storage }} | Status: running
+          | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Status: running
