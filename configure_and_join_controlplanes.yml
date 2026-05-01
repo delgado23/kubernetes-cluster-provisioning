@@ -54,7 +54,7 @@
     - name: Extract control plane endpoint from kubeadm config
       ansible.builtin.command:
         cmd: >
-          awk '/k8s_api_endpoint:/ {print $2}' /tmp/kubeadm-config.yml
+          awk '/controlPlaneEndpoint:/ {print $2}' /tmp/kubeadm-config.yml
       register: endpoint_output
       changed_when: false
 
