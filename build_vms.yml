@@ -15,7 +15,7 @@
 #   7. Registers all VMs into an in-memory group via add_host so Play 2
 #      can target them regardless of dynamic inventory timing.
 #
-# Play 2 — runs against the in-memory 'k8s_nodes' group built in Play 1
+# Play 2 - runs against the in-memory 'k8s_nodes' group built in Play 1
 #   Ansible loads inventory once at startup; hosts created during Play 1
 #   do not appear in Foreman dynamic inventory groups until the next run.
 #   add_host sidesteps this by injecting hosts into the live inventory.
@@ -27,10 +27,10 @@
 #   6. Powers the VM back on and waits until it reports running
 #
 # Requirements
-#   vars/vault.yml          — vault_proxmox_api_token (and any other secrets)
-#   vars/foreman.yml        — Foreman connection settings
-#   vars/vm_defaults.yml    — default VM hardware specs
-#   vars/vms.yml            — node definitions (names and hostgroups)
+#   vars/vault.yml          - vault_proxmox_api_token (and any other secrets)
+#   vars/foreman.yml        - Foreman connection settings
+#   vars/vm_defaults.yml    - default VM hardware specs
+#   vars/vms.yml            - node definitions (names and hostgroups)
 #                             Each entry must include a 'hostgroup' field
 #                             matching one of the two AlmaLinux 10 groups:
 #                               AlmaLinux 10/Kubernetes Controlplane Node
@@ -39,7 +39,7 @@
 # Proxmox API token setup (one-time):
 #   Datacenter → Permissions → API Tokens → Add
 #   User: root@pam  Token ID: ansible  Privilege Separation: No
-#   Copy the displayed secret — it is shown only once.
+#   Copy the displayed secret - it is shown only once.
 # =============================================================================
 
 
