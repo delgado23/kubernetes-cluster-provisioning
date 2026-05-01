@@ -3,14 +3,14 @@
 # Kubernetes node definitions.
 #
 # Top-level cluster vars (shared across all nodes):
-#   cluster_name                   – kubeadm cluster name
-#   k8s_api_endpoint               – control plane VIP FQDN
-#   k8s_api_endpoint_ip            – control plane VIP IP
-#   metallb_pool                   – MetalLB address range
+#   cluster_name                    kubeadm cluster name
+#   k8s_api_endpoint               control plane VIP FQDN
+#   k8s_api_endpoint_ip            control plane VIP IP
+#   metallb_pool                   MetalLB address range
 #
 # Per-VM keys:
-#   name        (required) – short hostname, no domain suffix
-#   hostgroup   (required) – Foreman hostgroup string
+#   name        (required) short hostname, no domain suffix
+#   hostgroup   (required) Foreman hostgroup string
 #   host_parameters (optional) – list of {name, value} Foreman params
 #
 # Hostgroup anchors (edit here to rename for all nodes):
