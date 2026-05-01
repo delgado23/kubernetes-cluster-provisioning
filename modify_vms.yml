@@ -35,7 +35,7 @@
     # ------------------------------------------------------------------
     # Proxmox connection — set in AWX extra vars or vault
     # ------------------------------------------------------------------
-    proxmox_host: "pve-01.example.com"       # PVE FQDN or IP
+    proxmox_host: "pve-01.example.com:8006"       # PVE FQDN or IP
     proxmox_user: "danielgaraventa@authentik"                  # PVE user the token belongs to
     proxmox_token_id: "foreman"               # token label (user@realm!token_id)
     proxmox_api_token: "356e2c28-7302-438e-8aa1-5731ba610058"  # token secret UUID
