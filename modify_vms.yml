@@ -18,12 +18,12 @@
 #   foreman_almalinux10_kubernetesworkernode
 #
 # AWX credentials / vault secrets required:
-#   vault_proxmox_api_token  – the API token secret UUID
+#   vault_proxmox_api_token   the API token secret UUID
 #
 # Create the token in PVE:
 #   Datacenter → Permissions → API Tokens → Add
 #   User: root@pam  Token ID: ansible  Privilege Separation: No
-#   Copy the displayed secret — it is shown only once.
+#   Copy the displayed secret it is shown only once.
 # =============================================================================
 
 - name: Configure Proxmox K8s VMs
