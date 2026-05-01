@@ -14,7 +14,7 @@ nodeRegistration:
 apiVersion: kubeadm.k8s.io/v1beta3
 kind: ClusterConfiguration
 clusterName: "{{ foreman_params.cluster_name }}"
-controlPlaneEndpoint: "{{ foreman_params.kubeadm_controlplaneendpoint }}:6443"
+controlPlaneEndpoint: "{{ foreman_params.k8s_api_endpoint_ip }}:6443"
 networking:
   podSubnet: "{{ foreman_params.k8s_pod_cidr }}"
   serviceSubnet: "{{ foreman_params.k8s_service_cidr }}"
@@ -24,8 +24,8 @@ apiServer:
     - "{{ hostvars[host]['ansible_fqdn'] }}"
     - "{{ hostvars[host]['ansible_default_ipv4']['address'] }}"
 {% endfor %}
-    - "{{ foreman_params.kubeadm_controlplaneendpoint }}"
-    - "{{ foreman_params.kubeadm_controlplaneendpoint_ip }}"
+    - "{{ foreman_params.k8s_api_endpoint }}"
+    - "{{ foreman_params.k8s_api_endpoint_ip }}"
     - "127.0.0.1"
     - "localhost"
 ---
