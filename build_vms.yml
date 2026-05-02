@@ -36,12 +36,15 @@
 #                               AlmaLinux 10/Kubernetes Controlplane Node
 #                               AlmaLinux 10/Kubernetes Worker Node
 #
+# Compute profile IDs (defined in vars/foreman.yml):
+#   foreman_compute_profile_controlplane: 8   # Kubernetes Controlplane Node
+#   foreman_compute_profile_worker: 6         # Kubernetes Worker Node
+#
 # Proxmox API token setup (one-time):
 #   Datacenter → Permissions → API Tokens → Add
 #   User: root@pam  Token ID: ansible  Privilege Separation: No
 #   Copy the displayed secret - it is shown only once.
 # =============================================================================
-
 
 # ---------------------------------------------------------------------------
 # PLAY 1 — Provision hosts in Foreman / Proxmox
@@ -50,26 +53,23 @@
   hosts: localhost
   connection: local
   gather_facts: false
-
   vars_files:
     - vars/vault.yml
     - vars/foreman.yml      # foreman_url, foreman_user, foreman_password,
                             # foreman_validate_certs, foreman_domain,
                             # foreman_compute_resource_id,
-                            # foreman_compute_profile_id
+                            # foreman_compute_profile_controlplane,
+                            # foreman_compute_profile_worker
     #- vars/vm_defaults.yml  # default VM hardware specs
     - vars/vms.yml          # vms list — each entry: name, hostgroup,
                             # optionally host_parameters[]
-
   vars:
     # How long to poll for the Foreman build flag to clear.
     # Override on the CLI: -e wait_for_build=true
     wait_for_build: true          # must be true for Play 2 to be safe
     build_wait_retries: 60        # 60 x 30 s = 30 min maximum wait
     build_wait_delay_seconds: 30
-
   tasks:
-
     # ------------------------------------------------------------------
     # 1. Validate required variables are present for each VM
     # ------------------------------------------------------------------
@@ -89,7 +89,8 @@
     # ------------------------------------------------------------------
     - name: Look up Foreman hostgroup IDs
       ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hostgroups?search=title+%3D+%22{{ item | urlencode }}%22&per_page=1"
+        url: "{{ foreman_url }}/api/hostgroups?search=title+%3D+%22{{ item |
+urlencode }}%22&per_page=1"
         method: GET
         user: "{{ foreman_user }}"
         password: "{{ foreman_password }}"
@@ -179,6 +180,9 @@
 
     # ------------------------------------------------------------------
     # 4. Create hosts in Foreman / Proxmox (skips hosts that exist)
+    #    compute_profile_id is resolved per role:
+    #      'Controlplane' in hostgroup → profile 8 (Kubernetes Controlplane Node)
+    #      otherwise                   → profile 6 (Kubernetes Worker Node)
     # ------------------------------------------------------------------
     - name: Create VM in Foreman / Proxmox
       ansible.builtin.uri:
@@ -200,7 +204,10 @@
             location_id: "{{ hostgroup_id_map[item.0.hostgroup].location_id }}"
             organization_id: "{{ hostgroup_id_map[item.0.hostgroup].organization_id }}"
             compute_resource_id: "{{ foreman_compute_resource_id }}"
-            compute_profile_id: "{{ foreman_compute_profile_id }}"
+            compute_profile_id: >-
+              {{ foreman_compute_profile_controlplane
+                 if 'Controlplane' in item.0.hostgroup
+                 else foreman_compute_profile_worker }}
             build: true
             managed: true
       loop: "{{ vms | zip(existing_hosts.results) | list }}"
@@ -251,6 +258,7 @@
         msg: >-
           CREATED — {{ item.item.0.name }}
           (Group: {{ item.item.0.hostgroup }})
+          (Compute profile: {{ 'Controlplane (id=8)' if 'Controlplane' in item.item.0.hostgroup else 'Worker (id=6)' }})
           Foreman ID: {{ item.json.id | default('unknown') }}
       loop: "{{ created_hosts.results }}"
       loop_control:
@@ -335,7 +343,6 @@
         - wait_for_build | default(true)
         - created_hosts is defined
 
-
 # ---------------------------------------------------------------------------
 # PLAY 2 — Configure Proxmox VMs after OS build completes
 # ---------------------------------------------------------------------------
@@ -343,10 +350,8 @@
   hosts: k8s_nodes    # populated by add_host in Play 1
   gather_facts: false
   serial: 1     # one VM at a time — safe for linstor disk allocation
-
   vars_files:
     - vars/vault.yml    # vault_proxmox_api_token
-
   vars:
     # ------------------------------------------------------------------
     # Proxmox connection
@@ -357,30 +362,24 @@
     proxmox_api_token: "{{ vault_proxmox_api_token }}"
     proxmox_node: "pve-01"
     proxmox_validate_certs: true
-
     # Convenience — built once, reused in every uri task
     _auth: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_api_token }}"
     _base: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}"
-
     # ------------------------------------------------------------------
     # EFI disk
     # ------------------------------------------------------------------
     efi_storage: "linstor"
-
     # ------------------------------------------------------------------
     # Tags (Proxmox uses semicolon as separator)
     # ------------------------------------------------------------------
     controlplane_tags: "k8s;controlplane"
     worker_tags: "k8s;worker"
-
     # ------------------------------------------------------------------
     # Timeouts (seconds)
     # ------------------------------------------------------------------
     shutdown_timeout: 120
     startup_timeout: 120
-
   tasks:
-
     # ================================================================== #
     #  STEP 0 — Discover VMID                                            #
     # ================================================================== #
@@ -586,3 +585,4 @@
         msg: >
           ✓ VMID {{ vmid }} | Name: {{ vm_new_name }} | Tags: {{ vm_tags }}
           | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Status: running
+
