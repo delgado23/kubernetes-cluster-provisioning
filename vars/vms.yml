@@ -40,31 +40,31 @@ vms:
       - { name: k8s_api_endpoint_ip, value: 172.16.0.29                }
       - { name: metallb_pool,        value: 172.16.0.50-172.16.0.60    }
 
-  - name: kel-thuzad
-    hostgroup: *cp
-    host_parameters:
-      - { name: k8s_role,            value: secondary }
-      - { name: keepalived_state,    value: BACKUP    }
-      - { name: keepalived_priority, value: 100       }
+#  - name: kel-thuzad
+#    hostgroup: *cp
+#    host_parameters:
+#      - { name: k8s_role,            value: secondary }
+#      - { name: keepalived_state,    value: BACKUP    }
+#      - { name: keepalived_priority, value: 100       }
 
-  - name: sapphiron
-    hostgroup: *cp
-    host_parameters:
-      - { name: k8s_role,            value: secondary }
-      - { name: keepalived_state,    value: BACKUP    }
-      - { name: keepalived_priority, value: 99        }
+#  - name: sapphiron
+#    hostgroup: *cp
+#    host_parameters:
+#      - { name: k8s_role,            value: secondary }
+#      - { name: keepalived_state,    value: BACKUP    }
+#      - { name: keepalived_priority, value: 99        }
 
   # --- Worker nodes ---
   - { name: noth,          hostgroup: *wk }
   - { name: heigan,        hostgroup: *wk }
   - { name: loatheb,       hostgroup: *wk }
-  - { name: patchwerk,     hostgroup: *wk }
-  - { name: grobbulus,     hostgroup: *wk }
-  - { name: gluth,         hostgroup: *wk }
-  - { name: thaddius,      hostgroup: *wk }
-  - { name: razuvious,     hostgroup: *wk }
-  - { name: gothik,        hostgroup: *wk }
-  - { name: four-horsemen, hostgroup: *wk }
-  - { name: anub-rekhan,   hostgroup: *wk }
-  - { name: faerlina,      hostgroup: *wk }
-  - { name: maexxna,       hostgroup: *wk }
+#  - { name: patchwerk,     hostgroup: *wk }
+#  - { name: grobbulus,     hostgroup: *wk }
+#  - { name: gluth,         hostgroup: *wk }
+#  - { name: thaddius,      hostgroup: *wk }
+#  - { name: razuvious,     hostgroup: *wk }
+#  - { name: gothik,        hostgroup: *wk }
+#  - { name: four-horsemen, hostgroup: *wk }
+#  - { name: anub-rekhan,   hostgroup: *wk }
+#  - { name: faerlina,      hostgroup: *wk }
+#  - { name: maexxna,       hostgroup: *wk }
