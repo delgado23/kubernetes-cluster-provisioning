@@ -313,9 +313,11 @@
     # suffixes (G vs T). The debug task prints the size in GiB for confirmation.
     # This is idempotent: if the VG already exists all LVM tasks are skipped.
     # -------------------------------------------------------------------------
-    - name: Install LVM2
+    - name: Install LVM2 and gdisk
       dnf:
-        name: lvm2
+        name:
+          - lvm2
+          - gdisk
         state: present
 
     - name: Gather block device info with sizes in bytes (lsblk JSON)
@@ -380,6 +382,43 @@
       register: vg_check
       changed_when: false
       failed_when: false
+
+    # -------------------------------------------------------------------------
+    # Wipe the disk before LVM setup — only runs if the VG does not yet exist,
+    # so re-runs against already-configured nodes are safe.
+    # Order matters:
+    #   1. Deactivate and remove any existing VG/PV signatures on the disk
+    #      so LVM does not refuse to overwrite them.
+    #   2. wipefs clears all filesystem and partition-table signatures.
+    #   3. sgdisk --zap-all destroys the GPT and MBR partition tables.
+    #   4. A final blkdiscard (UNMAP/TRIM) tells the storage backend the
+    #      blocks are free; falls back gracefully on non-SSD/non-thin volumes.
+    # -------------------------------------------------------------------------
+    - name: Deactivate any existing volume group on the disk
+      command: vgchange -an "{{ longhorn_disk }}"
+      when: vg_check.rc != 0
+      failed_when: false
+      changed_when: false
+
+    - name: Remove any existing LVM PV signatures from the disk
+      command: pvremove --force --force -y "{{ longhorn_disk }}"
+      when: vg_check.rc != 0
+      failed_when: false
+      changed_when: false
+
+    - name: Wipe all filesystem and partition signatures
+      command: wipefs --all --force "{{ longhorn_disk }}"
+      when: vg_check.rc != 0
+
+    - name: Destroy existing partition tables (GPT and MBR)
+      command: sgdisk --zap-all "{{ longhorn_disk }}"
+      when: vg_check.rc != 0
+
+    - name: Discard all blocks on disk (TRIM/UNMAP — best-effort)
+      command: blkdiscard "{{ longhorn_disk }}"
+      when: vg_check.rc != 0
+      failed_when: false
+      changed_when: false
 
     - name: Create LVM physical volume on longhorn disk
       command: pvcreate "{{ longhorn_disk }}"
