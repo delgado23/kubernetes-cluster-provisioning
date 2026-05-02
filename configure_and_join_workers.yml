@@ -353,9 +353,21 @@
     #   --dns01-recursive-nameservers  uses Google (8.8.8.8) and Cloudflare
     #                                  (1.1.1.1) public resolvers
     # -------------------------------------------------------------------------
+    - name: Check if Helm is installed
+      ansible.builtin.command: which helm
+      changed_when: false
+      register: helm_check
+      failed_when: false
+
+    - name: Install Helm if missing
+      ansible.builtin.shell:
+        cmd: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      when: helm_check.rc != 0
+      changed_when: true
+
     - name: Add cert-manager Helm repo
       ansible.builtin.command:
-        cmd: helm repo add jetstack https://charts.jetstack.io
+        cmd: /usr/local/bin/helm repo add jetstack https://charts.jetstack.io
       environment:
         KUBECONFIG: /root/.kube/config
       changed_when: false
@@ -363,7 +375,7 @@
 
     - name: Update Helm repos
       ansible.builtin.command:
-        cmd: helm repo update
+        cmd: /usr/local/bin/helm repo update
       environment:
         KUBECONFIG: /root/.kube/config
       changed_when: false
@@ -384,7 +396,7 @@
     - name: Install or upgrade cert-manager via Helm
       ansible.builtin.command:
         cmd: >
-          helm upgrade --install cert-manager jetstack/cert-manager
+          /usr/local/bin/helm upgrade --install cert-manager jetstack/cert-manager
           --namespace {{ cert_manager_namespace }}
           --version {{ cert_manager_version }}
           --set crds.enabled=true
@@ -610,9 +622,21 @@
         state: present
       when: jq_check.rc != 0
 
+    - name: Ensure helm is installed
+      ansible.builtin.command: which helm
+      changed_when: false
+      register: helm_check
+      failed_when: false
+
+    - name: Install Helm if missing
+      ansible.builtin.shell:
+        cmd: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      when: helm_check.rc != 0
+      changed_when: true
+
     - name: Add Traefik Helm repo
       ansible.builtin.command:
-        cmd: helm repo add traefik https://traefik.github.io/charts
+        cmd: /usr/local/bin/helm repo add traefik https://traefik.github.io/charts
       environment:
         KUBECONFIG: /root/.kube/config
       changed_when: false
@@ -620,7 +644,7 @@
 
     - name: Update Helm repos
       ansible.builtin.command:
-        cmd: helm repo update
+        cmd: /usr/local/bin/helm repo update
       environment:
         KUBECONFIG: /root/.kube/config
       changed_when: false
@@ -718,7 +742,7 @@
     - name: Install or upgrade Traefik via Helm
       ansible.builtin.command:
         cmd: >
-          helm upgrade --install traefik traefik/traefik
+          /usr/local/bin/helm upgrade --install traefik traefik/traefik
           --namespace {{ traefik_namespace }}
           --version {{ traefik_chart_version }}
           --values /tmp/traefik-values.yml
