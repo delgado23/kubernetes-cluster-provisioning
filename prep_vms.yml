@@ -305,13 +305,12 @@
       changed_when: false
 
     # -------------------------------------------------------------------------
-    # Longhorn disk — LVM setup on the second disk
+    # Longhorn disk — LVM setup on the largest non-root disk
     #
-    # Strategy: discover the second disk by listing block devices that are:
-    #   - type 'disk' (not partition, lvm, rom, etc.)
-    #   - not the root disk (i.e. not the disk that contains '/')
-    # The root disk is identified by tracing / back to its parent disk via
-    # lsblk. The remaining disk(s) are sorted; the first one is used.
+    # Strategy: run lsblk with -b (raw bytes) so sizes are directly comparable
+    # as integers. Exclude the root disk, then sort by size and take the last
+    # (largest) entry. Using bytes avoids any ambiguity from human-readable
+    # suffixes (G vs T). The debug task prints the size in GiB for confirmation.
     # This is idempotent: if the VG already exists all LVM tasks are skipped.
     # -------------------------------------------------------------------------
     - name: Install LVM2
@@ -319,8 +318,8 @@
         name: lvm2
         state: present
 
-    - name: Gather block device info (lsblk JSON)
-      command: lsblk -J -o NAME,TYPE,MOUNTPOINT
+    - name: Gather block device info with sizes in bytes (lsblk JSON)
+      command: lsblk -J -b -o NAME,TYPE,SIZE,MOUNTPOINT
       register: lsblk_output
       changed_when: false
 
@@ -329,8 +328,8 @@
         lsblk_data: "{{ lsblk_output.stdout | from_json }}"
 
     - name: Identify root disk name
-      # Walk every top-level disk; if any of its descendants has MOUNTPOINT '/'
-      # that disk is the root disk. Capture just the name (e.g. 'sda').
+      # Walk every top-level disk and check if any child (partition) or
+      # grandchild (e.g. LVM LV on a partition) has mountpoint '/'.
       set_fact:
         root_disk_name: >-
           {{
@@ -343,33 +342,38 @@
             | first
           }}
 
-    - name: Build list of non-root disks
+    - name: Build list of non-root disks with their byte sizes
       set_fact:
         data_disks: >-
           {{
             lsblk_data.blockdevices
             | selectattr('type', 'equalto', 'disk')
             | rejectattr('name', 'equalto', root_disk_name)
-            | map(attribute='name')
-            | sort
             | list
           }}
 
-    - name: Fail if no second disk is found
+    - name: Fail if no non-root disk is found
       ansible.builtin.fail:
         msg: >-
-          No second disk found on {{ inventory_hostname }}.
-          Only disk detected (root): /dev/{{ root_disk_name }}.
-          Attach a second disk before running this playbook.
+          No non-root disk found on {{ inventory_hostname }}.
+          Root disk: /dev/{{ root_disk_name }}.
+          Attach a data disk before running this playbook.
       when: data_disks | length == 0
 
-    - name: Set longhorn disk device fact
+    - name: Select the largest non-root disk
+      # Sort by the 'size' field (raw bytes integer) and take the last element.
       set_fact:
-        longhorn_disk: "/dev/{{ data_disks | first }}"
+        longhorn_disk_entry: "{{ data_disks | sort(attribute='size') | last }}"
+
+    - name: Set longhorn disk device path
+      set_fact:
+        longhorn_disk: "/dev/{{ longhorn_disk_entry.name }}"
 
     - name: Display disk selected for Longhorn
       ansible.builtin.debug:
-        msg: "Using {{ longhorn_disk }} for Longhorn LVM on {{ inventory_hostname }}"
+        msg: >-
+          Using {{ longhorn_disk }} for Longhorn LVM on {{ inventory_hostname }}
+          ({{ (longhorn_disk_entry.size | int / 1073741824) | round(1) }} GiB)
 
     - name: Check if volume group 'longhorn' already exists
       command: vgs longhorn
