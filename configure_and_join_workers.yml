@@ -343,13 +343,54 @@
 
   tasks:
     # -------------------------------------------------------------------------
-    # Install cert-manager CRDs and controller via upstream manifest
+    # Install cert-manager via Helm
+    #   --set crds.enabled=true        installs CRDs as part of the release
+    #                                  so they are upgraded/removed with the chart
+    #   --dns01-recursive-nameservers-only  forces cert-manager to use only the
+    #                                  specified resolvers for DNS-01 checks,
+    #                                  bypassing split-horizon/internal DNS that
+    #                                  might not see the public TXT record yet
+    #   --dns01-recursive-nameservers  uses Google (8.8.8.8) and Cloudflare
+    #                                  (1.1.1.1) public resolvers
     # -------------------------------------------------------------------------
-    - name: Apply cert-manager manifest
+    - name: Add cert-manager Helm repo
+      ansible.builtin.command:
+        cmd: helm repo add jetstack https://charts.jetstack.io
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+      failed_when: false
+
+    - name: Update Helm repos
+      ansible.builtin.command:
+        cmd: helm repo update
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+    - name: Create cert-manager namespace
+      ansible.builtin.command:
+        cmd: kubectl create namespace {{ cert_manager_namespace }} --dry-run=client -o yaml
+      register: certmgr_ns_yaml
+      changed_when: false
+
+    - name: Apply cert-manager namespace
+      ansible.builtin.shell:
+        cmd: "echo '{{ certmgr_ns_yaml.stdout }}' | kubectl apply -f -"
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: true
+
+    - name: Install or upgrade cert-manager via Helm
       ansible.builtin.command:
         cmd: >
-          kubectl apply -f
-          https://github.com/cert-manager/cert-manager/releases/download/{{ cert_manager_version }}/cert-manager.yaml
+          helm upgrade --install cert-manager jetstack/cert-manager
+          --namespace {{ cert_manager_namespace }}
+          --version {{ cert_manager_version }}
+          --set crds.enabled=true
+          --set extraArgs={--dns01-recursive-nameservers-only\,--dns01-recursive-nameservers=8.8.8.8:53\,1.1.1.1:53}
+          --wait
+          --timeout 5m
       environment:
         KUBECONFIG: /root/.kube/config
       register: certmgr_output
