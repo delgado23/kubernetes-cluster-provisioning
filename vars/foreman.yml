@@ -23,6 +23,8 @@ foreman_compute_resource_id: 1
 # Compute profile (maps to a Proxmox VM sizing template)
 # Find with: curl -sk -u admin:pass https://foreman.garaventaville.com/api/compute_profiles | python3 -m json.tool
 #foreman_compute_profile_id: 6
+foreman_compute_profile_controlplane: 8   # Kubernetes Controlplane Node
+foreman_compute_profile_worker: 6         # Kubernetes Worker Node
 
 # Proxmox storage pool for VM disks
 proxmox_storage: "linstor"
