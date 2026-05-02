@@ -340,6 +340,8 @@
     cloudflare_email: "daniel@garaventaville.com"   # update if different
     domain: "garaventaville.com"
     wildcard_secret_name: "garaventaville-wildcard-tls"
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
   tasks:
     # -------------------------------------------------------------------------
