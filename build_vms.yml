@@ -57,7 +57,7 @@
                             # foreman_validate_certs, foreman_domain,
                             # foreman_compute_resource_id,
                             # foreman_compute_profile_id
-    - vars/vm_defaults.yml  # default VM hardware specs
+    #- vars/vm_defaults.yml  # default VM hardware specs
     - vars/vms.yml          # vms list — each entry: name, hostgroup,
                             # optionally host_parameters[]
 
