@@ -312,3 +312,579 @@
       ansible.builtin.file:
         path: /tmp/metallb-pool.yml
         state: absent
+
+# =============================================================================
+# PLAY 8: Install cert-manager with Cloudflare DNS-01 challenge
+# =============================================================================
+# Prerequisites in vars/vault.yml:
+#   vault_cloudflare_api_token: "<your Cloudflare API token>"
+#     Required token permissions:
+#       Zone / Zone / Read
+#       Zone / DNS  / Edit
+#     Scope: the example.com zone only.
+#
+# The wildcard certificate *.example.com is requested once and stored
+# as a Kubernetes TLS secret 'example-com-wildcard-tls' in the
+# 'cert-manager' namespace. Traefik and Longhorn ingresses reference it.
+# =============================================================================
+- name: Install cert-manager with Cloudflare DNS-01 challenge
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/vault.yml   # vault_cloudflare_api_token
+
+  vars:
+    cert_manager_version: "v1.16.3"
+    cert_manager_namespace: cert-manager
+    cloudflare_email: "daniel@example.com"   # update if different
+    domain: "example.com"
+    wildcard_secret_name: "example-com-wildcard-tls"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # Install cert-manager CRDs and controller via upstream manifest
+    # -------------------------------------------------------------------------
+    - name: Apply cert-manager manifest
+      ansible.builtin.command:
+        cmd: >
+          kubectl apply -f
+          https://github.com/cert-manager/cert-manager/releases/download/{{ cert_manager_version }}/cert-manager.yaml
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: certmgr_output
+      changed_when: true
+
+    - name: Print cert-manager install output
+      ansible.builtin.debug:
+        var: certmgr_output.stdout_lines
+
+    - name: Wait for cert-manager webhook to be ready
+      ansible.builtin.command:
+        cmd: >
+          kubectl wait --for=condition=Available deployment/cert-manager-webhook
+          --namespace {{ cert_manager_namespace }}
+          --timeout=120s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+    - name: Wait for cert-manager controller to be ready
+      ansible.builtin.command:
+        cmd: >
+          kubectl wait --for=condition=Available deployment/cert-manager
+          --namespace {{ cert_manager_namespace }}
+          --timeout=120s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+    # -------------------------------------------------------------------------
+    # Cloudflare API token secret
+    # -------------------------------------------------------------------------
+    - name: Create Cloudflare API token secret
+      ansible.builtin.command:
+        cmd: >
+          kubectl create secret generic cloudflare-api-token
+          --namespace {{ cert_manager_namespace }}
+          --from-literal=api-token={{ vault_cloudflare_api_token }}
+          --dry-run=client -o yaml
+      register: cf_secret_yaml
+      changed_when: false
+      no_log: true
+
+    - name: Apply Cloudflare API token secret
+      ansible.builtin.shell:
+        cmd: "echo '{{ cf_secret_yaml.stdout }}' | kubectl apply -f -"
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: true
+      no_log: true
+
+    # -------------------------------------------------------------------------
+    # ClusterIssuer — Let's Encrypt production with Cloudflare DNS-01
+    # -------------------------------------------------------------------------
+    - name: Write ClusterIssuer manifest
+      ansible.builtin.copy:
+        dest: /tmp/clusterissuer-cloudflare.yml
+        mode: "0600"
+        content: |
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: letsencrypt-cloudflare
+          spec:
+            acme:
+              server: https://acme-v02.api.letsencrypt.org/directory
+              email: {{ cloudflare_email }}
+              privateKeySecretRef:
+                name: letsencrypt-cloudflare-account-key
+              solvers:
+                - dns01:
+                    cloudflare:
+                      email: {{ cloudflare_email }}
+                      apiTokenSecretRef:
+                        name: cloudflare-api-token
+                        key: api-token
+                  selector:
+                    dnsZones:
+                      - "{{ domain }}"
+
+    - name: Apply ClusterIssuer
+      ansible.builtin.command:
+        cmd: kubectl apply -f /tmp/clusterissuer-cloudflare.yml
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: issuer_output
+      changed_when: true
+
+    - name: Print ClusterIssuer apply output
+      ansible.builtin.debug:
+        var: issuer_output.stdout_lines
+
+    - name: Remove ClusterIssuer manifest
+      ansible.builtin.file:
+        path: /tmp/clusterissuer-cloudflare.yml
+        state: absent
+
+    # -------------------------------------------------------------------------
+    # Wildcard Certificate — *.example.com
+    # Stored in cert-manager namespace; Traefik and Longhorn ingresses
+    # reference it via a cross-namespace secret copy or directly.
+    # -------------------------------------------------------------------------
+    - name: Write wildcard Certificate manifest
+      ansible.builtin.copy:
+        dest: /tmp/wildcard-cert.yml
+        mode: "0600"
+        content: |
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: garaventaville-wildcard
+            namespace: {{ cert_manager_namespace }}
+          spec:
+            secretName: {{ wildcard_secret_name }}
+            issuerRef:
+              name: letsencrypt-cloudflare
+              kind: ClusterIssuer
+            commonName: "*.{{ domain }}"
+            dnsNames:
+              - "*.{{ domain }}"
+              - "{{ domain }}"
+
+    - name: Apply wildcard Certificate
+      ansible.builtin.command:
+        cmd: kubectl apply -f /tmp/wildcard-cert.yml
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: cert_output
+      changed_when: true
+
+    - name: Print Certificate apply output
+      ansible.builtin.debug:
+        var: cert_output.stdout_lines
+
+    - name: Remove wildcard Certificate manifest
+      ansible.builtin.file:
+        path: /tmp/wildcard-cert.yml
+        state: absent
+
+    - name: Wait for wildcard certificate to be issued (up to 10 min)
+      ansible.builtin.command:
+        cmd: >
+          kubectl wait --for=condition=Ready certificate/garaventaville-wildcard
+          --namespace {{ cert_manager_namespace }}
+          --timeout=600s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+    # -------------------------------------------------------------------------
+    # Copy wildcard TLS secret into the traefik and longhorn namespaces
+    # so ingress resources in those namespaces can reference it directly.
+    # kubectl create secret is used with --dry-run to make this idempotent.
+    # -------------------------------------------------------------------------
+    - name: Copy wildcard secret into traefik namespace
+      ansible.builtin.shell:
+        cmd: |
+          kubectl get secret {{ wildcard_secret_name }} \
+            --namespace {{ cert_manager_namespace }} \
+            -o json \
+          | jq 'del(.metadata.namespace, .metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.annotations, .metadata.managedFields) | .metadata.namespace = "traefik"' \
+          | kubectl apply -f -
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: true
+
+    - name: Copy wildcard secret into longhorn-system namespace
+      ansible.builtin.shell:
+        cmd: |
+          kubectl get secret {{ wildcard_secret_name }} \
+            --namespace {{ cert_manager_namespace }} \
+            -o json \
+          | jq 'del(.metadata.namespace, .metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.annotations, .metadata.managedFields) | .metadata.namespace = "longhorn-system"' \
+          | kubectl apply -f -
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: true
+
+# =============================================================================
+# PLAY 9: Install Traefik ingress controller via Helm and expose its dashboard
+# =============================================================================
+# Traefik is installed into the 'traefik' namespace via the official Helm chart.
+# It is configured to:
+#   - Use MetalLB for its LoadBalancer service (gets a real LAN IP)
+#   - Expose the dashboard at https://traefik.example.com
+#   - Use the wildcard TLS secret copied in Play 8
+#   - Protect the dashboard with basic auth (set vault_traefik_dashboard_password
+#     in vars/vault.yml — stored as a htpasswd bcrypt hash)
+#
+# Additional vars/vault.yml keys needed:
+#   vault_traefik_dashboard_password: "<bcrypt htpasswd string>"
+#     Generate with: htpasswd -nbB admin 'yourpassword'
+# =============================================================================
+- name: Install Traefik ingress controller
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/vault.yml
+
+  vars:
+    traefik_namespace: traefik
+    traefik_chart_version: "33.2.1"   # pin — check https://artifacthub.io/packages/helm/traefik/traefik
+    wildcard_secret_name: "example-com-wildcard-tls"
+    domain: "example.com"
+
+  tasks:
+    - name: Ensure jq is installed (needed for secret copy in Play 8)
+      ansible.builtin.command: which jq
+      changed_when: false
+      failed_when: false
+      register: jq_check
+
+    - name: Install jq if missing
+      ansible.builtin.dnf:
+        name: jq
+        state: present
+      when: jq_check.rc != 0
+
+    - name: Ensure helm is installed
+      ansible.builtin.command: which helm
+      changed_when: false
+      register: helm_check
+      failed_when: false
+
+    - name: Install Helm if missing
+      ansible.builtin.shell:
+        cmd: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      when: helm_check.rc != 0
+      changed_when: true
+
+    - name: Add Traefik Helm repo
+      ansible.builtin.command:
+        cmd: helm repo add traefik https://traefik.github.io/charts
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+      failed_when: false
+
+    - name: Update Helm repos
+      ansible.builtin.command:
+        cmd: helm repo update
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: false
+
+    - name: Create traefik namespace
+      ansible.builtin.command:
+        cmd: kubectl create namespace {{ traefik_namespace }} --dry-run=client -o yaml
+      register: traefik_ns_yaml
+      changed_when: false
+
+    - name: Apply traefik namespace
+      ansible.builtin.shell:
+        cmd: "echo '{{ traefik_ns_yaml.stdout }}' | kubectl apply -f -"
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: true
+
+    # Create the basic auth secret for the Traefik dashboard.
+    # vault_traefik_dashboard_password must be a bcrypt htpasswd string,
+    # e.g. the output of: htpasswd -nbB admin 'yourpassword'
+    - name: Create Traefik dashboard basic auth secret
+      ansible.builtin.command:
+        cmd: >
+          kubectl create secret generic traefik-dashboard-auth
+          --namespace {{ traefik_namespace }}
+          --from-literal=users={{ vault_traefik_dashboard_password }}
+          --dry-run=client -o yaml
+      register: traefik_auth_yaml
+      changed_when: false
+      no_log: true
+
+    - name: Apply Traefik dashboard basic auth secret
+      ansible.builtin.shell:
+        cmd: "echo '{{ traefik_auth_yaml.stdout }}' | kubectl apply -f -"
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: true
+      no_log: true
+
+    - name: Write Traefik Helm values
+      ansible.builtin.copy:
+        dest: /tmp/traefik-values.yml
+        mode: "0600"
+        content: |
+          deployment:
+            replicas: 2
+
+          service:
+            type: LoadBalancer
+            loadBalancerIP: "172.16.0.50"
+
+          ingressClass:
+            enabled: true
+            isDefaultClass: true
+
+          providers:
+            kubernetesCRD:
+              enabled: true
+              allowCrossNamespace: true
+            kubernetesIngress:
+              enabled: true
+
+          # Redirect all HTTP to HTTPS globally
+          ports:
+            web:
+              redirectTo:
+                port: websecure
+            websecure:
+              tls:
+                enabled: true
+
+          # Enable the Traefik dashboard (access controlled via IngressRoute below)
+          api:
+            dashboard: true
+            insecure: false
+
+          logs:
+            general:
+              level: INFO
+            access:
+              enabled: true
+
+          # Persist ACME/TLS data — not needed here since cert-manager manages certs,
+          # but useful if you ever add Traefik-native resolvers later.
+          persistence:
+            enabled: false
+
+          # Tolerate controlplane taint if you want Traefik on controlplane nodes too.
+          # Remove this block if you only want Traefik on workers.
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+
+    - name: Install or upgrade Traefik via Helm
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install traefik traefik/traefik
+          --namespace {{ traefik_namespace }}
+          --version {{ traefik_chart_version }}
+          --values /tmp/traefik-values.yml
+          --wait
+          --timeout 5m
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: traefik_helm_output
+      changed_when: true
+
+    - name: Print Traefik Helm output
+      ansible.builtin.debug:
+        var: traefik_helm_output.stdout_lines
+
+    - name: Remove Traefik values file
+      ansible.builtin.file:
+        path: /tmp/traefik-values.yml
+        state: absent
+
+    # -------------------------------------------------------------------------
+    # Traefik dashboard IngressRoute + Middleware
+    # Exposed at: https://traefik.example.com
+    # Protected by basic auth via the secret created above.
+    # -------------------------------------------------------------------------
+    - name: Write Traefik dashboard IngressRoute manifest
+      ansible.builtin.copy:
+        dest: /tmp/traefik-dashboard-ingress.yml
+        mode: "0600"
+        content: |
+          apiVersion: traefik.io/v1alpha1
+          kind: Middleware
+          metadata:
+            name: traefik-dashboard-auth
+            namespace: {{ traefik_namespace }}
+          spec:
+            basicAuth:
+              secret: traefik-dashboard-auth
+
+          ---
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: traefik-dashboard
+            namespace: {{ traefik_namespace }}
+          spec:
+            entryPoints:
+              - websecure
+            routes:
+              - match: Host(`traefik.{{ domain }}`)
+                kind: Rule
+                middlewares:
+                  - name: traefik-dashboard-auth
+                services:
+                  - name: api@internal
+                    kind: TraefikService
+            tls:
+              secretName: {{ wildcard_secret_name }}
+
+    - name: Apply Traefik dashboard IngressRoute
+      ansible.builtin.command:
+        cmd: kubectl apply -f /tmp/traefik-dashboard-ingress.yml
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: traefik_ingress_output
+      changed_when: true
+
+    - name: Print Traefik IngressRoute apply output
+      ansible.builtin.debug:
+        var: traefik_ingress_output.stdout_lines
+
+    - name: Remove Traefik dashboard IngressRoute manifest
+      ansible.builtin.file:
+        path: /tmp/traefik-dashboard-ingress.yml
+        state: absent
+
+# =============================================================================
+# PLAY 10: Expose Longhorn UI via Traefik IngressRoute
+# =============================================================================
+# Assumes Longhorn is already installed in the 'longhorn-system' namespace
+# (typically via the Longhorn install playbook or Helm chart separately).
+# The wildcard secret was copied into longhorn-system in Play 8.
+#
+# Exposed at: https://longhorn.example.com
+# Protected by the same basic auth pattern as the Traefik dashboard.
+#
+# Additional vars/vault.yml keys needed:
+#   vault_longhorn_dashboard_password: "<bcrypt htpasswd string>"
+#     Generate with: htpasswd -nbB admin 'yourpassword'
+# =============================================================================
+- name: Expose Longhorn UI via Traefik IngressRoute
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/vault.yml
+
+  vars:
+    longhorn_namespace: longhorn-system
+    wildcard_secret_name: "example-com-wildcard-tls"
+    domain: "example.com"
+
+  tasks:
+    - name: Create Longhorn dashboard basic auth secret
+      ansible.builtin.command:
+        cmd: >
+          kubectl create secret generic longhorn-dashboard-auth
+          --namespace {{ longhorn_namespace }}
+          --from-literal=users={{ vault_longhorn_dashboard_password }}
+          --dry-run=client -o yaml
+      register: longhorn_auth_yaml
+      changed_when: false
+      no_log: true
+
+    - name: Apply Longhorn dashboard basic auth secret
+      ansible.builtin.shell:
+        cmd: "echo '{{ longhorn_auth_yaml.stdout }}' | kubectl apply -f -"
+      environment:
+        KUBECONFIG: /root/.kube/config
+      changed_when: true
+      no_log: true
+
+    - name: Write Longhorn IngressRoute manifest
+      ansible.builtin.copy:
+        dest: /tmp/longhorn-ingress.yml
+        mode: "0600"
+        content: |
+          apiVersion: traefik.io/v1alpha1
+          kind: Middleware
+          metadata:
+            name: longhorn-dashboard-auth
+            namespace: {{ longhorn_namespace }}
+          spec:
+            basicAuth:
+              secret: longhorn-dashboard-auth
+
+          ---
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: longhorn-dashboard
+            namespace: {{ longhorn_namespace }}
+          spec:
+            entryPoints:
+              - websecure
+            routes:
+              - match: Host(`longhorn.{{ domain }}`)
+                kind: Rule
+                middlewares:
+                  - name: longhorn-dashboard-auth
+                services:
+                  - name: longhorn-frontend
+                    port: 80
+            tls:
+              secretName: {{ wildcard_secret_name }}
+
+    - name: Apply Longhorn IngressRoute
+      ansible.builtin.command:
+        cmd: kubectl apply -f /tmp/longhorn-ingress.yml
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: longhorn_ingress_output
+      changed_when: true
+
+    - name: Print Longhorn IngressRoute apply output
+      ansible.builtin.debug:
+        var: longhorn_ingress_output.stdout_lines
+
+    - name: Remove Longhorn IngressRoute manifest
+      ansible.builtin.file:
+        path: /tmp/longhorn-ingress.yml
+        state: absent
+
+    # -------------------------------------------------------------------------
+    # Final summary
+    # -------------------------------------------------------------------------
+    - name: Retrieve Traefik LoadBalancer IP
+      ansible.builtin.command:
+        cmd: >
+          kubectl get svc traefik
+          --namespace traefik
+          -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: traefik_lb_ip
+      changed_when: false
+
+    - name: Print access summary
+      ansible.builtin.debug:
+        msg:
+          - "================================================================="
+          - "Cluster ingress setup complete."
+          - "Traefik LoadBalancer IP : {{ traefik_lb_ip.stdout }}"
+          - "Point *.{{ domain }} at this IP in Cloudflare DNS."
+          - "-----------------------------------------------------------------"
+          - "Traefik dashboard : https://traefik.{{ domain }}"
+          - "Longhorn dashboard: https://longhorn.{{ domain }}"
+          - "================================================================="
+
