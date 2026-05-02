@@ -3,9 +3,7 @@
   hosts: all
   become: true
   strategy: free
-
   tasks:
-
     # -------------------------------------------------------------------------
     # Swap
     # -------------------------------------------------------------------------
@@ -160,7 +158,6 @@
   strategy: free
   vars_files:
     - vars/vault.yml
-
   tasks:
     - name: Open Kubernetes API Server port (6443/tcp)
       firewalld:
@@ -279,14 +276,16 @@
         state: restarted
 
 # =============================================================================
-# Worker node firewall rules
+# Worker node firewall rules and Longhorn disk setup
 # =============================================================================
-- name: Configure worker node firewall rules
+- name: Configure worker node firewall rules and Longhorn storage
   hosts: foreman_almalinux10_kubernetesworkernode
   become: true
   strategy: free
-
   tasks:
+    # -------------------------------------------------------------------------
+    # Firewall
+    # -------------------------------------------------------------------------
     - name: Open Kubelet API port (10250/tcp)
       firewalld:
         port: 10250/tcp
@@ -304,3 +303,118 @@
     - name: Reload firewalld
       command: firewall-cmd --reload
       changed_when: false
+
+    # -------------------------------------------------------------------------
+    # Longhorn disk — LVM setup on the second disk
+    #
+    # Strategy: discover the second disk by listing block devices that are:
+    #   - type 'disk' (not partition, lvm, rom, etc.)
+    #   - not the root disk (i.e. not the disk that contains '/')
+    # The root disk is identified by tracing / back to its parent disk via
+    # lsblk. The remaining disk(s) are sorted; the first one is used.
+    # This is idempotent: if the VG already exists all LVM tasks are skipped.
+    # -------------------------------------------------------------------------
+    - name: Install LVM2
+      dnf:
+        name: lvm2
+        state: present
+
+    - name: Gather block device info (lsblk JSON)
+      command: lsblk -J -o NAME,TYPE,MOUNTPOINT
+      register: lsblk_output
+      changed_when: false
+
+    - name: Parse lsblk JSON
+      set_fact:
+        lsblk_data: "{{ lsblk_output.stdout | from_json }}"
+
+    - name: Identify root disk name
+      # Walk every top-level disk; if any of its descendants has MOUNTPOINT '/'
+      # that disk is the root disk. Capture just the name (e.g. 'sda').
+      set_fact:
+        root_disk_name: >-
+          {{
+            lsblk_data.blockdevices
+            | selectattr('type', 'equalto', 'disk')
+            | selectattr('children', 'defined')
+            | selectattr('children', 'ne', none)
+            | json_query("[?children[?mountpoint=='/'] || children[?children[?mountpoint=='/']]]")
+            | map(attribute='name')
+            | first
+          }}
+
+    - name: Build list of non-root disks
+      set_fact:
+        data_disks: >-
+          {{
+            lsblk_data.blockdevices
+            | selectattr('type', 'equalto', 'disk')
+            | rejectattr('name', 'equalto', root_disk_name)
+            | map(attribute='name')
+            | sort
+            | list
+          }}
+
+    - name: Fail if no second disk is found
+      ansible.builtin.fail:
+        msg: >-
+          No second disk found on {{ inventory_hostname }}.
+          Only disk detected (root): /dev/{{ root_disk_name }}.
+          Attach a second disk before running this playbook.
+      when: data_disks | length == 0
+
+    - name: Set longhorn disk device fact
+      set_fact:
+        longhorn_disk: "/dev/{{ data_disks | first }}"
+
+    - name: Display disk selected for Longhorn
+      ansible.builtin.debug:
+        msg: "Using {{ longhorn_disk }} for Longhorn LVM on {{ inventory_hostname }}"
+
+    - name: Check if volume group 'longhorn' already exists
+      command: vgs longhorn
+      register: vg_check
+      changed_when: false
+      failed_when: false
+
+    - name: Create LVM physical volume on longhorn disk
+      command: pvcreate "{{ longhorn_disk }}"
+      when: vg_check.rc != 0
+
+    - name: Create volume group 'longhorn'
+      command: vgcreate longhorn "{{ longhorn_disk }}"
+      when: vg_check.rc != 0
+
+    - name: Create logical volume 'data' using 100% of VG free space
+      community.general.lvol:
+        vg: longhorn
+        lv: data
+        size: 100%FREE
+        state: present
+
+    - name: Check if logical volume is already formatted as XFS
+      command: blkid -o value -s TYPE /dev/longhorn/data
+      register: lv_fs_type
+      changed_when: false
+      failed_when: false
+
+    - name: Format logical volume as XFS
+      command: mkfs.xfs /dev/longhorn/data
+      when: lv_fs_type.stdout.strip() != 'xfs'
+
+    - name: Ensure /var/lib/longhorn mount point exists
+      file:
+        path: /var/lib/longhorn
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Mount /var/lib/longhorn persistently (fstab + immediate)
+      ansible.posix.mount:
+        path: /var/lib/longhorn
+        src: /dev/longhorn/data
+        fstype: xfs
+        opts: defaults
+        state: mounted
+
