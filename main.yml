@@ -36,16 +36,6 @@
   roles:
     - role: vm_provisioning
 
-- name: Wait for provisioning to complete on each node
-  hosts: k8s_nodes
-  gather_facts: false
-  tags: [provision]
-  tasks:
-    - name: Wait for /tmp/provisioned flag file
-      ansible.builtin.wait_for:
-        path: /tmp/provisioned
-        timeout: 1800
-
 - name: Configure Proxmox VM settings (EFI disk, rename, tags)
   hosts: k8s_nodes
   gather_facts: false
