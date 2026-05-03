@@ -541,12 +541,12 @@
         path: /tmp/wildcard-cert.yml
         state: absent
 
-    - name: Wait for wildcard certificate to be issued (up to 10 min)
+    - name: Wait for wildcard certificate to be issued (up to 20 min)
       ansible.builtin.command:
         cmd: >
           kubectl wait --for=condition=Ready certificate/garaventaville-wildcard
           --namespace {{ cert_manager_namespace }}
-          --timeout=600s
+          --timeout=1200s
       environment:
         KUBECONFIG: /root/.kube/config
       changed_when: false
