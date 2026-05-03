@@ -340,6 +340,8 @@
     cloudflare_email: "daniel@example.com"   # update if different
     domain: "example.com"
     wildcard_secret_name: "example-com-wildcard-tls"
+    environment:
+      PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
   tasks:
     # -------------------------------------------------------------------------
