@@ -266,8 +266,12 @@ urlencode }}%22&per_page=1"
         force_basic_auth: true
         validate_certs: "{{ awx_validate_certs }}"
         return_content: true
+        status_code: "{{ range(100, 600) | list }}"
       register: awx_callback_status
-      until: awx_callback_status.json.count > 0
+      failed_when: false
+      until: >-
+        awx_callback_status.status | default(0) == 200
+        and awx_callback_status.json.count | default(0) > 0
       retries: "{{ awx_poll_retries }}"
       delay: "{{ awx_poll_delay }}"
       loop: "{{ vms }}"
