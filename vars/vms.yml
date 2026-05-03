@@ -47,18 +47,18 @@ vms:
       - { name: keepalived_state,    value: BACKUP    }
       - { name: keepalived_priority, value: 100       }
 
-  - name: sapphiron
-    hostgroup: *cp
-    host_parameters:
-      - { name: k8s_role,            value: secondary }
-      - { name: keepalived_state,    value: BACKUP    }
-      - { name: keepalived_priority, value: 99        }
+#  - name: sapphiron
+#    hostgroup: *cp
+#    host_parameters:
+#      - { name: k8s_role,            value: secondary }
+#      - { name: keepalived_state,    value: BACKUP    }
+#      - { name: keepalived_priority, value: 99        }
 
   # --- Worker nodes ---
   - { name: noth,          hostgroup: *wk }
   - { name: heigan,        hostgroup: *wk }
-  - { name: loatheb,       hostgroup: *wk }
-  - { name: patchwerk,     hostgroup: *wk }
+#  - { name: loatheb,       hostgroup: *wk }
+#  - { name: patchwerk,     hostgroup: *wk }
 #  - { name: grobbulus,     hostgroup: *wk }
 #  - { name: gluth,         hostgroup: *wk }
 #  - { name: thaddius,      hostgroup: *wk }
