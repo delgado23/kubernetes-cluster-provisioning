@@ -1,4 +1,17 @@
 ---
+- name: Validate worker_node_count
+  ansible.builtin.assert:
+    that: worker_node_count | int >= 1
+    fail_msg: "worker_node_count must be at least 1, got {{ worker_node_count }}"
+
+- name: Limit vms list to selected number of worker nodes
+  ansible.builtin.set_fact:
+    vms: >-
+      {{
+        (vms | rejectattr('hostgroup', 'search', 'Worker') | list)
+        + (vms | selectattr('hostgroup', 'search', 'Worker') | list)[: worker_node_count | int]
+      }}
+
 - name: Validate VM definitions
   ansible.builtin.assert:
     that:
