@@ -481,14 +481,6 @@
                       apiTokenSecretRef:
                         name: cloudflare-api-token
                         key: api-token
-                      # zone is required so cert-manager can construct the
-                      # correct /zones/<id>/dns_records path when cleaning up
-                      # the DNS-01 TXT challenge record. Without it the zone ID
-                      # is empty and Cloudflare returns error 7003.
-                      zone: "{{ domain }}"
-                  selector:
-                    dnsZones:
-                      - "{{ domain }}"
 
     - name: Apply ClusterIssuer
       ansible.builtin.command:
