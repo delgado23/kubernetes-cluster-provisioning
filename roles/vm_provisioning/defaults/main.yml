@@ -9,3 +9,5 @@ awx_validate_certs: true
 awx_callback_job_template_id: ""
 awx_poll_retries: 40      # 40 x 30s = 20 min max
 awx_poll_delay: 30
+awx_user: ""
+awx_password: "{{ vault_awx_password | default('') }}"
