@@ -236,8 +236,3 @@
     - wait_for_build | default(true)
     - created_hosts is defined
 
-- name: Wait 5 minutes for AWX provisioning callbacks to finish
-  ansible.builtin.pause:
-    minutes: 5
-  when: created_hosts is defined
-
