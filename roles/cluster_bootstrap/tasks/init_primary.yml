@@ -1,0 +1,74 @@
+---
+- name: Deploy kubeadm config
+  ansible.builtin.template:
+    src: kubeadm-config.yml.j2
+    dest: /tmp/kubeadm-config.yml
+    mode: "0644"
+
+- name: Run kubeadm init
+  ansible.builtin.command:
+    cmd: kubeadm init --config /tmp/kubeadm-config.yml --upload-certs
+  register: kubeadm_init_output
+  changed_when: true
+
+- name: Print kubeadm init output
+  ansible.builtin.debug:
+    var: kubeadm_init_output.stdout_lines
+
+- name: Extract control plane endpoint from kubeadm config
+  ansible.builtin.command:
+    cmd: >
+      awk '/controlPlaneEndpoint:/ {print $2}' /tmp/kubeadm-config.yml
+  register: endpoint_output
+  changed_when: false
+
+- name: Set control plane endpoint fact
+  ansible.builtin.set_fact:
+    kubeadm_controlplaneendpoint: "{{ endpoint_output.stdout | regex_replace(':6443$', '') }}"
+
+- name: Extract certificate key
+  ansible.builtin.set_fact:
+    certificate_key: >-
+      {{ kubeadm_init_output.stdout
+         | regex_search('--certificate-key ([a-f0-9]+)', '\1')
+         | first }}
+
+- name: Extract join token
+  ansible.builtin.set_fact:
+    join_token: >-
+      {{ kubeadm_init_output.stdout
+         | regex_search('--token ([a-z0-9]+\.[a-z0-9]+)', '\1')
+         | first }}
+
+- name: Extract discovery token CA cert hash
+  ansible.builtin.set_fact:
+    discovery_hash: >-
+      {{ kubeadm_init_output.stdout
+         | regex_search('--discovery-token-ca-cert-hash (sha256:[a-f0-9]+)', '\1')
+         | first }}
+
+- name: Set up kubeconfig for root
+  ansible.builtin.shell: |
+    mkdir -p /root/.kube
+    cp /etc/kubernetes/admin.conf /root/.kube/config
+    chown root:root /root/.kube/config
+  changed_when: true
+
+- name: Install Flannel CNI
+  ansible.builtin.command:
+    cmd: kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: flannel_output
+  changed_when: true
+
+- name: Print Flannel install output
+  ansible.builtin.debug:
+    var: flannel_output.stdout_lines
+
+- name: Wait for control plane to be ready
+  ansible.builtin.command:
+    cmd: "kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=120s"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false

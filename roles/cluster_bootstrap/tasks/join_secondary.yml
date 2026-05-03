@@ -1,0 +1,40 @@
+---
+- name: Assert that primary join credentials are available
+  ansible.builtin.assert:
+    that:
+      - hostvars[groups['k8s_role_primary'][0]]['kubeadm_controlplaneendpoint'] is defined
+      - hostvars[groups['k8s_role_primary'][0]]['join_token'] is defined
+      - hostvars[groups['k8s_role_primary'][0]]['discovery_hash'] is defined
+      - hostvars[groups['k8s_role_primary'][0]]['certificate_key'] is defined
+    fail_msg: >-
+      One or more join credentials are missing from the primary node's hostvars.
+      Ensure the init_primary tasks completed successfully before running join_secondary.
+
+- name: Join cluster as control plane
+  ansible.builtin.command:
+    cmd: >
+      kubeadm join {{ hostvars[groups['k8s_role_primary'][0]]['kubeadm_controlplaneendpoint'] }}
+      --token {{ hostvars[groups['k8s_role_primary'][0]]['join_token'] }}
+      --discovery-token-ca-cert-hash {{ hostvars[groups['k8s_role_primary'][0]]['discovery_hash'] }}
+      --control-plane
+      --certificate-key {{ hostvars[groups['k8s_role_primary'][0]]['certificate_key'] }}
+  register: join_output
+  changed_when: true
+
+- name: Print join output
+  ansible.builtin.debug:
+    var: join_output.stdout_lines
+
+- name: Set up kubeconfig for root
+  ansible.builtin.shell: |
+    mkdir -p /root/.kube
+    cp /etc/kubernetes/admin.conf /root/.kube/config
+    chown root:root /root/.kube/config
+  changed_when: true
+
+- name: Wait for secondary control plane to be ready
+  ansible.builtin.command:
+    cmd: "kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=120s"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false

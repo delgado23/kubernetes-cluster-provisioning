@@ -1,0 +1,238 @@
+---
+- name: Validate VM definitions
+  ansible.builtin.assert:
+    that:
+      - item.name is defined and item.name | length > 0
+      - item.hostgroup is defined and item.hostgroup | length > 0
+    fail_msg: >-
+      VM entry is missing required fields (name or hostgroup).
+  loop: "{{ vms }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Look up Foreman hostgroup IDs
+  ansible.builtin.uri:
+    url: "{{ foreman_url }}/api/hostgroups?search=title+%3D+%22{{ item |
+urlencode }}%22&per_page=1"
+    method: GET
+    user: "{{ foreman_user }}"
+    password: "{{ foreman_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ foreman_validate_certs }}"
+    return_content: true
+    headers:
+      Accept: application/json
+  register: hostgroup_results
+  loop: "{{ vms | map(attribute='hostgroup') | unique | list }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Build hostgroup name-to-id map
+  ansible.builtin.set_fact:
+    hostgroup_id_map: >-
+      {{
+        hostgroup_id_map | default({}) | combine({
+          item.item: { 'id': item.json.results[0].id | string }
+        })
+      }}
+  loop: "{{ hostgroup_results.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.json.results | length > 0
+
+- name: Fetch full hostgroup details (location and organization)
+  ansible.builtin.uri:
+    url: "{{ foreman_url }}/api/hostgroups/{{ hostgroup_id_map[item].id }}"
+    method: GET
+    user: "{{ foreman_user }}"
+    password: "{{ foreman_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ foreman_validate_certs }}"
+    return_content: true
+    headers:
+      Accept: application/json
+  register: hostgroup_details
+  loop: "{{ vms | map(attribute='hostgroup') | unique | list }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Enrich hostgroup map with location_id and organization_id
+  ansible.builtin.set_fact:
+    hostgroup_id_map: >-
+      {{
+        hostgroup_id_map | combine({
+          item.item: hostgroup_id_map[item.item] | combine({
+            'location_id':     item.json.locations[0].id | string,
+            'organization_id': item.json.organizations[0].id | string
+          })
+        })
+      }}
+  loop: "{{ hostgroup_details.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.json.locations | length > 0 and item.json.organizations | length > 0
+
+- name: Fail if any hostgroup was not found in Foreman
+  ansible.builtin.fail:
+    msg: "Hostgroup '{{ item.hostgroup }}' not found in Foreman."
+  when: item.hostgroup not in (hostgroup_id_map | default({}))
+  loop: "{{ vms }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Check existing Foreman hosts
+  ansible.builtin.uri:
+    url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}"
+    method: GET
+    user: "{{ foreman_user }}"
+    password: "{{ foreman_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ foreman_validate_certs }}"
+    status_code: [200, 404]
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+  register: existing_hosts
+  loop: "{{ vms }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create VM in Foreman / Proxmox
+  ansible.builtin.uri:
+    url: "{{ foreman_url }}/api/hosts"
+    method: POST
+    user: "{{ foreman_user }}"
+    password: "{{ foreman_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ foreman_validate_certs }}"
+    body_format: json
+    status_code: 201
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+    body:
+      host:
+        name: "{{ item.0.name }}"
+        hostgroup_id: "{{ hostgroup_id_map[item.0.hostgroup].id }}"
+        location_id: "{{ hostgroup_id_map[item.0.hostgroup].location_id }}"
+        organization_id: "{{ hostgroup_id_map[item.0.hostgroup].organization_id }}"
+        compute_resource_id: "{{ foreman_compute_resource_id }}"
+        compute_profile_id: >-
+          {{ foreman_compute_profile_controlplane
+             if 'Controlplane' in item.0.hostgroup
+             else foreman_compute_profile_worker }}
+        build: true
+        managed: true
+  loop: "{{ vms | zip(existing_hosts.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}"
+  when: item.1.status == 404
+  register: created_hosts
+
+- name: Set host parameters in Foreman
+  ansible.builtin.uri:
+    url: "{{ foreman_url }}/api/hosts/{{ item.0.name }}.{{ foreman_domain }}/parameters"
+    method: POST
+    user: "{{ foreman_user }}"
+    password: "{{ foreman_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ foreman_validate_certs }}"
+    body_format: json
+    status_code: [201, 422]
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+    body:
+      parameter:
+        name: "{{ item.1.name }}"
+        value: "{{ item.1.value | string }}"
+  loop: >-
+    {{
+      vms
+      | selectattr('host_parameters', 'defined')
+      | subelements('host_parameters')
+    }}
+  loop_control:
+    label: "{{ item.0.name }} — {{ item.1.name }}"
+
+- name: Report skipped VMs (already existed in Foreman)
+  ansible.builtin.debug:
+    msg: "SKIPPED — host already exists in Foreman: {{ item.0.name }}"
+  loop: "{{ vms | zip(existing_hosts.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}"
+  when: item.1.status == 200
+
+- name: Report created VMs
+  ansible.builtin.debug:
+    msg: >-
+      CREATED — {{ item.item.0.name }}
+      (Group: {{ item.item.0.hostgroup }})
+      (Compute profile: {{ 'Controlplane (id=8)' if 'Controlplane' in item.item.0.hostgroup else 'Worker (id=6)' }})
+      Foreman ID: {{ item.json.id | default('unknown') }}
+  loop: "{{ created_hosts.results }}"
+  loop_control:
+    label: "{{ item.item.0.name }}"
+  when:
+    - created_hosts is defined
+    - item.skipped is not defined or not item.skipped
+
+- name: Power on VMs
+  ansible.builtin.uri:
+    url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
+    method: PUT
+    user: "{{ foreman_user }}"
+    password: "{{ foreman_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ foreman_validate_certs }}"
+    body_format: json
+    status_code: [200, 201]
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+    body:
+      power_action: "start"
+  loop: "{{ vms }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: power_results
+
+- name: Report power-on results
+  ansible.builtin.debug:
+    msg: "POWERED ON — {{ item.item.name }}: {{ item.json.power | default('started') }}"
+  loop: "{{ power_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.skipped is not defined or not item.skipped
+
+- name: Add VMs to in-memory k8s_nodes group
+  ansible.builtin.add_host:
+    name: "{{ item.name }}.{{ foreman_domain }}"
+    groups: k8s_nodes
+    foreman_hostgroup: "{{ item.hostgroup }}"
+  loop: "{{ vms }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+
+- name: Wait for hosts to finish building (build flag clears)
+  ansible.builtin.uri:
+    url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}"
+    method: GET
+    user: "{{ foreman_user }}"
+    password: "{{ foreman_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ foreman_validate_certs }}"
+    headers:
+      Accept: application/json
+    return_content: true
+  register: build_status
+  until: build_status.json.build == false
+  retries: "{{ build_wait_retries }}"
+  delay: "{{ build_wait_delay_seconds }}"
+  loop: "{{ vms }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - wait_for_build | default(true)
+    - created_hosts is defined
