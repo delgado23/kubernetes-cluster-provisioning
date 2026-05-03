@@ -177,6 +177,11 @@ urlencode }}%22&per_page=1"
     - created_hosts is defined
     - item.skipped is not defined or not item.skipped
 
+- name: Record power-on timestamp for AWX callback filtering
+  ansible.builtin.set_fact:
+    provision_start_time: "{{ now(utc=True, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+  when: wait_for_awx_callback | default(false)
+
 - name: Power on VMs
   ansible.builtin.uri:
     url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}/power"
@@ -236,3 +241,56 @@ urlencode }}%22&per_page=1"
   when:
     - wait_for_build | default(true)
     - created_hosts is defined
+
+- name: Wait for AWX provisioning callback jobs to complete
+  when:
+    - wait_for_awx_callback | default(false)
+    - awx_url | length > 0
+    - awx_callback_job_template_id | string | length > 0
+    - created_hosts is defined
+  block:
+    # AWX job_host_summaries records are only written after a job finishes
+    # executing against a host. Polling until count > 0 effectively waits for
+    # the callback job to reach a terminal state. The job__created__gte filter
+    # anchored to provision_start_time excludes stale summaries from earlier runs.
+    - name: Wait for AWX callback job to finish for each host
+      ansible.builtin.uri:
+        url: >-
+          {{ awx_url }}/api/v2/job_host_summaries/?host_name={{ item.name }}.{{ foreman_domain
+          }}&job__job_template={{ awx_callback_job_template_id
+          }}&job__created__gte={{ provision_start_time
+          }}&order_by=-job&limit=1
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_awx_token }}"
+          Content-Type: application/json
+        validate_certs: "{{ awx_validate_certs }}"
+        return_content: true
+      register: awx_callback_status
+      until: awx_callback_status.json.count > 0
+      retries: "{{ awx_poll_retries }}"
+      delay: "{{ awx_poll_delay }}"
+      loop: "{{ vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Report AWX callback job results
+      ansible.builtin.debug:
+        msg: >-
+          AWX callback for '{{ item.item.name }}'
+          — job ID {{ item.json.results[0].job }}
+          — {{ 'FAILED' if item.json.results[0].failed else 'succeeded' }}
+      loop: "{{ awx_callback_status.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Fail if any AWX callback job did not succeed
+      ansible.builtin.fail:
+        msg: >-
+          AWX provisioning callback job for '{{ item.item.name }}' failed
+          (job ID {{ item.json.results[0].job }}).
+          Check the AWX job output for details before proceeding with VM configuration.
+      when: item.json.results[0].failed | bool
+      loop: "{{ awx_callback_status.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
