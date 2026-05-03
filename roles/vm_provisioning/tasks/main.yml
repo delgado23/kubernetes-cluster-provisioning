@@ -261,9 +261,9 @@ urlencode }}%22&per_page=1"
           }}&job__created__gte={{ provision_start_time
           }}&order_by=-job&limit=1
         method: GET
-        headers:
-          Authorization: "Bearer {{ vault_awx_token }}"
-          Content-Type: application/json
+        user: "{{ awx_user }}"
+        password: "{{ awx_password }}"
+        force_basic_auth: true
         validate_certs: "{{ awx_validate_certs }}"
         return_content: true
       register: awx_callback_status
