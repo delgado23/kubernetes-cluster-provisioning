@@ -1,0 +1,56 @@
+---
+- name: Install MetalLB
+  ansible.builtin.command:
+    cmd: kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: metallb_install_output
+  changed_when: true
+
+- name: Print MetalLB install output
+  ansible.builtin.debug:
+    var: metallb_install_output.stdout_lines
+
+- name: Wait for MetalLB controller to be ready
+  ansible.builtin.command:
+    cmd: >
+      kubectl wait --for=condition=Available deployment/controller
+      --namespace metallb-system
+      --timeout=120s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Wait for MetalLB webhook service to be ready
+  ansible.builtin.command:
+    cmd: >
+      kubectl wait --for=condition=Ready pod
+      --selector=component=controller
+      --namespace metallb-system
+      --timeout=120s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Render MetalLB IP address pool manifest
+  ansible.builtin.template:
+    src: metallb-pool.yml.j2
+    dest: /tmp/metallb-pool.yml
+    mode: "0600"
+
+- name: Apply MetalLB IP address pool
+  ansible.builtin.command:
+    cmd: kubectl apply -f /tmp/metallb-pool.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: metallb_pool_output
+  changed_when: true
+
+- name: Print MetalLB pool apply output
+  ansible.builtin.debug:
+    var: metallb_pool_output.stdout_lines
+
+- name: Remove rendered MetalLB pool manifest
+  ansible.builtin.file:
+    path: /tmp/metallb-pool.yml
+    state: absent

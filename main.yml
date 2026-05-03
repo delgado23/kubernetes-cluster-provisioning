@@ -1,0 +1,217 @@
+---
+# =============================================================================
+# main.yml — Kubernetes Cluster Provisioning
+# =============================================================================
+# Full lifecycle: provision VMs, prepare nodes, bootstrap the control plane,
+# join workers, and install cluster add-ons.
+#
+# Run the full pipeline:
+#   ansible-playbook main.yml
+#
+# Run a specific phase using tags:
+#   ansible-playbook main.yml --tags provision
+#   ansible-playbook main.yml --tags prep
+#   ansible-playbook main.yml --tags bootstrap
+#   ansible-playbook main.yml --tags workers
+#   ansible-playbook main.yml --tags addons
+#
+# Skip VM provisioning (re-runs against existing nodes):
+#   ansible-playbook main.yml --skip-tags provision
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# PHASE 1: VM Provisioning
+# -----------------------------------------------------------------------------
+
+- name: Provision Kubernetes nodes via Foreman
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [provision]
+  vars_files:
+    - vars/vault.yml
+    - vars/foreman.yml
+    - vars/vms.yml
+  roles:
+    - role: vm_provisioning
+
+- name: Configure Proxmox VM settings (EFI disk, rename, tags)
+  hosts: k8s_nodes
+  gather_facts: false
+  serial: 1
+  tags: [provision]
+  vars_files:
+    - vars/vault.yml
+  vars:
+    proxmox_api_token: "{{ vault_proxmox_api_token }}"
+  roles:
+    - role: proxmox_postconfig
+
+
+# -----------------------------------------------------------------------------
+# PHASE 2: Node Preparation
+# -----------------------------------------------------------------------------
+
+- name: Common Kubernetes prerequisites (all nodes)
+  hosts: all
+  become: true
+  strategy: free
+  tags: [prep]
+  roles:
+    - role: common
+
+- name: Controlplane infrastructure (HAProxy, keepalived, firewall)
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  strategy: free
+  tags: [prep]
+  vars_files:
+    - vars/vault.yml
+  roles:
+    - role: controlplane_infra
+
+- name: Worker node storage (LVM/Longhorn)
+  hosts: foreman_almalinux10_kubernetesworkernode
+  become: true
+  strategy: free
+  tags: [prep]
+  roles:
+    - role: worker_storage
+
+
+# -----------------------------------------------------------------------------
+# PHASE 3: Control Plane Bootstrap
+# -----------------------------------------------------------------------------
+
+- name: Group controlplanes by k8s_role Foreman parameter
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  gather_facts: true
+  tags: [bootstrap, workers, addons]
+  tasks:
+    - name: Group by k8s_role
+      ansible.builtin.group_by:
+        key: "k8s_role_{{ foreman_params.k8s_role }}"
+
+- name: Initialize primary control plane
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+  tags: [bootstrap]
+  tasks:
+    - name: Bootstrap primary control plane
+      ansible.builtin.include_role:
+        name: cluster_bootstrap
+        tasks_from: init_primary
+
+- name: Join secondary control planes
+  hosts: k8s_role_secondary
+  become: true
+  gather_facts: false
+  serial: 1
+  tags: [bootstrap]
+  tasks:
+    - name: Join secondary control plane node
+      ansible.builtin.include_role:
+        name: cluster_bootstrap
+        tasks_from: join_secondary
+
+- name: Install kubelet-serving-cert-approver
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+  tags: [bootstrap]
+  tasks:
+    - name: Install kubelet-serving-cert-approver
+      ansible.builtin.include_role:
+        name: cluster_bootstrap
+        tasks_from: cert_approver
+
+- name: Install controlplane tooling (kubectl completion, Helm, k9s)
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  gather_facts: false
+  tags: [bootstrap]
+  tasks:
+    - name: Install controlplane tooling
+      ansible.builtin.include_role:
+        name: cluster_bootstrap
+        tasks_from: tooling
+
+
+# -----------------------------------------------------------------------------
+# PHASE 4: Worker Bootstrap
+# -----------------------------------------------------------------------------
+
+- name: Generate join command on primary control plane
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+  tags: [workers]
+  tasks:
+    - name: Generate worker join command
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: generate_join_command
+
+- name: Join worker nodes to the cluster
+  hosts: foreman_almalinux10_kubernetesworkernode
+  become: true
+  gather_facts: true
+  serial: 1
+  tags: [workers]
+  tasks:
+    - name: Join worker node
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: join_workers
+
+
+# -----------------------------------------------------------------------------
+# PHASE 5: Cluster Add-ons
+# -----------------------------------------------------------------------------
+
+- name: Install cluster add-ons
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+  tags: [addons]
+  vars_files:
+    - vars/vault.yml
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  tasks:
+    - name: Verify workers are registered and Ready
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: verify_workers
+
+    - name: Label worker nodes
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: label_workers
+
+    - name: Install metrics-server
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: metrics_server
+
+    - name: Install MetalLB and configure IP address pool
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: metallb
+
+    - name: Install cert-manager with Cloudflare DNS-01
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: cert_manager
+
+    - name: Install Traefik ingress controller
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: traefik
+
+    - name: Expose Longhorn UI via Traefik IngressRoute
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: longhorn_ui
