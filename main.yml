@@ -54,7 +54,7 @@
 # -----------------------------------------------------------------------------
 
 - name: Common Kubernetes prerequisites (all nodes)
-  hosts: all
+  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
   become: true
   strategy: free
   tags: [prep]
