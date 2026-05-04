@@ -6,13 +6,15 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 
 | Component | Details |
 |---|---|
-| Control plane | 3 nodes (1 primary + 2 secondary), HA via HAProxy + keepalived |
-| Workers | 4 nodes, Longhorn LVM on dedicated data disk |
+| Control plane | 1–3 nodes (primary always included, up to 2 secondaries), HA via HAProxy + keepalived |
+| Workers | 1–13 nodes, Longhorn LVM on dedicated data disk |
 | Networking | Flannel VXLAN, MetalLB L2 LoadBalancer |
 | Ingress | Traefik v2 with TLS redirect |
 | TLS | cert-manager + Let's Encrypt + Cloudflare DNS-01 |
 | Storage | Longhorn with XFS LVM partition |
 | Tooling | kubectl, Helm, k9s on all control plane nodes |
+
+Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlplane_node_count` and `worker_node_count` (see [AWX Survey Variables](#awx-survey-variables)).
 
 ## Prerequisites
 
@@ -39,7 +41,7 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 │   ├── vms.yml           # VM definitions (names, hostgroups, Foreman parameters)
 │   └── vm_defaults.yml   # Default VM hardware specs
 └── roles/
-    ├── vm_provisioning/       # Create VMs in Foreman/Proxmox
+    ├── vm_provisioning/       # Create VMs in Foreman/Proxmox, filters by node counts
     ├── proxmox_postconfig/    # EFI disk, rename, tags via Proxmox API
     ├── common/                # K8s prerequisites: containerd, kubelet, firewall
     ├── controlplane_infra/    # HAProxy, keepalived, controlplane firewall rules
@@ -70,6 +72,17 @@ Generate dashboard passwords with:
 htpasswd -nbB admin 'yourpassword'
 ```
 
+## AWX Survey Variables
+
+When running via AWX/Tower, these survey variables control how many nodes are provisioned. Both default to `1` if not provided by a survey.
+
+| Variable | Type | Min | Max | Default | Description |
+|---|---|---|---|---|---|
+| `controlplane_node_count` | Integer | 1 | 3 | 1 | Number of control plane nodes to provision. The primary node (`k8s_role: primary`) is always included; the value determines how many secondaries are added (count − 1). |
+| `worker_node_count` | Integer | 1 | 13 | 1 | Number of worker nodes to provision, selected in the order they appear in `vars/vms.yml`. |
+
+All node definitions live in `vars/vms.yml`. The `vm_provisioning` role filters that list at runtime before any Foreman API calls are made, so only the selected nodes are created.
+
 ## Usage
 
 ### Full Cluster Provisioning
@@ -78,6 +91,12 @@ Run the entire pipeline end to end:
 
 ```bash
 ansible-playbook main.yml --ask-vault-pass
+```
+
+Override node counts at the command line:
+
+```bash
+ansible-playbook main.yml --ask-vault-pass -e "controlplane_node_count=3 worker_node_count=5"
 ```
 
 ### Run a Specific Phase
@@ -128,33 +147,35 @@ ansible-playbook wipe.yml --ask-vault-pass
 
 ## VM Definitions
 
-Edit `vars/vms.yml` to add or remove nodes. Each VM entry supports:
+All available nodes are defined in `vars/vms.yml`. The `vm_provisioning` role selects a subset at runtime based on `controlplane_node_count` and `worker_node_count`.
+
+Control plane nodes must include a `host_parameters` list. The node with `k8s_role: primary` is the kubeadm bootstrap node and is always provisioned regardless of `controlplane_node_count`. Secondary nodes are selected in definition order up to `controlplane_node_count - 1`.
 
 ```yaml
 vms:
-  - name: my-node
+  # Primary control plane — always provisioned
+  - name: my-cp-01
     hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
     host_parameters:
-      - name: k8s_role
-        value: primary
-      - name: keepalived_state
-        value: MASTER
-      - name: keepalived_priority
-        value: 101
-      - name: keepalived_vip
-        value: "172.16.0.29"
-      - name: cluster_name
-        value: my-cluster
-      - name: k8s_api_endpoint
-        value: k8s-api.example.com
-      - name: k8s_pod_cidr
-        value: "10.244.0.0/16"
-      - name: k8s_service_cidr
-        value: "10.96.0.0/12"
-      - name: metallb_pool
-        value: "172.16.0.50-172.16.0.60"
-      - name: haproxy_port
-        value: "7443"
+      - { name: k8s_role,            value: primary }
+      - { name: keepalived_state,    value: MASTER }
+      - { name: keepalived_priority, value: 101 }
+      - { name: cluster_name,        value: my-cluster }
+      - { name: k8s_api_endpoint,    value: k8s-api.example.com }
+      - { name: k8s_api_endpoint_ip, value: 172.16.0.29 }
+      - { name: metallb_pool,        value: 172.16.0.50-172.16.0.60 }
+
+  # Secondary control planes — included when controlplane_node_count > 1
+  - name: my-cp-02
+    hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+    host_parameters:
+      - { name: k8s_role,            value: secondary }
+      - { name: keepalived_state,    value: BACKUP }
+      - { name: keepalived_priority, value: 100 }
+
+  # Workers — included up to worker_node_count, in definition order
+  - { name: my-worker-01, hostgroup: "AlmaLinux 10/Kubernetes Worker Node" }
+  - { name: my-worker-02, hostgroup: "AlmaLinux 10/Kubernetes Worker Node" }
 ```
 
 ## Proxmox API Token Setup
