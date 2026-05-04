@@ -1,0 +1,22 @@
+---
+- name: Install kubelet-serving-cert-approver
+  ansible.builtin.command:
+    cmd: kubectl apply -f https://git.example.com/example/kubelet-serving-cert-approver/raw/branch/main/deploy/standalone-install.yaml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: cert_approver_output
+  changed_when: true
+
+- name: Print kubelet-serving-cert-approver install output
+  ansible.builtin.debug:
+    var: cert_approver_output.stdout_lines
+
+- name: Wait for kubelet-serving-cert-approver to be ready
+  ansible.builtin.command:
+    cmd: >
+      kubectl wait --for=condition=Available deployment/kubelet-serving-cert-approver
+      --namespace kubelet-serving-cert-approver
+      --timeout=120s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false

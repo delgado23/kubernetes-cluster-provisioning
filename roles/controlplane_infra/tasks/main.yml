@@ -1,0 +1,101 @@
+---
+- name: Open Kubernetes API Server port (6443/tcp)
+  ansible.posix.firewalld:
+    port: 6443/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Open HAProxy port
+  ansible.posix.firewalld:
+    port: "{{ foreman_params.haproxy_port }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Open etcd server client API ports (2379-2380/tcp)
+  ansible.posix.firewalld:
+    port: "{{ item }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+  loop:
+    - 2379
+    - 2380
+
+- name: Open Kubelet API port (10250/tcp)
+  ansible.posix.firewalld:
+    port: 10250/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Open kube-scheduler port (10259/tcp)
+  ansible.posix.firewalld:
+    port: 10259/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Open kube-controller-manager port (10257/tcp)
+  ansible.posix.firewalld:
+    port: 10257/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Allow VRRP protocol for keepalived
+  ansible.posix.firewalld:
+    rich_rule: 'rule protocol value="vrrp" accept'
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Reload firewalld
+  ansible.builtin.command: firewall-cmd --reload
+  changed_when: false
+
+- name: Install controlplane packages
+  ansible.builtin.dnf:
+    name:
+      - keepalived
+      - haproxy
+    state: present
+
+- name: Deploy HAProxy k8s config
+  ansible.builtin.template:
+    src: k8s.cfg.j2
+    dest: /etc/haproxy/conf.d/k8s.cfg
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Validate haproxy config
+    - Restart haproxy
+
+- name: Deploy keepalived config
+  ansible.builtin.template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart keepalived
+
+- name: Allow HAProxy to connect to any port (SELinux)
+  ansible.posix.seboolean:
+    name: haproxy_connect_any
+    state: true
+    persistent: true
+
+- name: Enable and start HAProxy
+  ansible.builtin.systemd:
+    name: haproxy
+    enabled: true
+    state: started
+
+- name: Enable and start keepalived
+  ansible.builtin.systemd:
+    name: keepalived
+    enabled: true
+    state: started

@@ -1,0 +1,152 @@
+---
+- name: Open Kubelet API port (10250/tcp)
+  ansible.posix.firewalld:
+    port: 10250/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Open NodePort Services range (30000-32767/tcp)
+  ansible.posix.firewalld:
+    port: 30000-32767/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Reload firewalld
+  ansible.builtin.command: firewall-cmd --reload
+  changed_when: false
+
+- name: Install LVM2 and gdisk
+  ansible.builtin.dnf:
+    name:
+      - lvm2
+      - gdisk
+    state: present
+
+- name: Gather block device info with sizes in bytes (lsblk JSON)
+  ansible.builtin.command: lsblk -J -b -o NAME,TYPE,SIZE,MOUNTPOINT
+  register: lsblk_output
+  changed_when: false
+
+- name: Parse lsblk JSON
+  ansible.builtin.set_fact:
+    lsblk_data: "{{ lsblk_output.stdout | from_json }}"
+
+- name: Identify root disk name
+  ansible.builtin.set_fact:
+    root_disk_name: >-
+      {{
+        lsblk_data.blockdevices
+        | selectattr('type', 'equalto', 'disk')
+        | selectattr('children', 'defined')
+        | selectattr('children', 'ne', none)
+        | json_query("[?children[?mountpoint=='/'] || children[?children[?mountpoint=='/']]]")
+        | map(attribute='name')
+        | first
+      }}
+
+- name: Build list of non-root disks with their byte sizes
+  ansible.builtin.set_fact:
+    data_disks: >-
+      {{
+        lsblk_data.blockdevices
+        | selectattr('type', 'equalto', 'disk')
+        | rejectattr('name', 'equalto', root_disk_name)
+        | list
+      }}
+
+- name: Fail if no non-root disk is found
+  ansible.builtin.fail:
+    msg: >-
+      No non-root disk found on {{ inventory_hostname }}.
+      Root disk: /dev/{{ root_disk_name }}.
+      Attach a data disk before running this playbook.
+  when: data_disks | length == 0
+
+- name: Select the largest non-root disk
+  ansible.builtin.set_fact:
+    longhorn_disk_entry: "{{ data_disks | sort(attribute='size') | last }}"
+
+- name: Set longhorn disk device path
+  ansible.builtin.set_fact:
+    longhorn_disk: "/dev/{{ longhorn_disk_entry.name }}"
+
+- name: Display disk selected for Longhorn
+  ansible.builtin.debug:
+    msg: >-
+      Using {{ longhorn_disk }} for Longhorn LVM on {{ inventory_hostname }}
+      ({{ (longhorn_disk_entry.size | int / 1073741824) | round(1) }} GiB)
+
+- name: Check if volume group 'longhorn' already exists
+  ansible.builtin.command: vgs longhorn
+  register: vg_check
+  changed_when: false
+  failed_when: false
+
+- name: Deactivate any existing volume group on the disk
+  ansible.builtin.command: vgchange -an "{{ longhorn_disk }}"
+  when: vg_check.rc != 0
+  failed_when: false
+  changed_when: false
+
+- name: Remove any existing LVM PV signatures from the disk
+  ansible.builtin.command: pvremove --force --force -y "{{ longhorn_disk }}"
+  when: vg_check.rc != 0
+  failed_when: false
+  changed_when: false
+
+- name: Wipe all filesystem and partition signatures
+  ansible.builtin.command: wipefs --all --force "{{ longhorn_disk }}"
+  when: vg_check.rc != 0
+
+- name: Destroy existing partition tables (GPT and MBR)
+  ansible.builtin.command: sgdisk --zap-all "{{ longhorn_disk }}"
+  when: vg_check.rc != 0
+
+- name: Discard all blocks on disk (TRIM/UNMAP — best-effort)
+  ansible.builtin.command: blkdiscard "{{ longhorn_disk }}"
+  when: vg_check.rc != 0
+  failed_when: false
+  changed_when: false
+
+- name: Create LVM physical volume on longhorn disk
+  ansible.builtin.command: pvcreate "{{ longhorn_disk }}"
+  when: vg_check.rc != 0
+
+- name: Create volume group 'longhorn'
+  ansible.builtin.command: vgcreate longhorn "{{ longhorn_disk }}"
+  when: vg_check.rc != 0
+
+- name: Create logical volume 'data' using 100% of VG free space
+  community.general.lvol:
+    vg: longhorn
+    lv: data
+    size: 100%FREE
+    state: present
+
+- name: Check if logical volume is already formatted as XFS
+  ansible.builtin.command: blkid -o value -s TYPE /dev/longhorn/data
+  register: lv_fs_type
+  changed_when: false
+  failed_when: false
+
+- name: Format logical volume as XFS
+  ansible.builtin.command: mkfs.xfs /dev/longhorn/data
+  when: lv_fs_type.stdout.strip() != 'xfs'
+
+- name: Ensure /var/lib/longhorn mount point exists
+  ansible.builtin.file:
+    path: /var/lib/longhorn
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Mount /var/lib/longhorn persistently (fstab + immediate)
+  ansible.posix.mount:
+    path: /var/lib/longhorn
+    src: /dev/longhorn/data
+    fstype: xfs
+    opts: defaults
+    state: mounted

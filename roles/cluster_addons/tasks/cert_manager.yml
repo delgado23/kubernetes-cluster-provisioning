@@ -1,0 +1,208 @@
+---
+- name: Check if Helm is installed
+  ansible.builtin.command: which helm
+  changed_when: false
+  register: helm_check
+  failed_when: false
+
+- name: Install Helm if missing
+  ansible.builtin.shell:
+    cmd: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  when: helm_check.rc != 0
+  changed_when: true
+
+- name: Add cert-manager Helm repo
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo add jetstack https://charts.jetstack.io
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+- name: Update Helm repos
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo update
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Create cert-manager namespace
+  ansible.builtin.command:
+    cmd: kubectl create namespace {{ cert_manager_namespace }} --dry-run=client -o yaml
+  register: certmgr_ns_yaml
+  changed_when: false
+
+- name: Apply cert-manager namespace
+  ansible.builtin.shell:
+    cmd: "echo '{{ certmgr_ns_yaml.stdout }}' | kubectl apply -f -"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Install or upgrade cert-manager via Helm
+  ansible.builtin.command:
+    cmd: >
+      /usr/local/bin/helm upgrade --install cert-manager jetstack/cert-manager
+      --namespace {{ cert_manager_namespace }}
+      --version {{ cert_manager_version }}
+      --set crds.enabled=true
+      --set extraArgs={--dns01-recursive-nameservers-only\,--dns01-recursive-nameservers=8.8.8.8:53\,1.1.1.1:53}
+      --wait
+      --timeout 5m
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: certmgr_output
+  changed_when: true
+
+- name: Print cert-manager install output
+  ansible.builtin.debug:
+    var: certmgr_output.stdout_lines
+
+- name: Wait for cert-manager webhook to be ready
+  ansible.builtin.command:
+    cmd: >
+      kubectl wait --for=condition=Available deployment/cert-manager-webhook
+      --namespace {{ cert_manager_namespace }}
+      --timeout=120s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Wait for cert-manager controller to be ready
+  ansible.builtin.command:
+    cmd: >
+      kubectl wait --for=condition=Available deployment/cert-manager
+      --namespace {{ cert_manager_namespace }}
+      --timeout=120s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Create Cloudflare API token secret
+  ansible.builtin.command:
+    cmd: >
+      kubectl create secret generic cloudflare-api-token
+      --namespace {{ cert_manager_namespace }}
+      --from-literal=api-token={{ vault_cloudflare_api_token }}
+      --dry-run=client -o yaml
+  register: cf_secret_yaml
+  changed_when: false
+  no_log: true
+
+- name: Apply Cloudflare API token secret
+  ansible.builtin.shell:
+    cmd: "echo '{{ cf_secret_yaml.stdout }}' | kubectl apply -f -"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+  no_log: true
+
+- name: Write ClusterIssuer manifest
+  ansible.builtin.copy:
+    dest: /tmp/clusterissuer-cloudflare.yml
+    mode: "0600"
+    content: |
+      apiVersion: cert-manager.io/v1
+      kind: ClusterIssuer
+      metadata:
+        name: letsencrypt-cloudflare
+      spec:
+        acme:
+          server: https://acme-v02.api.letsencrypt.org/directory
+          email: {{ cloudflare_email }}
+          privateKeySecretRef:
+            name: letsencrypt-cloudflare-account-key
+          solvers:
+            - dns01:
+                cloudflare:
+                  apiTokenSecretRef:
+                    name: cloudflare-api-token
+                    key: api-token
+
+- name: Apply ClusterIssuer
+  ansible.builtin.command:
+    cmd: kubectl apply -f /tmp/clusterissuer-cloudflare.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: issuer_output
+  changed_when: true
+
+- name: Print ClusterIssuer apply output
+  ansible.builtin.debug:
+    var: issuer_output.stdout_lines
+
+- name: Remove ClusterIssuer manifest
+  ansible.builtin.file:
+    path: /tmp/clusterissuer-cloudflare.yml
+    state: absent
+
+- name: Write wildcard Certificate manifest
+  ansible.builtin.copy:
+    dest: /tmp/wildcard-cert.yml
+    mode: "0600"
+    content: |
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: garaventaville-wildcard
+        namespace: {{ cert_manager_namespace }}
+      spec:
+        secretName: {{ wildcard_secret_name }}
+        issuerRef:
+          name: letsencrypt-cloudflare
+          kind: ClusterIssuer
+        commonName: "*.{{ domain }}"
+        dnsNames:
+          - "*.{{ domain }}"
+          - "{{ domain }}"
+
+- name: Apply wildcard Certificate
+  ansible.builtin.command:
+    cmd: kubectl apply -f /tmp/wildcard-cert.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: cert_output
+  changed_when: true
+
+- name: Print Certificate apply output
+  ansible.builtin.debug:
+    var: cert_output.stdout_lines
+
+- name: Remove wildcard Certificate manifest
+  ansible.builtin.file:
+    path: /tmp/wildcard-cert.yml
+    state: absent
+
+- name: Wait for wildcard certificate to be issued (up to 20 min)
+  ansible.builtin.command:
+    cmd: >
+      kubectl wait --for=condition=Ready certificate/garaventaville-wildcard
+      --namespace {{ cert_manager_namespace }}
+      --timeout=1200s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Copy wildcard secret into traefik namespace
+  ansible.builtin.shell:
+    cmd: |
+      kubectl get secret {{ wildcard_secret_name }} \
+        --namespace {{ cert_manager_namespace }} \
+        -o json \
+      | jq 'del(.metadata.namespace, .metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.annotations, .metadata.managedFields) | .metadata.namespace = "traefik"' \
+      | kubectl apply -f -
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Copy wildcard secret into longhorn-system namespace
+  ansible.builtin.shell:
+    cmd: |
+      kubectl get secret {{ wildcard_secret_name }} \
+        --namespace {{ cert_manager_namespace }} \
+        -o json \
+      | jq 'del(.metadata.namespace, .metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.annotations, .metadata.managedFields) | .metadata.namespace = "longhorn-system"' \
+      | kubectl apply -f -
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true

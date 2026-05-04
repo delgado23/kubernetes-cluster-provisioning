@@ -1,0 +1,22 @@
+---
+# =============================================================================
+# wipe.yml — Remove All Cluster Nodes from Foreman and FreeIPA
+# =============================================================================
+# Reads vars/vms.yml and removes every host from both Foreman and FreeIPA.
+# Safe to re-run — handles hosts that are already absent.
+#
+# Usage:
+#   ansible-playbook wipe.yml
+# =============================================================================
+
+- name: Remove cluster nodes from Foreman and FreeIPA
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars/vault.yml
+    - vars/vms.yml
+    - vars/foreman.yml
+    - vars/freeipa.yml
+  roles:
+    - role: cluster_cleanup

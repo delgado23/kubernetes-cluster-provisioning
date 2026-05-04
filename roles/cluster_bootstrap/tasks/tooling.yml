@@ -1,0 +1,111 @@
+---
+- name: Ensure bash-completion is installed
+  ansible.builtin.dnf:
+    name: bash-completion
+    state: present
+
+- name: Deploy kubectl bash completion to profile.d
+  ansible.builtin.copy:
+    dest: /etc/profile.d/kubectl_completion.sh
+    mode: "0644"
+    content: |
+      # kubectl bash completion
+      # Loaded for all interactive bash sessions via /etc/profile.d
+
+      # Ensure /usr/local/bin is in PATH
+      case ":${PATH}:" in
+        *":/usr/local/bin:"*) ;;
+        *) export PATH="/usr/local/bin:${PATH}" ;;
+      esac
+
+      if command -v kubectl &>/dev/null; then
+        source <(kubectl completion bash)
+      fi
+
+- name: Download Helm install script
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+    dest: /tmp/get-helm-3.sh
+    mode: "0700"
+    force: true
+
+- name: Run Helm install script
+  ansible.builtin.command:
+    cmd: /tmp/get-helm-3.sh
+  environment:
+    HELM_INSTALL_DIR: /usr/local/bin
+    USE_SUDO: "false"
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  register: helm_install_output
+  changed_when: true
+
+- name: Print Helm install output
+  ansible.builtin.debug:
+    var: helm_install_output.stdout_lines
+
+- name: Verify Helm installation
+  ansible.builtin.command:
+    cmd: helm version --short
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  register: helm_version_output
+  changed_when: false
+
+- name: Print Helm version
+  ansible.builtin.debug:
+    var: helm_version_output.stdout_lines
+
+- name: Configure Helm bash completion
+  ansible.builtin.shell: |
+    helm completion bash > /etc/bash_completion.d/helm
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  changed_when: true
+
+- name: Resolve latest k9s version from GitHub API
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/derailed/k9s/releases/latest
+    return_content: true
+    headers:
+      Accept: application/vnd.github+json
+  register: k9s_release_info
+
+- name: Set k9s version fact
+  ansible.builtin.set_fact:
+    k9s_version: "{{ k9s_release_info.json.tag_name }}"
+
+- name: Print k9s version to be installed
+  ansible.builtin.debug:
+    msg: "Installing k9s {{ k9s_version }}"
+
+- name: Download k9s RPM
+  ansible.builtin.get_url:
+    url: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/k9s_linux_amd64.rpm"
+    dest: "/tmp/k9s_linux_amd64.rpm"
+    mode: "0644"
+    force: true
+
+- name: Install k9s RPM
+  ansible.builtin.dnf:
+    name: /tmp/k9s_linux_amd64.rpm
+    state: present
+    disable_gpg_check: true
+
+- name: Verify k9s installation
+  ansible.builtin.command:
+    cmd: k9s version --short
+  register: k9s_version_output
+  changed_when: false
+
+- name: Print k9s version
+  ansible.builtin.debug:
+    var: k9s_version_output.stdout_lines
+
+- name: Configure k9s KUBECONFIG for root in bash profile
+  ansible.builtin.lineinfile:
+    path: /root/.bashrc
+    line: export KUBECONFIG=/root/.kube/config
+    regexp: '^export KUBECONFIG='
+    state: present
+    create: true
+    mode: "0644"

@@ -1,0 +1,14 @@
+---
+- name: Validate haproxy config
+  ansible.builtin.command: haproxy -f /etc/haproxy/haproxy.cfg -f /etc/haproxy/conf.d/k8s.cfg -c
+  changed_when: false
+
+- name: Restart haproxy
+  ansible.builtin.systemd:
+    name: haproxy
+    state: restarted
+
+- name: Restart keepalived
+  ansible.builtin.systemd:
+    name: keepalived
+    state: restarted
