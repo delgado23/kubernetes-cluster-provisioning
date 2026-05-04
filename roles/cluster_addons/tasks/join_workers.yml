@@ -1,0 +1,98 @@
+---
+- name: Set join command from primary control plane
+  ansible.builtin.set_fact:
+    kubeadm_join_command: "{{ hostvars[groups['k8s_role_primary'][0]]['join_command'] }}"
+
+- name: Verify kubelet service exists
+  ansible.builtin.service_facts:
+
+- name: Fail if kubelet is not installed
+  ansible.builtin.fail:
+    msg: "kubelet service not found on {{ inventory_hostname }}. Install kubeadm/kubelet first."
+  when: "'kubelet.service' not in ansible_facts.services"
+
+- name: Check if node is already part of a cluster
+  ansible.builtin.stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf
+
+- name: Skip join if node is already configured
+  ansible.builtin.debug:
+    msg: "Node {{ inventory_hostname }} already has kubelet.conf — skipping join."
+  when: kubelet_conf.stat.exists
+
+- name: Reset any previous kubeadm state (idempotent safety)
+  ansible.builtin.command: kubeadm reset --force
+  when: not kubelet_conf.stat.exists
+  changed_when: true
+
+- name: Ensure required kernel modules are loaded
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - overlay
+    - br_netfilter
+
+- name: Persist kernel modules across reboots
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+    mode: "0644"
+
+- name: Apply required sysctl parameters
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+  loop:
+    - { key: "net.bridge.bridge-nf-call-iptables",  value: "1" }
+    - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+    - { key: "net.ipv4.ip_forward",                 value: "1" }
+
+- name: Disable swap (required by kubelet)
+  ansible.builtin.command: swapoff -a
+  changed_when: true
+  when: ansible_swaptotal_mb > 0
+
+- name: Remove swap entries from /etc/fstab
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
+    replace: '# \1'
+
+- name: Enable and start kubelet
+  ansible.builtin.service:
+    name: kubelet
+    enabled: true
+    state: started
+
+- name: Join node to the cluster
+  ansible.builtin.command: "{{ kubeadm_join_command }}"
+  when: not kubelet_conf.stat.exists
+  register: join_result
+  changed_when: join_result.rc == 0
+
+- name: Show join output
+  ansible.builtin.debug:
+    var: join_result.stdout_lines
+  when:
+    - join_result is defined
+    - not kubelet_conf.stat.exists
+
+- name: Pause to allow kubelet to initialize
+  ansible.builtin.pause:
+    seconds: 15
+  when: not kubelet_conf.stat.exists
+
+- name: Confirm kubelet is running after join
+  ansible.builtin.service_facts:
+
+- name: Assert kubelet is active
+  ansible.builtin.assert:
+    that: ansible_facts.services['kubelet.service'].state == 'running'
+    fail_msg: "kubelet is NOT running on {{ inventory_hostname }} after join!"
+    success_msg: "kubelet is running on {{ inventory_hostname }}."

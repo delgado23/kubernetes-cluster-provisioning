@@ -1,0 +1,17 @@
+---
+- name: Check that kubeadm is available
+  ansible.builtin.command: which kubeadm
+  changed_when: false
+
+- name: Generate a fresh bootstrap token and join command
+  ansible.builtin.command: kubeadm token create --print-join-command
+  register: kubeadm_join_cmd
+  changed_when: true
+
+- name: Store join command as a host fact for workers to consume
+  ansible.builtin.set_fact:
+    join_command: "{{ kubeadm_join_cmd.stdout }}"
+
+- name: Display generated join command (for audit/debug)
+  ansible.builtin.debug:
+    msg: "Join command: {{ join_command }}"

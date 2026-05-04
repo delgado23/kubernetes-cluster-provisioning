@@ -1,0 +1,45 @@
+---
+# =============================================================================
+# maintenance.yml — Rolling OS Maintenance for Kubernetes Nodes
+# =============================================================================
+# Drains, updates packages, reboots, and uncordons nodes one at a time
+# for control planes and two at a time for workers.
+#
+# Usage:
+#   ansible-playbook maintenance.yml
+#   ansible-playbook maintenance.yml --limit foreman_almalinux10_kubernetesworkernode
+#   ansible-playbook maintenance.yml -e "drain_timeout=600"
+# =============================================================================
+
+- name: OS Maintenance — Control Plane Nodes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  serial: 1
+  gather_facts: true
+  become: true
+  vars:
+    drain_timeout: 300
+    drain_grace_period: 60
+    reboot_timeout: 600
+    kubectl_bin: /usr/bin/kubectl
+    kubeconfig: /etc/kubernetes/admin.conf
+    node_role: control-plane
+    delegate_kubectl: false
+  roles:
+    - role: node_maintenance
+
+- name: OS Maintenance — Worker Nodes
+  hosts: foreman_almalinux10_kubernetesworkernode
+  serial: 2
+  gather_facts: true
+  become: true
+  vars:
+    drain_timeout: 300
+    drain_grace_period: 60
+    reboot_timeout: 600
+    kubectl_bin: /usr/bin/kubectl
+    kubeconfig: /etc/kubernetes/admin.conf
+    node_role: worker
+    delegate_kubectl: true
+    control_plane_host: "{{ groups['foreman_almalinux10_kubernetescontrolplanenode'][0] }}"
+  roles:
+    - role: node_maintenance

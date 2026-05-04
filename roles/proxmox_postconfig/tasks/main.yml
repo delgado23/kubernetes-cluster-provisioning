@@ -1,0 +1,187 @@
+---
+- name: Build Proxmox auth header and base URL
+  ansible.builtin.set_fact:
+    _auth: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_api_token }}"
+    _base: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}"
+
+- name: Get full VM list from Proxmox node
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu"
+    method: GET
+    headers:
+      Authorization: "{{ _auth }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    return_content: true
+  register: proxmox_vm_list
+  delegate_to: localhost
+
+- name: Resolve short hostname (strip domain suffix)
+  ansible.builtin.set_fact:
+    short_hostname: "{{ inventory_hostname | regex_replace('\\..*$', '') }}"
+
+- name: Find VM entry matching this host
+  ansible.builtin.set_fact:
+    vm_info: >-
+      {{
+        proxmox_vm_list.json.data
+        | selectattr('name', 'defined')
+        | selectattr('name', 'search', short_hostname)
+        | list
+        | first
+      }}
+
+- name: Fail clearly if VM not found in Proxmox
+  ansible.builtin.fail:
+    msg: >
+      Could not find a VM on node '{{ proxmox_node }}' whose name
+      contains '{{ short_hostname }}'. Verify proxmox_node and that
+      the VM exists.
+  when: vm_info is not defined or vm_info | length == 0
+
+- name: Set VMID and current name as facts
+  ansible.builtin.set_fact:
+    vmid: "{{ vm_info.vmid }}"
+    vm_current_name: "{{ vm_info.name }}"
+
+- name: Display discovered VM
+  ansible.builtin.debug:
+    msg: "Matched '{{ inventory_hostname }}' → '{{ vm_current_name }}' (VMID {{ vmid }})"
+
+- name: Send ACPI shutdown signal
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/status/shutdown"
+    method: POST
+    headers:
+      Authorization: "{{ _auth }}"
+    body_format: form-urlencoded
+    body:
+      forceStop: 0
+      timeout: "{{ shutdown_timeout }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200]
+  delegate_to: localhost
+
+- name: Wait for VM to reach stopped state
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/status/current"
+    method: GET
+    headers:
+      Authorization: "{{ _auth }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    return_content: true
+  register: vm_status
+  until: vm_status.json.data.status == 'stopped'
+  retries: "{{ (shutdown_timeout / 5) | int }}"
+  delay: 5
+  delegate_to: localhost
+
+- name: Check if efidisk0 already exists
+  ansible.builtin.set_fact:
+    efidisk_exists: "{{ 'efidisk0' in vm_info }}"
+
+- name: Add EFI disk (skip if already present)
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/config"
+    method: PUT
+    headers:
+      Authorization: "{{ _auth }}"
+    body_format: form-urlencoded
+    body:
+      efidisk0: "{{ efi_storage }}:0,efitype=4m,pre-enrolled-keys=1"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200]
+  delegate_to: localhost
+  when: not efidisk_exists
+
+- name: Skip EFI disk notice (already present)
+  ansible.builtin.debug:
+    msg: "efidisk0 already exists on VMID {{ vmid }} — skipping."
+  when: efidisk_exists
+
+- name: Compute cleaned VM name
+  ansible.builtin.set_fact:
+    vm_new_name: "{{ vm_current_name | regex_replace('\\.garaventaville\\.com$', '') }}"
+
+- name: Rename VM (strip .example.com suffix)
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/config"
+    method: PUT
+    headers:
+      Authorization: "{{ _auth }}"
+    body_format: form-urlencoded
+    body:
+      name: "{{ vm_new_name }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200]
+  delegate_to: localhost
+  when: vm_new_name != vm_current_name
+
+- name: Skip rename notice (name already clean)
+  ansible.builtin.debug:
+    msg: "VM name '{{ vm_current_name }}' has no .example.com suffix — skipping."
+  when: vm_new_name == vm_current_name
+
+- name: Resolve tags for control plane nodes
+  ansible.builtin.set_fact:
+    vm_tags: "{{ controlplane_tags }}"
+  when: "'Controlplane' in foreman_hostgroup"
+
+- name: Resolve tags for worker nodes
+  ansible.builtin.set_fact:
+    vm_tags: "{{ worker_tags }}"
+  when: "'Worker' in foreman_hostgroup"
+
+- name: Fail if vm_tags could not be resolved
+  ansible.builtin.fail:
+    msg: >-
+      Could not determine Proxmox tags for '{{ inventory_hostname }}'.
+      foreman_hostgroup='{{ foreman_hostgroup }}' did not match
+      'Controlplane' or 'Worker'. Check vms.yml hostgroup values.
+  when: vm_tags is not defined
+
+- name: Apply tags to VM
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/config"
+    method: PUT
+    headers:
+      Authorization: "{{ _auth }}"
+    body_format: form-urlencoded
+    body:
+      tags: "{{ vm_tags }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200]
+  delegate_to: localhost
+
+- name: Display applied tags
+  ansible.builtin.debug:
+    msg: "Applied tags '{{ vm_tags }}' to '{{ vm_new_name }}' (VMID {{ vmid }})"
+
+- name: Start VM
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/status/start"
+    method: POST
+    headers:
+      Authorization: "{{ _auth }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200]
+  delegate_to: localhost
+
+- name: Wait for VM to reach running state
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/status/current"
+    method: GET
+    headers:
+      Authorization: "{{ _auth }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    return_content: true
+  register: vm_started
+  until: vm_started.json.data.status == 'running'
+  retries: "{{ (startup_timeout / 5) | int }}"
+  delay: 5
+  delegate_to: localhost
+
+- name: Summary
+  ansible.builtin.debug:
+    msg: >
+      VMID {{ vmid }} | Name: {{ vm_new_name }} | Tags: {{ vm_tags }}
+      | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Status: running

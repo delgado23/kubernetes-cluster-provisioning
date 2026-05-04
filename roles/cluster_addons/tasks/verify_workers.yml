@@ -1,0 +1,24 @@
+---
+- name: Wait for all worker nodes to appear as Ready
+  ansible.builtin.command: kubectl get nodes --no-headers
+  register: node_list
+  retries: 12
+  delay: 10
+  until: >-
+    groups['foreman_almalinux10_kubernetesworkernode'] | map('extract', hostvars, 'inventory_hostname') | list
+    | difference(node_list.stdout_lines | map('regex_search', '^(\S+)') | list)
+    | length == 0
+  changed_when: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
+- name: Display current node status
+  ansible.builtin.command: kubectl get nodes -o wide
+  changed_when: false
+  register: nodes_wide
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
+- name: Print node list
+  ansible.builtin.debug:
+    var: nodes_wide.stdout_lines

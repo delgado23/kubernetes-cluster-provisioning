@@ -1,0 +1,194 @@
+---
+- name: Ensure jq is installed
+  ansible.builtin.command: which jq
+  changed_when: false
+  failed_when: false
+  register: jq_check
+
+- name: Install jq if missing
+  ansible.builtin.dnf:
+    name: jq
+    state: present
+  when: jq_check.rc != 0
+
+- name: Ensure helm is installed
+  ansible.builtin.command: which helm
+  changed_when: false
+  register: helm_check
+  failed_when: false
+
+- name: Install Helm if missing
+  ansible.builtin.shell:
+    cmd: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  when: helm_check.rc != 0
+  changed_when: true
+
+- name: Add Traefik Helm repo
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo add traefik https://traefik.github.io/charts
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+- name: Update Helm repos
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo update
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Create traefik namespace
+  ansible.builtin.command:
+    cmd: kubectl create namespace {{ traefik_namespace }} --dry-run=client -o yaml
+  register: traefik_ns_yaml
+  changed_when: false
+
+- name: Apply traefik namespace
+  ansible.builtin.shell:
+    cmd: "echo '{{ traefik_ns_yaml.stdout }}' | kubectl apply -f -"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Create Traefik dashboard basic auth secret
+  ansible.builtin.command:
+    cmd: >
+      kubectl create secret generic traefik-dashboard-auth
+      --namespace {{ traefik_namespace }}
+      --from-literal=users={{ vault_traefik_dashboard_password }}
+      --dry-run=client -o yaml
+  register: traefik_auth_yaml
+  changed_when: false
+  no_log: true
+
+- name: Apply Traefik dashboard basic auth secret
+  ansible.builtin.shell:
+    cmd: "echo '{{ traefik_auth_yaml.stdout }}' | kubectl apply -f -"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+  no_log: true
+
+- name: Write Traefik Helm values
+  ansible.builtin.copy:
+    dest: /tmp/traefik-values.yml
+    mode: "0600"
+    content: |
+      deployment:
+        replicas: 2
+
+      service:
+        type: LoadBalancer
+        loadBalancerIP: "172.16.0.50"
+
+      ingressClass:
+        enabled: true
+        isDefaultClass: true
+
+      providers:
+        kubernetesCRD:
+          enabled: true
+          allowCrossNamespace: true
+        kubernetesIngress:
+          enabled: true
+
+      ports:
+        web:
+          redirectTo:
+            port: websecure
+        websecure:
+          tls:
+            enabled: true
+
+      api:
+        dashboard: true
+        insecure: false
+
+      logs:
+        general:
+          level: INFO
+        access:
+          enabled: true
+
+      persistence:
+        enabled: false
+
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+
+- name: Install or upgrade Traefik via Helm
+  ansible.builtin.command:
+    cmd: >
+      /usr/local/bin/helm upgrade --install traefik traefik/traefik
+      --namespace {{ traefik_namespace }}
+      --version {{ traefik_chart_version }}
+      --values /tmp/traefik-values.yml
+      --wait
+      --timeout 5m
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: traefik_helm_output
+  changed_when: true
+
+- name: Print Traefik Helm output
+  ansible.builtin.debug:
+    var: traefik_helm_output.stdout_lines
+
+- name: Remove Traefik values file
+  ansible.builtin.file:
+    path: /tmp/traefik-values.yml
+    state: absent
+
+- name: Write Traefik dashboard IngressRoute manifest
+  ansible.builtin.copy:
+    dest: /tmp/traefik-dashboard-ingress.yml
+    mode: "0600"
+    content: |
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: traefik-dashboard-auth
+        namespace: {{ traefik_namespace }}
+      spec:
+        basicAuth:
+          secret: traefik-dashboard-auth
+
+      ---
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: traefik-dashboard
+        namespace: {{ traefik_namespace }}
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - match: Host(`traefik.{{ domain }}`)
+            kind: Rule
+            middlewares:
+              - name: traefik-dashboard-auth
+            services:
+              - name: api@internal
+                kind: TraefikService
+        tls:
+          secretName: {{ wildcard_secret_name }}
+
+- name: Apply Traefik dashboard IngressRoute
+  ansible.builtin.command:
+    cmd: kubectl apply -f /tmp/traefik-dashboard-ingress.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: traefik_ingress_output
+  changed_when: true
+
+- name: Print Traefik IngressRoute apply output
+  ansible.builtin.debug:
+    var: traefik_ingress_output.stdout_lines
+
+- name: Remove Traefik dashboard IngressRoute manifest
+  ansible.builtin.file:
+    path: /tmp/traefik-dashboard-ingress.yml
+    state: absent

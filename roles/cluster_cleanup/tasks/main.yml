@@ -1,0 +1,24 @@
+---
+- name: Remove host from Foreman
+  theforeman.foreman.host:
+    username: "{{ foreman_user }}"
+    password: "{{ foreman_password }}"
+    server_url: "{{ foreman_url }}"
+    validate_certs: false
+    name: "{{ item.name }}.{{ foreman_domain }}"
+    state: absent
+  loop: "{{ vms }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Remove host from FreeIPA
+  community.general.ipa_host:
+    ipa_user: admin
+    ipa_pass: "{{ ipaadmin_password }}"
+    ipa_host: "{{ ipa_server }}"
+    name: "{{ item.name }}.{{ foreman_domain }}"
+    state: absent
+    update_dns: true
+  loop: "{{ vms }}"
+  loop_control:
+    label: "{{ item.name }}"
