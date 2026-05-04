@@ -1,0 +1,11 @@
+---
+proxmox_host: "pve-01.garaventaville.com:8006"
+proxmox_user: "danielgaraventa@Authentik"
+proxmox_token_id: "foreman"
+proxmox_node: "pve-01"
+proxmox_validate_certs: true
+efi_storage: "linstor"
+controlplane_tags: "k8s;controlplane"
+worker_tags: "k8s;worker"
+shutdown_timeout: 120
+startup_timeout: 120
