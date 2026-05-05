@@ -67,8 +67,16 @@
   become: true
   strategy: free
   tags: [prep]
-  roles:
-    - role: common
+  pre_tasks:
+    - name: Check if node is already in the cluster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+  tasks:
+    - name: Apply common Kubernetes prerequisites
+      ansible.builtin.include_role:
+        name: common
+      when: not kubelet_conf.stat.exists
 
 - name: Controlplane infrastructure (HAProxy, keepalived, firewall)
   hosts: foreman_almalinux10_kubernetescontrolplanenode
@@ -77,16 +85,32 @@
   tags: [prep]
   vars_files:
     - vars/vault.yml
-  roles:
-    - role: controlplane_infra
+  pre_tasks:
+    - name: Check if node is already in the cluster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+  tasks:
+    - name: Apply controlplane infrastructure
+      ansible.builtin.include_role:
+        name: controlplane_infra
+      when: not kubelet_conf.stat.exists
 
 - name: Worker node storage (LVM/Longhorn)
   hosts: foreman_almalinux10_kubernetesworkernode
   become: true
   strategy: free
   tags: [prep]
-  roles:
-    - role: worker_storage
+  pre_tasks:
+    - name: Check if node is already in the cluster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+  tasks:
+    - name: Apply worker node storage configuration
+      ansible.builtin.include_role:
+        name: worker_storage
+      when: not kubelet_conf.stat.exists
 
 
 # -----------------------------------------------------------------------------
@@ -107,6 +131,10 @@
   become: true
   gather_facts: false
   tags: [bootstrap]
+  pre_tasks:
+    - name: Skip bootstrap when only adding workers
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
   tasks:
     - name: Bootstrap primary control plane
       ansible.builtin.include_role:
@@ -119,6 +147,10 @@
   gather_facts: false
   serial: 1
   tags: [bootstrap]
+  pre_tasks:
+    - name: Skip bootstrap when only adding workers
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
   tasks:
     - name: Join secondary control plane node
       ansible.builtin.include_role:
@@ -130,6 +162,10 @@
   become: true
   gather_facts: false
   tags: [bootstrap]
+  pre_tasks:
+    - name: Skip bootstrap when only adding workers
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
   tasks:
     - name: Install kubelet-serving-cert-approver
       ansible.builtin.include_role:
@@ -141,6 +177,10 @@
   become: true
   gather_facts: false
   tags: [bootstrap]
+  pre_tasks:
+    - name: Skip bootstrap when only adding workers
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
   tasks:
     - name: Install controlplane tooling
       ansible.builtin.include_role:
@@ -152,28 +192,14 @@
 # PHASE 4: Worker Bootstrap
 # -----------------------------------------------------------------------------
 
-- name: Generate join command on primary control plane
-  hosts: k8s_role_primary
-  become: true
-  gather_facts: false
-  tags: [workers]
-  tasks:
-    - name: Generate worker join command
-      ansible.builtin.include_role:
-        name: cluster_addons
-        tasks_from: generate_join_command
-
 - name: Join worker nodes to the cluster
   hosts: foreman_almalinux10_kubernetesworkernode
   become: true
   gather_facts: true
   serial: 1
   tags: [workers]
-  tasks:
-    - name: Join worker node
-      ansible.builtin.include_role:
-        name: cluster_addons
-        tasks_from: join_workers
+  roles:
+    - role: worker_join
 
 
 # -----------------------------------------------------------------------------
@@ -185,6 +211,10 @@
   become: true
   gather_facts: false
   tags: [addons]
+  pre_tasks:
+    - name: Skip cluster add-ons when only adding worker nodes
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
   vars_files:
     - vars/vault.yml
   environment:
@@ -210,17 +240,17 @@
         name: cluster_addons
         tasks_from: metallb
 
-#    - name: Install cert-manager with Cloudflare DNS-01
-#      ansible.builtin.include_role:
-#        name: cluster_addons
-#        tasks_from: cert_manager
+    - name: Install cert-manager with Cloudflare DNS-01
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: cert_manager
 
-#    - name: Install Traefik ingress controller
-#      ansible.builtin.include_role:
-#        name: cluster_addons
-#        tasks_from: traefik
+    - name: Install Traefik ingress controller
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: traefik
 
-#    - name: Expose Longhorn UI via Traefik IngressRoute
-#      ansible.builtin.include_role:
-#        name: cluster_addons
-#        tasks_from: longhorn_ui
+    - name: Expose Longhorn UI via Traefik IngressRoute
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: longhorn_ui
