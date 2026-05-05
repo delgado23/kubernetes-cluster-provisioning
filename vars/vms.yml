@@ -27,7 +27,6 @@ controlplane_configs:
       - { name: k8s_role,            value: primary                    }
       - { name: keepalived_state,    value: MASTER                     }
       - { name: keepalived_priority, value: 101                        }
-      - { name: cluster_name,        value: naxxramas                  }
       - { name: k8s_api_endpoint,    value: k8s-api.garaventaville.com }
       - { name: k8s_api_endpoint_ip, value: 172.16.0.29                }
       - { name: metallb_pool,        value: 172.16.0.50-172.16.0.60    }
