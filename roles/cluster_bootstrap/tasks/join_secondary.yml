@@ -1,5 +1,16 @@
 ---
+- name: Check if node is already part of the cluster
+  ansible.builtin.stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf
+
+- name: Skip join if node is already in the cluster
+  ansible.builtin.debug:
+    msg: "Node {{ inventory_hostname }} already has kubelet.conf — skipping join."
+  when: kubelet_conf.stat.exists
+
 - name: Assert that primary join credentials are available
+  when: not kubelet_conf.stat.exists
   ansible.builtin.assert:
     that:
       - hostvars[groups['k8s_role_primary'][0]]['kubeadm_controlplaneendpoint'] is defined
@@ -20,10 +31,12 @@
       --certificate-key {{ hostvars[groups['k8s_role_primary'][0]]['certificate_key'] }}
   register: join_output
   changed_when: true
+  when: not kubelet_conf.stat.exists
 
 - name: Print join output
   ansible.builtin.debug:
     var: join_output.stdout_lines
+  when: not kubelet_conf.stat.exists
 
 - name: Set up kubeconfig for root
   ansible.builtin.shell: |
@@ -31,6 +44,7 @@
     cp /etc/kubernetes/admin.conf /root/.kube/config
     chown root:root /root/.kube/config
   changed_when: true
+  when: not kubelet_conf.stat.exists
 
 - name: Wait for secondary control plane to be ready
   ansible.builtin.command:
@@ -38,3 +52,4 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
+  when: not kubelet_conf.stat.exists
