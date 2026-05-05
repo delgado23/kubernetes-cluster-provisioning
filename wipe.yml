@@ -2,16 +2,12 @@
 # =============================================================================
 # wipe.yml — Remove All Cluster Nodes from Foreman and FreeIPA
 # =============================================================================
-# Builds the same node list as the provisioning pipeline from the count
-# variables and name prefixes in vars/vms.yml, then removes every host
-# from both Foreman and FreeIPA.  Safe to re-run — handles absent hosts.
-#
-# Set the same count values used during provisioning so the correct nodes
-# are targeted.  Defaults to 1 CP + 1 worker if not provided by survey.
+# Queries Foreman for all hosts whose names match the configured CP and
+# worker prefixes, then removes every found host from Foreman and FreeIPA.
+# Safe to re-run — handles absent hosts.  No count variables required.
 #
 # Usage:
 #   ansible-playbook wipe.yml
-#   ansible-playbook wipe.yml -e "controlplane_node_count=3 worker_node_count=5"
 # =============================================================================
 
 - name: Remove cluster nodes from Foreman and FreeIPA
@@ -23,27 +19,43 @@
     - vars/vms.yml
     - vars/foreman.yml
     - vars/freeipa.yml
-  vars:
-    controlplane_node_count: 1
-    worker_node_count: 1
   pre_tasks:
-    - name: Generate control plane node definitions
-      ansible.builtin.set_fact:
-        _generated_cps: >-
-          {{ _generated_cps | default([]) + [{'name': controlplane_name_prefix + '-' + '%02d' | format(idx + 1), 'hostgroup': controlplane_hostgroup, 'host_parameters': item.host_parameters}] }}
-      loop: "{{ controlplane_configs[: controlplane_node_count | int] }}"
-      loop_control:
-        index_var: idx
+    - name: Query Foreman for existing control plane nodes
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (controlplane_name_prefix + '-') | urlencode }}%22&per_page=250"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: _existing_cps_result
 
-    - name: Generate worker node definitions
-      ansible.builtin.set_fact:
-        _generated_workers: >-
-          {{ _generated_workers | default([]) + [{'name': worker_name_prefix + '-' + '%02d' | format(item), 'hostgroup': worker_hostgroup}] }}
-      loop: "{{ range(1, worker_node_count | int + 1) | list }}"
+    - name: Query Foreman for existing worker nodes
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (worker_name_prefix + '-') | urlencode }}%22&per_page=250"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: _existing_workers_result
 
-    - name: Build vms list
+    - name: Build vms list from Foreman query results
       ansible.builtin.set_fact:
-        vms: "{{ _generated_cps + _generated_workers }}"
+        vms: "{{ vms | default([]) + [{'name': item | regex_replace('\\.' + foreman_domain + '$', '')}] }}"
+      loop: >-
+        {{
+          (_existing_cps_result.json.results + _existing_workers_result.json.results)
+          | map(attribute='name') | list
+        }}
+
+    - name: Report nodes to be wiped
+      ansible.builtin.debug:
+        msg: "Will remove {{ vms | length }} node(s): {{ vms | map(attribute='name') | join(', ') }}"
 
   roles:
     - role: cluster_cleanup

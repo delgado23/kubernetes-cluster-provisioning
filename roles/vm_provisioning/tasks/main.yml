@@ -17,11 +17,35 @@
   loop_control:
     index_var: idx
 
+- name: Query Foreman for existing worker nodes
+  ansible.builtin.uri:
+    url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (worker_name_prefix + '-') | urlencode }}%22&per_page=250"
+    method: GET
+    user: "{{ foreman_user }}"
+    password: "{{ foreman_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ foreman_validate_certs }}"
+    headers:
+      Accept: application/json
+  register: _existing_workers_result
+
+- name: Determine next worker index
+  ansible.builtin.set_fact:
+    _worker_start_index: >-
+      {{
+        ((_existing_workers_result.json.results
+          | map(attribute='name')
+          | select('match', '^' + worker_name_prefix + r'-\d+\.')
+          | map('regex_replace', '^' + worker_name_prefix + r'-(\d+)\..*', '\1')
+          | map('int')
+          | list) or [0]) | max + 1
+      }}
+
 - name: Generate worker node definitions
   ansible.builtin.set_fact:
     _generated_workers: >-
       {{ _generated_workers | default([]) + [{'name': worker_name_prefix + '-' + '%02d' | format(item), 'hostgroup': worker_hostgroup}] }}
-  loop: "{{ range(1, worker_node_count | int + 1) | list }}"
+  loop: "{{ range(_worker_start_index | int, _worker_start_index | int + worker_node_count | int) | list }}"
 
 - name: Build vms list
   ansible.builtin.set_fact:
