@@ -2,11 +2,16 @@
 # =============================================================================
 # wipe.yml — Remove All Cluster Nodes from Foreman and FreeIPA
 # =============================================================================
-# Reads vars/vms.yml and removes every host from both Foreman and FreeIPA.
-# Safe to re-run — handles hosts that are already absent.
+# Builds the same node list as the provisioning pipeline from the count
+# variables and name prefixes in vars/vms.yml, then removes every host
+# from both Foreman and FreeIPA.  Safe to re-run — handles absent hosts.
+#
+# Set the same count values used during provisioning so the correct nodes
+# are targeted.  Defaults to 1 CP + 1 worker if not provided by survey.
 #
 # Usage:
 #   ansible-playbook wipe.yml
+#   ansible-playbook wipe.yml -e "controlplane_node_count=3 worker_node_count=5"
 # =============================================================================
 
 - name: Remove cluster nodes from Foreman and FreeIPA
@@ -18,5 +23,27 @@
     - vars/vms.yml
     - vars/foreman.yml
     - vars/freeipa.yml
+  vars:
+    controlplane_node_count: 1
+    worker_node_count: 1
+  pre_tasks:
+    - name: Generate control plane node definitions
+      ansible.builtin.set_fact:
+        _generated_cps: >-
+          {{ _generated_cps | default([]) + [{'name': controlplane_name_prefix + '-' + '%02d' | format(idx + 1), 'hostgroup': controlplane_hostgroup, 'host_parameters': item.host_parameters}] }}
+      loop: "{{ controlplane_configs[: controlplane_node_count | int] }}"
+      loop_control:
+        index_var: idx
+
+    - name: Generate worker node definitions
+      ansible.builtin.set_fact:
+        _generated_workers: >-
+          {{ _generated_workers | default([]) + [{'name': worker_name_prefix + '-' + '%02d' | format(item), 'hostgroup': worker_hostgroup}] }}
+      loop: "{{ range(1, worker_node_count | int + 1) | list }}"
+
+    - name: Build vms list
+      ansible.builtin.set_fact:
+        vms: "{{ _generated_cps + _generated_workers }}"
+
   roles:
     - role: cluster_cleanup
