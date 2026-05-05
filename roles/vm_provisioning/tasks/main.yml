@@ -1,13 +1,8 @@
 ---
-- name: Validate worker_node_count
-  ansible.builtin.assert:
-    that: worker_node_count | int >= 1
-    fail_msg: "worker_node_count must be at least 1, got {{ worker_node_count }}"
-
-- name: Validate controlplane_node_count
-  ansible.builtin.assert:
-    that: controlplane_node_count | int >= 1
-    fail_msg: "controlplane_node_count must be at least 1, got {{ controlplane_node_count }}"
+- name: Normalise node count variables to integers
+  ansible.builtin.set_fact:
+    controlplane_node_count: "{{ controlplane_node_count | int }}"
+    worker_node_count: "{{ worker_node_count | int }}"
 
 - name: Generate control plane node definitions
   ansible.builtin.set_fact:
