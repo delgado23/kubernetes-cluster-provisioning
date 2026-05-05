@@ -67,6 +67,17 @@
   become: true
   strategy: free
   tags: [prep]
+  pre_tasks:
+    - name: Check if node is already in the cluster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Skip already-provisioned worker nodes
+      ansible.builtin.meta: end_host
+      when:
+        - kubelet_conf.stat.exists
+        - inventory_hostname in groups['foreman_almalinux10_kubernetesworkernode']
   roles:
     - role: common
 
