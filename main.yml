@@ -234,17 +234,17 @@
         name: cluster_addons
         tasks_from: metallb
 
-    - name: Install cert-manager with Cloudflare DNS-01
-      ansible.builtin.include_role:
-        name: cluster_addons
-        tasks_from: cert_manager
+#    - name: Install cert-manager with Cloudflare DNS-01
+#      ansible.builtin.include_role:
+#        name: cluster_addons
+#        tasks_from: cert_manager
 
-    - name: Install Traefik ingress controller
-      ansible.builtin.include_role:
-        name: cluster_addons
-        tasks_from: traefik
+#    - name: Install Traefik ingress controller
+#      ansible.builtin.include_role:
+#        name: cluster_addons
+#        tasks_from: traefik
 
-    - name: Expose Longhorn UI via Traefik IngressRoute
-      ansible.builtin.include_role:
-        name: cluster_addons
-        tasks_from: longhorn_ui
+#    - name: Expose Longhorn UI via Traefik IngressRoute
+#      ansible.builtin.include_role:
+#        name: cluster_addons
+#        tasks_from: longhorn_ui
