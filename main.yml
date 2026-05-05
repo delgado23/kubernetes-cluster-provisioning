@@ -176,17 +176,6 @@
 # PHASE 4: Worker Bootstrap
 # -----------------------------------------------------------------------------
 
-- name: Generate join command on primary control plane
-  hosts: k8s_role_primary
-  become: true
-  gather_facts: false
-  tags: [workers]
-  tasks:
-    - name: Generate worker join command
-      ansible.builtin.include_role:
-        name: cluster_addons
-        tasks_from: generate_join_command
-
 - name: Join worker nodes to the cluster
   hosts: foreman_almalinux10_kubernetesworkernode
   become: true
