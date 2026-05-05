@@ -9,6 +9,12 @@
     that: controlplane_node_count | int >= 1
     fail_msg: "controlplane_node_count must be at least 1, got {{ controlplane_node_count }}"
 
+- name: Generate worker node definitions
+  ansible.builtin.set_fact:
+    _generated_workers: >-
+      {{ _generated_workers | default([]) + [{'name': worker_name_prefix + '-' + '%02d' | format(item), 'hostgroup': worker_hostgroup}] }}
+  loop: "{{ range(1, worker_node_count | int + 1) | list }}"
+
 - name: Build filtered vms list
   ansible.builtin.set_fact:
     vms: >-
@@ -21,7 +27,7 @@
                 | selectattr('host_parameters', 'defined')
                 | rejectattr('host_parameters', 'contains', {'name': 'k8s_role', 'value': 'primary'})
                 | list)[: controlplane_node_count | int - 1])
-        + ((vms | selectattr('hostgroup', 'search', 'Worker') | list)[: worker_node_count | int])
+        + _generated_workers
       }}
 
 - name: Validate VM definitions

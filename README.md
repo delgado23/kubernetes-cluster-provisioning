@@ -76,12 +76,12 @@ htpasswd -nbB admin 'yourpassword'
 
 When running via AWX/Tower, these survey variables control how many nodes are provisioned. Both default to `1` if not provided by a survey.
 
-| Variable | Type | Min | Max | Default | Description |
-|---|---|---|---|---|---|
-| `controlplane_node_count` | Integer | 1 | 3 | 1 | Number of control plane nodes to provision. The primary node (`k8s_role: primary`) is always included; the value determines how many secondaries are added (count − 1). |
-| `worker_node_count` | Integer | 1 | 13 | 1 | Number of worker nodes to provision, selected in the order they appear in `vars/vms.yml`. |
+| Variable | Type | Min | Default | Description |
+|---|---|---|---|---|
+| `controlplane_node_count` | Integer | 1 | 1 | Number of control plane nodes to provision. The primary node (`k8s_role: primary`) is always included; the value determines how many secondaries are added (count − 1). Max 3. |
+| `worker_node_count` | Integer | 1 | 1 | Number of worker nodes to provision. Foreman receives auto-generated names in the form `<worker_name_prefix>-<NN>` (e.g. `naxxramas-worker-01`). No upper bound other than Foreman capacity. |
 
-All node definitions live in `vars/vms.yml`. The `vm_provisioning` role filters that list at runtime before any Foreman API calls are made, so only the selected nodes are created.
+Control plane node definitions live in `vars/vms.yml`. Worker nodes are generated at runtime — no hardcoded list. The name prefix is set by `worker_name_prefix` in `vars/vms.yml` (default `k8s-worker` in the role).
 
 ## Usage
 
@@ -147,13 +147,15 @@ ansible-playbook wipe.yml --ask-vault-pass
 
 ## VM Definitions
 
-All available nodes are defined in `vars/vms.yml`. The `vm_provisioning` role selects a subset at runtime based on `controlplane_node_count` and `worker_node_count`.
-
-Control plane nodes must include a `host_parameters` list. The node with `k8s_role: primary` is the kubeadm bootstrap node and is always provisioned regardless of `controlplane_node_count`. Secondary nodes are selected in definition order up to `controlplane_node_count - 1`.
+Edit `vars/vms.yml` to configure nodes. Control plane nodes are defined explicitly (each has a distinct role and Foreman parameters). Worker nodes are generated at runtime — only the naming prefix and hostgroup are needed.
 
 ```yaml
+# Worker naming — adjust prefix and hostgroup to match your Foreman setup
+worker_hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+worker_name_prefix: "my-cluster-worker"   # generates my-cluster-worker-01, -02, …
+
 vms:
-  # Primary control plane — always provisioned
+  # Primary control plane — always provisioned regardless of controlplane_node_count
   - name: my-cp-01
     hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
     host_parameters:
@@ -165,17 +167,13 @@ vms:
       - { name: k8s_api_endpoint_ip, value: 172.16.0.29 }
       - { name: metallb_pool,        value: 172.16.0.50-172.16.0.60 }
 
-  # Secondary control planes — included when controlplane_node_count > 1
+  # Secondary control planes — included when controlplane_node_count > 1, in order
   - name: my-cp-02
     hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
     host_parameters:
       - { name: k8s_role,            value: secondary }
       - { name: keepalived_state,    value: BACKUP }
       - { name: keepalived_priority, value: 100 }
-
-  # Workers — included up to worker_node_count, in definition order
-  - { name: my-worker-01, hostgroup: "AlmaLinux 10/Kubernetes Worker Node" }
-  - { name: my-worker-02, hostgroup: "AlmaLinux 10/Kubernetes Worker Node" }
 ```
 
 ## Proxmox API Token Setup

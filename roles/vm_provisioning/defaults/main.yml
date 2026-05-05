@@ -4,3 +4,4 @@ build_wait_retries: 60
 build_wait_delay_seconds: 30
 worker_node_count: 1
 controlplane_node_count: 1
+worker_name_prefix: k8s-worker
