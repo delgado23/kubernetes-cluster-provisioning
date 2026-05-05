@@ -78,8 +78,8 @@ When running via AWX/Tower, these survey variables control how many nodes are pr
 
 | Variable | Type | Min | Default | Description |
 |---|---|---|---|---|
-| `controlplane_node_count` | Integer | 1 | 1 | Number of control plane nodes to provision. The first entry in `controlplane_configs` (primary) is always index 0. Names are generated as `<controlplane_name_prefix>-<NN>`. Max 3. |
-| `worker_node_count` | Integer | 1 | 1 | Number of worker nodes to provision. Names are generated as `<worker_name_prefix>-<NN>`. No upper bound other than Foreman capacity. |
+| `controlplane_node_count` | Integer | 1 | 1 | Number of control plane nodes to provision this run. The first entry in `controlplane_configs` (primary) is always index 0. Names are generated as `<controlplane_name_prefix>-<NN>`. Max 3. |
+| `worker_node_count` | Integer | 1 | 1 | Number of worker nodes to **add** this run. Before generating names, the provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
 
 Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. Name prefixes and Foreman hostgroup strings are configured in `vars/vms.yml`.
 
@@ -93,10 +93,16 @@ Run the entire pipeline end to end:
 ansible-playbook main.yml --ask-vault-pass
 ```
 
-Override node counts at the command line:
+Add 3 control plane nodes and 5 worker nodes:
 
 ```bash
 ansible-playbook main.yml --ask-vault-pass -e "controlplane_node_count=3 worker_node_count=5"
+```
+
+Scale out by adding more workers to an existing cluster (auto-detects current highest index):
+
+```bash
+ansible-playbook main.yml --tags provision --ask-vault-pass -e "controlplane_node_count=1 worker_node_count=2"
 ```
 
 ### Run a Specific Phase
@@ -139,7 +145,7 @@ ansible-playbook maintenance.yml -e "drain_timeout=600"
 
 ### Wipe Cluster
 
-Removes all nodes from Foreman and FreeIPA. Does not touch the Proxmox VMs themselves.
+Queries Foreman for all hosts matching the configured CP and worker prefixes and removes them from Foreman and FreeIPA. Finds everything regardless of how many scale-out runs were done. Does not touch the Proxmox VMs themselves.
 
 ```bash
 ansible-playbook wipe.yml --ask-vault-pass
