@@ -4,6 +4,28 @@
     controlplane_node_count: "{{ controlplane_node_count | int }}"
     worker_node_count: "{{ worker_node_count | int }}"
 
+- name: Query Foreman for existing control plane nodes
+  ansible.builtin.uri:
+    url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (controlplane_name_prefix + '-') | urlencode }}%22&per_page=250"
+    method: GET
+    user: "{{ foreman_user }}"
+    password: "{{ foreman_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ foreman_validate_certs }}"
+    headers:
+      Accept: application/json
+  register: _existing_cps_result
+
+- name: Clamp controlplane_node_count to remaining slots (max 3 total)
+  ansible.builtin.set_fact:
+    _existing_cp_count: "{{ _existing_cps_result.json.results | length }}"
+    controlplane_node_count: "{{ [controlplane_node_count | int, [3 - (_existing_cps_result.json.results | length), 0] | max] | min }}"
+
+- name: Warn if control plane node limit already reached
+  ansible.builtin.debug:
+    msg: "WARNING: {{ _existing_cp_count }} control plane node(s) already exist — no new control plane nodes will be created."
+  when: _existing_cp_count | int >= 3
+
 - name: Generate control plane node definitions
   ansible.builtin.set_fact:
     _generated_cps: >-
