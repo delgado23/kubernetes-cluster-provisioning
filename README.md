@@ -47,10 +47,20 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
     ├── controlplane_infra/    # HAProxy, keepalived, controlplane firewall rules
     ├── worker_storage/        # LVM setup for Longhorn on worker data disk
     ├── cluster_bootstrap/     # kubeadm init/join, Flannel, tooling (Helm, k9s)
-    ├── cluster_addons/        # Workers join, MetalLB, cert-manager, Traefik, Longhorn UI
+    ├── worker_join/           # Join worker nodes to the cluster
+    ├── cluster_addons/        # MetalLB, cert-manager, Traefik, Longhorn UI
     ├── node_maintenance/      # Drain, update, reboot, uncordon
     └── cluster_cleanup/       # Remove hosts from Foreman and FreeIPA
 ```
+
+## Idempotency and Scale-Out
+
+The playbook is safe to re-run against a partially or fully provisioned cluster:
+
+- **Prep phase** — each node checks for `/etc/kubernetes/kubelet.conf` before running `common`, `controlplane_infra`, and `worker_storage`. Nodes already in the cluster skip those roles entirely.
+- **Bootstrap phase** — `join_secondary` checks for `kubelet.conf` and skips the join if the node is already a cluster member. When `controlplane_node_count=0`, the entire bootstrap phase is skipped.
+- **Worker join** — workers are skipped if they already have `kubelet.conf`. The join token is generated fresh via `delegate_to` directly against a control plane node, so running with `--limit` scoped to only new workers works without needing the control plane in scope.
+- **Cluster add-ons** — skipped when `controlplane_node_count=0` (already installed on the running cluster).
 
 ## Vault Variables
 
@@ -76,10 +86,10 @@ htpasswd -nbB admin 'yourpassword'
 
 When running via AWX/Tower, these survey variables control how many nodes are provisioned. Both default to `1` if not provided by a survey.
 
-| Variable | Type | Min | Default | Description |
-|---|---|---|---|---|
-| `controlplane_node_count` | Integer | 1 | 1 | Number of control plane nodes to provision this run. The first entry in `controlplane_configs` (primary) is always index 0. Names are generated as `<controlplane_name_prefix>-<NN>`. Max 3. |
-| `worker_node_count` | Integer | 1 | 1 | Number of worker nodes to **add** this run. Before generating names, the provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `controlplane_node_count` | Integer | 1 | Number of control plane nodes to provision this run. Set to `0` when only adding worker nodes — this skips the bootstrap and cluster add-ons phases entirely. Max 3. |
+| `worker_node_count` | Integer | 1 | Number of worker nodes to add this run. The provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
 
 Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. Name prefixes and Foreman hostgroup strings are configured in `vars/vms.yml`.
 
@@ -99,10 +109,12 @@ Add 3 control plane nodes and 5 worker nodes:
 ansible-playbook main.yml --ask-vault-pass -e "controlplane_node_count=3 worker_node_count=5"
 ```
 
-Scale out by adding more workers to an existing cluster (auto-detects current highest index):
+### Adding Worker Nodes to an Existing Cluster
+
+Set `controlplane_node_count=0` to skip bootstrap and cluster add-ons. The playbook provisions the new VMs, preps them, joins them to the cluster, and stops — existing nodes that already have `kubelet.conf` are skipped during prep:
 
 ```bash
-ansible-playbook main.yml --tags provision --ask-vault-pass -e "controlplane_node_count=1 worker_node_count=2"
+ansible-playbook main.yml --ask-vault-pass -e "controlplane_node_count=0 worker_node_count=2"
 ```
 
 ### Run a Specific Phase
@@ -113,16 +125,16 @@ Each phase is tagged. You can run or skip individual phases:
 # Phase 1: Create VMs in Proxmox via Foreman
 ansible-playbook main.yml --tags provision
 
-# Phase 2: Install K8s prerequisites on all nodes
+# Phase 2: Install K8s prerequisites on all nodes (skips already-provisioned nodes)
 ansible-playbook main.yml --tags prep
 
 # Phase 3: Bootstrap control plane (kubeadm init, join secondaries, tooling)
 ansible-playbook main.yml --tags bootstrap
 
-# Phase 4: Join workers
+# Phase 4: Join workers to the cluster
 ansible-playbook main.yml --tags workers
 
-# Phase 5: Install add-ons (MetalLB, cert-manager, Traefik, Longhorn UI)
+# Phase 5: Install add-ons (MetalLB, metrics-server)
 ansible-playbook main.yml --tags addons
 
 # Skip VM provisioning for re-runs against existing nodes
