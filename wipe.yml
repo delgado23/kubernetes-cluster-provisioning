@@ -2,8 +2,9 @@
 # =============================================================================
 # wipe.yml — Remove All Cluster Nodes from Foreman and FreeIPA
 # =============================================================================
-# Reads vars/vms.yml and removes every host from both Foreman and FreeIPA.
-# Safe to re-run — handles hosts that are already absent.
+# Queries Foreman for all hosts whose names match the configured CP and
+# worker prefixes, then removes every found host from Foreman and FreeIPA.
+# Safe to re-run — handles absent hosts.  No count variables required.
 #
 # Usage:
 #   ansible-playbook wipe.yml
@@ -18,5 +19,43 @@
     - vars/vms.yml
     - vars/foreman.yml
     - vars/freeipa.yml
+  pre_tasks:
+    - name: Query Foreman for existing control plane nodes
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (controlplane_name_prefix + '-') | urlencode }}%22&per_page=250"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: _existing_cps_result
+
+    - name: Query Foreman for existing worker nodes
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (worker_name_prefix + '-') | urlencode }}%22&per_page=250"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: _existing_workers_result
+
+    - name: Build vms list from Foreman query results
+      ansible.builtin.set_fact:
+        vms: "{{ vms | default([]) + [{'name': item | regex_replace('\\.' + foreman_domain + '$', '')}] }}"
+      loop: >-
+        {{
+          (_existing_cps_result.json.results + _existing_workers_result.json.results)
+          | map(attribute='name') | list
+        }}
+
+    - name: Report nodes to be wiped
+      ansible.builtin.debug:
+        msg: "Will remove {{ vms | length }} node(s): {{ vms | map(attribute='name') | join(', ') }}"
+
   roles:
     - role: cluster_cleanup
