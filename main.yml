@@ -72,14 +72,11 @@
       ansible.builtin.stat:
         path: /etc/kubernetes/kubelet.conf
       register: kubelet_conf
-
-    - name: Skip already-provisioned worker nodes
-      ansible.builtin.meta: end_host
-      when:
-        - kubelet_conf.stat.exists
-        - inventory_hostname in groups['foreman_almalinux10_kubernetesworkernode']
-  roles:
-    - role: common
+  tasks:
+    - name: Apply common Kubernetes prerequisites
+      ansible.builtin.include_role:
+        name: common
+      when: not kubelet_conf.stat.exists
 
 - name: Controlplane infrastructure (HAProxy, keepalived, firewall)
   hosts: foreman_almalinux10_kubernetescontrolplanenode
@@ -88,16 +85,32 @@
   tags: [prep]
   vars_files:
     - vars/vault.yml
-  roles:
-    - role: controlplane_infra
+  pre_tasks:
+    - name: Check if node is already in the cluster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+  tasks:
+    - name: Apply controlplane infrastructure
+      ansible.builtin.include_role:
+        name: controlplane_infra
+      when: not kubelet_conf.stat.exists
 
 - name: Worker node storage (LVM/Longhorn)
   hosts: foreman_almalinux10_kubernetesworkernode
   become: true
   strategy: free
   tags: [prep]
-  roles:
-    - role: worker_storage
+  pre_tasks:
+    - name: Check if node is already in the cluster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+  tasks:
+    - name: Apply worker node storage configuration
+      ansible.builtin.include_role:
+        name: worker_storage
+      when: not kubelet_conf.stat.exists
 
 
 # -----------------------------------------------------------------------------
