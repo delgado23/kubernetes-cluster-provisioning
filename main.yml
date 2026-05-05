@@ -201,6 +201,19 @@
   roles:
     - role: worker_join
 
+- name: Label worker nodes
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+  tags: [workers]
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  tasks:
+    - name: Label worker nodes
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: label_workers
+
 
 # -----------------------------------------------------------------------------
 # PHASE 5: Cluster Add-ons
