@@ -2,69 +2,43 @@
 # vars/vms.yml
 # Kubernetes node definitions.
 #
-# Top-level cluster vars (shared across all nodes):
-#   cluster_name                    kubeadm cluster name
-#   k8s_api_endpoint               control plane VIP FQDN
-#   k8s_api_endpoint_ip            control plane VIP IP
-#   metallb_pool                   MetalLB address range
+# Both control plane and worker nodes are named at runtime from a prefix
+# and a counter (<prefix>-01, <prefix>-02, …).  No hardcoded hostnames.
 #
-# Per-VM keys:
-#   name        (required) short hostname, no domain suffix
-#   hostgroup   (required) Foreman hostgroup string
-#   host_parameters (optional)  list of {name, value} Foreman params
-#
-# Hostgroup anchors (edit here to rename for all nodes):
-#   &cp  →  "AlmaLinux 10/Kubernetes Controlplane Node"
-#   &wk  →  "AlmaLinux 10/Kubernetes Worker Node"
+# Control plane configs are listed primary first, then secondaries in
+# failover order.  Only the first controlplane_node_count entries are
+# provisioned; the primary is always entry [0].
 # ------------------------------------------------------------------
-# YAML anchors — single source of truth for hostgroup strings
+# Naming and hostgroup strings
 # ------------------------------------------------------------------
-_hostgroups:
-  controlplane: &cp "AlmaLinux 10/Kubernetes Controlplane Node"
-  worker:       &wk "AlmaLinux 10/Kubernetes Worker Node"
+controlplane_hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+controlplane_name_prefix: "k8s-cp"
+
+worker_hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
+worker_name_prefix: "k8s-worker"
 
 # ------------------------------------------------------------------
-# VM definitions
+# Control plane node configs — host_parameters only, names are generated
 # ------------------------------------------------------------------
-vms:
+controlplane_configs:
 
-  # --- Controlplane nodes ---
-  - name: lich-king
-    hostgroup: *cp
-    host_parameters:
+  # Primary — always provisioned (index 0)
+  - host_parameters:
       - { name: k8s_role,            value: primary                    }
       - { name: keepalived_state,    value: MASTER                     }
       - { name: keepalived_priority, value: 101                        }
-      - { name: cluster_name,        value: naxxramas                  }
       - { name: k8s_api_endpoint,    value: k8s-api.example.com }
       - { name: k8s_api_endpoint_ip, value: 172.16.0.29                }
       - { name: metallb_pool,        value: 172.16.0.50-172.16.0.60    }
 
-  - name: kel-thuzad
-    hostgroup: *cp
-    host_parameters:
+  # Secondary — provisioned when controlplane_node_count >= 2
+  - host_parameters:
       - { name: k8s_role,            value: secondary }
       - { name: keepalived_state,    value: BACKUP    }
       - { name: keepalived_priority, value: 100       }
 
-  - name: sapphiron
-    hostgroup: *cp
-    host_parameters:
+  # Secondary — provisioned when controlplane_node_count >= 3
+  - host_parameters:
       - { name: k8s_role,            value: secondary }
       - { name: keepalived_state,    value: BACKUP    }
       - { name: keepalived_priority, value: 99        }
-
-  # --- Worker nodes ---
-  - { name: noth,          hostgroup: *wk }
-  - { name: heigan,        hostgroup: *wk }
-  - { name: loatheb,       hostgroup: *wk }
-  - { name: patchwerk,     hostgroup: *wk }
-  - { name: grobbulus,     hostgroup: *wk }
-  - { name: gluth,         hostgroup: *wk }
-  - { name: thaddius,      hostgroup: *wk }
-  - { name: razuvious,     hostgroup: *wk }
-  - { name: gothik,        hostgroup: *wk }
-  - { name: four-horsemen, hostgroup: *wk }
-  - { name: anub-rekhan,   hostgroup: *wk }
-  - { name: faerlina,      hostgroup: *wk }
-  - { name: maexxna,       hostgroup: *wk }

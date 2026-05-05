@@ -1,28 +1,72 @@
 ---
-- name: Validate worker_node_count
-  ansible.builtin.assert:
-    that: worker_node_count | int >= 1
-    fail_msg: "worker_node_count must be at least 1, got {{ worker_node_count }}"
-
-- name: Validate controlplane_node_count
-  ansible.builtin.assert:
-    that: controlplane_node_count | int >= 1
-    fail_msg: "controlplane_node_count must be at least 1, got {{ controlplane_node_count }}"
-
-- name: Build filtered vms list
+- name: Normalise node count variables to integers
   ansible.builtin.set_fact:
-    vms: >-
+    controlplane_node_count: "{{ controlplane_node_count | int }}"
+    worker_node_count: "{{ worker_node_count | int }}"
+
+- name: Query Foreman for existing control plane nodes
+  ansible.builtin.uri:
+    url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (controlplane_name_prefix + '-') | urlencode }}%22&per_page=250"
+    method: GET
+    user: "{{ foreman_user }}"
+    password: "{{ foreman_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ foreman_validate_certs }}"
+    headers:
+      Accept: application/json
+  register: _existing_cps_result
+
+- name: Clamp controlplane_node_count to remaining slots (max 3 total)
+  ansible.builtin.set_fact:
+    _existing_cp_count: "{{ _existing_cps_result.json.results | length }}"
+    controlplane_node_count: "{{ [controlplane_node_count | int, [3 - (_existing_cps_result.json.results | length), 0] | max] | min }}"
+
+- name: Warn if control plane node limit already reached
+  ansible.builtin.debug:
+    msg: "WARNING: {{ _existing_cp_count }} control plane node(s) already exist — no new control plane nodes will be created."
+  when: _existing_cp_count | int >= 3
+
+- name: Generate control plane node definitions
+  ansible.builtin.set_fact:
+    _generated_cps: >-
+      {{ _generated_cps | default([]) + [{'name': controlplane_name_prefix + '-' + '%02d' | format(idx + 1), 'hostgroup': controlplane_hostgroup, 'host_parameters': item.host_parameters}] }}
+  loop: "{{ controlplane_configs[: controlplane_node_count | int] }}"
+  loop_control:
+    index_var: idx
+
+- name: Query Foreman for existing worker nodes
+  ansible.builtin.uri:
+    url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (worker_name_prefix + '-') | urlencode }}%22&per_page=250"
+    method: GET
+    user: "{{ foreman_user }}"
+    password: "{{ foreman_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ foreman_validate_certs }}"
+    headers:
+      Accept: application/json
+  register: _existing_workers_result
+
+- name: Determine next worker index
+  ansible.builtin.set_fact:
+    _worker_start_index: >-
       {{
-        (vms | selectattr('hostgroup', 'search', 'Controlplane')
-             | selectattr('host_parameters', 'defined')
-             | selectattr('host_parameters', 'contains', {'name': 'k8s_role', 'value': 'primary'})
-             | list)
-        + ((vms | selectattr('hostgroup', 'search', 'Controlplane')
-                | selectattr('host_parameters', 'defined')
-                | rejectattr('host_parameters', 'contains', {'name': 'k8s_role', 'value': 'primary'})
-                | list)[: controlplane_node_count | int - 1])
-        + ((vms | selectattr('hostgroup', 'search', 'Worker') | list)[: worker_node_count | int])
+        ((_existing_workers_result.json.results
+          | map(attribute='name')
+          | select('match', '^' + worker_name_prefix + '-\d+\.')
+          | map('regex_replace', '^' + worker_name_prefix + '-(\d+)\..*', '\1')
+          | map('int')
+          | list) or [0]) | max + 1
       }}
+
+- name: Generate worker node definitions
+  ansible.builtin.set_fact:
+    _generated_workers: >-
+      {{ _generated_workers | default([]) + [{'name': worker_name_prefix + '-' + '%02d' | format(item), 'hostgroup': worker_hostgroup}] }}
+  loop: "{{ range(_worker_start_index | int, _worker_start_index | int + worker_node_count | int) | list }}"
+
+- name: Build vms list
+  ansible.builtin.set_fact:
+    vms: "{{ (_generated_cps | default([])) + (_generated_workers | default([])) }}"
 
 - name: Validate VM definitions
   ansible.builtin.assert:
