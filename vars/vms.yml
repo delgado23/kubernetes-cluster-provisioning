@@ -2,28 +2,28 @@
 # vars/vms.yml
 # Kubernetes node definitions.
 #
-# Worker nodes are generated dynamically from worker_node_count and
-# worker_name_prefix — no hardcoded list is required. Foreman receives
-# names in the form "<prefix>-<NN>" (e.g. naxxramas-worker-01).
+# Both control plane and worker nodes are named at runtime from a prefix
+# and a counter (<prefix>-01, <prefix>-02, …).  No hardcoded hostnames.
 #
-# Control plane nodes are defined explicitly because each one carries
-# a distinct k8s_role, keepalived priority, and cluster-wide parameters
-# that must be set individually in Foreman.
+# Control plane configs are listed primary first, then secondaries in
+# failover order.  Only the first controlplane_node_count entries are
+# provisioned; the primary is always entry [0].
 # ------------------------------------------------------------------
-# Worker naming — used by the vm_provisioning role to generate the list
+# Naming and hostgroup strings
 # ------------------------------------------------------------------
+controlplane_hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
+controlplane_name_prefix: "naxxramas-cp"
+
 worker_hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
 worker_name_prefix: "naxxramas-worker"
 
 # ------------------------------------------------------------------
-# VM definitions (control plane only — workers are generated at runtime)
+# Control plane node configs — host_parameters only, names are generated
 # ------------------------------------------------------------------
-vms:
+controlplane_configs:
 
-  # --- Controlplane nodes ---
-  - name: lich-king
-    hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
-    host_parameters:
+  # Primary — always provisioned (index 0)
+  - host_parameters:
       - { name: k8s_role,            value: primary                    }
       - { name: keepalived_state,    value: MASTER                     }
       - { name: keepalived_priority, value: 101                        }
@@ -32,16 +32,14 @@ vms:
       - { name: k8s_api_endpoint_ip, value: 172.16.0.29                }
       - { name: metallb_pool,        value: 172.16.0.50-172.16.0.60    }
 
-  - name: kel-thuzad
-    hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
-    host_parameters:
+  # Secondary — provisioned when controlplane_node_count >= 2
+  - host_parameters:
       - { name: k8s_role,            value: secondary }
       - { name: keepalived_state,    value: BACKUP    }
       - { name: keepalived_priority, value: 100       }
 
-  - name: sapphiron
-    hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
-    host_parameters:
+  # Secondary — provisioned when controlplane_node_count >= 3
+  - host_parameters:
       - { name: k8s_role,            value: secondary }
       - { name: keepalived_state,    value: BACKUP    }
       - { name: keepalived_priority, value: 99        }
