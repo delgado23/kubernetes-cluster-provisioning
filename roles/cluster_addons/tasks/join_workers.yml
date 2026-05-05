@@ -1,7 +1,14 @@
 ---
-- name: Set join command from primary control plane
+- name: Generate join command from a control plane node
+  ansible.builtin.command: kubeadm token create --print-join-command
+  delegate_to: "{{ groups['foreman_almalinux10_kubernetescontrolplanenode'] | first }}"
+  register: kubeadm_join_cmd
+  run_once: true
+  changed_when: true
+
+- name: Set join command fact on all workers
   ansible.builtin.set_fact:
-    kubeadm_join_command: "{{ hostvars[groups['k8s_role_primary'][0]]['join_command'] }}"
+    kubeadm_join_command: "{{ kubeadm_join_cmd.stdout }}"
 
 - name: Verify kubelet service exists
   ansible.builtin.service_facts:
