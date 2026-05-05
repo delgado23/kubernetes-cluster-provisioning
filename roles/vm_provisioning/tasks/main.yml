@@ -30,8 +30,8 @@
       {{
         ((_existing_workers_result.json.results
           | map(attribute='name')
-          | select('match', '^' + worker_name_prefix + r'-\d+\.')
-          | map('regex_replace', '^' + worker_name_prefix + r'-(\d+)\..*', '\1')
+          | select('match', '^' + worker_name_prefix + '-\d+\.')
+          | map('regex_replace', '^' + worker_name_prefix + '-(\d+)\..*', '\1')
           | map('int')
           | list) or [0]) | max + 1
       }}
