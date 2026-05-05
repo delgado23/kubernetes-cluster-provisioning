@@ -44,7 +44,7 @@
 
 - name: Build vms list
   ansible.builtin.set_fact:
-    vms: "{{ _generated_cps + _generated_workers }}"
+    vms: "{{ (_generated_cps | default([])) + (_generated_workers | default([])) }}"
 
 - name: Validate VM definitions
   ansible.builtin.assert:
