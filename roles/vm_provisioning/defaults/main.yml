@@ -5,3 +5,4 @@ build_wait_delay_seconds: 30
 worker_node_count: 1
 controlplane_node_count: 1
 worker_name_prefix: k8s-worker
+controlplane_name_prefix: k8s-cp

@@ -9,26 +9,23 @@
     that: controlplane_node_count | int >= 1
     fail_msg: "controlplane_node_count must be at least 1, got {{ controlplane_node_count }}"
 
+- name: Generate control plane node definitions
+  ansible.builtin.set_fact:
+    _generated_cps: >-
+      {{ _generated_cps | default([]) + [{'name': controlplane_name_prefix + '-' + '%02d' | format(idx + 1), 'hostgroup': controlplane_hostgroup, 'host_parameters': item.host_parameters}] }}
+  loop: "{{ controlplane_configs[: controlplane_node_count | int] }}"
+  loop_control:
+    index_var: idx
+
 - name: Generate worker node definitions
   ansible.builtin.set_fact:
     _generated_workers: >-
       {{ _generated_workers | default([]) + [{'name': worker_name_prefix + '-' + '%02d' | format(item), 'hostgroup': worker_hostgroup}] }}
   loop: "{{ range(1, worker_node_count | int + 1) | list }}"
 
-- name: Build filtered vms list
+- name: Build vms list
   ansible.builtin.set_fact:
-    vms: >-
-      {{
-        (vms | selectattr('hostgroup', 'search', 'Controlplane')
-             | selectattr('host_parameters', 'defined')
-             | selectattr('host_parameters', 'contains', {'name': 'k8s_role', 'value': 'primary'})
-             | list)
-        + ((vms | selectattr('hostgroup', 'search', 'Controlplane')
-                | selectattr('host_parameters', 'defined')
-                | rejectattr('host_parameters', 'contains', {'name': 'k8s_role', 'value': 'primary'})
-                | list)[: controlplane_node_count | int - 1])
-        + _generated_workers
-      }}
+    vms: "{{ _generated_cps + _generated_workers }}"
 
 - name: Validate VM definitions
   ansible.builtin.assert:
