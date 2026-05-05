@@ -131,6 +131,10 @@
   become: true
   gather_facts: false
   tags: [bootstrap]
+  pre_tasks:
+    - name: Skip bootstrap when only adding workers
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
   tasks:
     - name: Bootstrap primary control plane
       ansible.builtin.include_role:
@@ -143,6 +147,10 @@
   gather_facts: false
   serial: 1
   tags: [bootstrap]
+  pre_tasks:
+    - name: Skip bootstrap when only adding workers
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
   tasks:
     - name: Join secondary control plane node
       ansible.builtin.include_role:
@@ -154,6 +162,10 @@
   become: true
   gather_facts: false
   tags: [bootstrap]
+  pre_tasks:
+    - name: Skip bootstrap when only adding workers
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
   tasks:
     - name: Install kubelet-serving-cert-approver
       ansible.builtin.include_role:
@@ -165,6 +177,10 @@
   become: true
   gather_facts: false
   tags: [bootstrap]
+  pre_tasks:
+    - name: Skip bootstrap when only adding workers
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
   tasks:
     - name: Install controlplane tooling
       ansible.builtin.include_role:
