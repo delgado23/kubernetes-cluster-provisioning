@@ -12,10 +12,10 @@
 # Naming and hostgroup strings
 # ------------------------------------------------------------------
 controlplane_hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
-controlplane_name_prefix: "naxxramas-cp"
+controlplane_name_prefix: "k8s-cp"
 
 worker_hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-worker_name_prefix: "naxxramas-worker"
+worker_name_prefix: "k8s-worker"
 
 # ------------------------------------------------------------------
 # Control plane node configs — host_parameters only, names are generated
