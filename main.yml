@@ -198,11 +198,8 @@
   gather_facts: true
   serial: 1
   tags: [workers]
-  tasks:
-    - name: Join worker node
-      ansible.builtin.include_role:
-        name: cluster_addons
-        tasks_from: join_workers
+  roles:
+    - role: worker_join
 
 
 # -----------------------------------------------------------------------------
@@ -214,6 +211,10 @@
   become: true
   gather_facts: false
   tags: [addons]
+  pre_tasks:
+    - name: Skip cluster add-ons when only adding worker nodes
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
   vars_files:
     - vars/vault.yml
   environment:
