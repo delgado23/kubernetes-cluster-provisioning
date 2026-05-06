@@ -164,8 +164,8 @@
         namespace: {{ traefik_namespace }}
       spec:
         redirectRegex:
-          regex: "^https://traefik\\.{{ ingress_domain | regex_escape }}/?$"
-          replacement: "https://traefik.{{ ingress_domain }}/dashboard/"
+          regex: '.*'
+          replacement: 'https://traefik.{{ ingress_domain }}/dashboard/'
           permanent: false
 
       ---
