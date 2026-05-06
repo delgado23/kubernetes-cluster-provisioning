@@ -1,9 +1,10 @@
 ---
-cert_manager_version: "v1.16.3"
+letsencrypt_staging: false
 cert_manager_namespace: cert-manager
 cloudflare_email: "daniel@garaventaville.com"
 domain: "garaventaville.com"
+ingress_domain: "k8s.garaventaville.com"
 wildcard_secret_name: "garaventaville-wildcard-tls"
 traefik_namespace: traefik
-traefik_chart_version: "33.2.1"
 longhorn_namespace: longhorn-system
+headlamp_namespace: headlamp

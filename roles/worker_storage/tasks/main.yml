@@ -17,12 +17,19 @@
   ansible.builtin.command: firewall-cmd --reload
   changed_when: false
 
-- name: Install LVM2 and gdisk
+- name: Install LVM2, gdisk, and iSCSI initiator (required by Longhorn)
   ansible.builtin.dnf:
     name:
       - lvm2
       - gdisk
+      - iscsi-initiator-utils
     state: present
+
+- name: Enable and start iscsid
+  ansible.builtin.systemd:
+    name: iscsid
+    enabled: true
+    state: started
 
 - name: Gather block device info with sizes in bytes (lsblk JSON)
   ansible.builtin.command: lsblk -J -b -o NAME,TYPE,SIZE,MOUNTPOINT
