@@ -154,7 +154,6 @@
         commonName: "*.{{ domain }}"
         dnsNames:
           - "*.{{ domain }}"
-          - "{{ domain }}"
 
 - name: Apply wildcard Certificate
   ansible.builtin.command:
