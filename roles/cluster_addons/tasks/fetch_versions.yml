@@ -1,0 +1,31 @@
+---
+- name: Fetch latest Longhorn release from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/longhorn/longhorn/releases/latest
+    return_content: true
+  register: longhorn_release
+
+- name: Fetch latest Traefik Helm chart release from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/traefik/traefik-helm-chart/releases/latest
+    return_content: true
+  register: traefik_release
+
+- name: Fetch latest cert-manager release from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/cert-manager/cert-manager/releases/latest
+    return_content: true
+  register: cert_manager_release
+
+- name: Set resolved addon versions
+  ansible.builtin.set_fact:
+    longhorn_version: "{{ longhorn_release.json.tag_name | regex_replace('^v', '') }}"
+    traefik_chart_version: "{{ traefik_release.json.tag_name | regex_replace('^v', '') }}"
+    cert_manager_version: "{{ cert_manager_release.json.tag_name }}"
+
+- name: Display resolved addon versions
+  ansible.builtin.debug:
+    msg:
+      - "Longhorn:      {{ longhorn_version }}"
+      - "Traefik chart: {{ traefik_chart_version }}"
+      - "cert-manager:  {{ cert_manager_version }}"
