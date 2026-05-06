@@ -90,4 +90,5 @@
       - "-----------------------------------------------------------------"
       - "Traefik dashboard : https://traefik.{{ ingress_domain }}"
       - "Longhorn dashboard: https://longhorn.{{ ingress_domain }}"
+      - "Headlamp dashboard: https://headlamp.{{ ingress_domain }}"
       - "================================================================="
