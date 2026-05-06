@@ -21,8 +21,8 @@ networking:
 apiServer:
   certSANs:
 {% for host in groups['foreman_almalinux10_kubernetescontrolplanenode'] %}
-    - "{{ hostvars[host]['ansible_fqdn'] }}"
-    - "{{ hostvars[host]['ansible_default_ipv4']['address'] }}"
+    - "{{ hostvars[host]['ansible_facts']['fqdn'] }}"
+    - "{{ hostvars[host]['ansible_facts']['default_ipv4']['address'] }}"
 {% endfor %}
     - "{{ foreman_params.k8s_api_endpoint }}"
     - "{{ foreman_params.k8s_api_endpoint_ip }}"
