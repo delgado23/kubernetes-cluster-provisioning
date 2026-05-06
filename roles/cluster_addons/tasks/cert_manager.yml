@@ -169,7 +169,6 @@
         commonName: "*.{{ ingress_domain }}"
         dnsNames:
           - "*.{{ ingress_domain }}"
-          - "{{ ingress_domain }}"
 
 - name: Apply wildcard Certificate
   ansible.builtin.command:
