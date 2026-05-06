@@ -5,6 +5,15 @@
     dest: /tmp/kubeadm-config.yml
     mode: "0644"
 
+- name: Pre-pull kubeadm images (retry on registry rate limits)
+  ansible.builtin.command:
+    cmd: kubeadm config images pull --config /tmp/kubeadm-config.yml
+  register: image_pull
+  until: image_pull.rc == 0
+  retries: 5
+  delay: 30
+  changed_when: false
+
 - name: Run kubeadm init
   ansible.builtin.command:
     cmd: kubeadm init --config /tmp/kubeadm-config.yml --upload-certs
