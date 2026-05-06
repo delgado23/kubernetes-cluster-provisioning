@@ -166,7 +166,7 @@
         entryPoints:
           - websecure
         routes:
-          - match: Host(`traefik.{{ domain }}`)
+          - match: Host(`traefik.{{ ingress_domain }}`)
             kind: Rule
             middlewares:
               - name: traefik-dashboard-auth

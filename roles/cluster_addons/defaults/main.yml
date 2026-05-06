@@ -4,6 +4,7 @@ letsencrypt_staging: false
 cert_manager_namespace: cert-manager
 cloudflare_email: "daniel@example.com"
 domain: "example.com"
+ingress_domain: "k8s.example.com"
 wildcard_secret_name: "example-com-wildcard-tls"
 traefik_namespace: traefik
 traefik_chart_version: "33.2.1"
