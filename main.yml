@@ -272,3 +272,22 @@
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: longhorn_ui
+
+# -----------------------------------------------------------------------------
+# DEBUG: Ingress diagnostics (ansible-playbook main.yml --tags debug)
+# -----------------------------------------------------------------------------
+
+- name: Ingress debug
+  hosts: k8s_role_primary
+  become: true
+  gather_facts: false
+  tags: [debug]
+  vars_files:
+    - vars/vault.yml
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  tasks:
+    - name: Run ingress diagnostics
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: debug_ingress

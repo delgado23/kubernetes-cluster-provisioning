@@ -1,0 +1,94 @@
+---
+- name: Traefik pods
+  ansible.builtin.command:
+    cmd: kubectl get pods -n traefik -o wide
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  register: out
+- ansible.builtin.debug:
+    var: out.stdout_lines
+
+- name: Traefik service (LoadBalancer IP)
+  ansible.builtin.command:
+    cmd: kubectl get svc -n traefik
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  register: out
+- ansible.builtin.debug:
+    var: out.stdout_lines
+
+- name: All IngressRoutes across namespaces
+  ansible.builtin.command:
+    cmd: kubectl get ingressroute -A
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  register: out
+- ansible.builtin.debug:
+    var: out.stdout_lines
+
+- name: All Middlewares across namespaces
+  ansible.builtin.command:
+    cmd: kubectl get middleware -A
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  register: out
+- ansible.builtin.debug:
+    var: out.stdout_lines
+
+- name: TLS secret in traefik namespace
+  ansible.builtin.command:
+    cmd: kubectl get secret {{ wildcard_secret_name }} -n traefik
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+  register: out
+- ansible.builtin.debug:
+    var: out.stdout_lines
+
+- name: TLS secret in longhorn-system namespace
+  ansible.builtin.command:
+    cmd: kubectl get secret {{ wildcard_secret_name }} -n {{ longhorn_namespace }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+  register: out
+- ansible.builtin.debug:
+    var: out.stdout_lines
+
+- name: longhorn-frontend service
+  ansible.builtin.command:
+    cmd: kubectl get svc longhorn-frontend -n {{ longhorn_namespace }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+  register: out
+- ansible.builtin.debug:
+    var: out.stdout_lines
+
+- name: cert-manager certificate status
+  ansible.builtin.command:
+    cmd: kubectl get certificate -A
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  register: out
+- ansible.builtin.debug:
+    var: out.stdout_lines
+
+- name: Traefik logs (last 50 lines)
+  ansible.builtin.command:
+    cmd: kubectl logs -n traefik deployment/traefik --tail=50
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+  register: out
+- ansible.builtin.debug:
+    var: out.stdout_lines
