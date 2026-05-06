@@ -1,6 +1,6 @@
 # Kubernetes Cluster Provisioning
 
-Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), and Longhorn storage.
+Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), Longhorn storage, and Headlamp.
 
 ## Cluster Architecture
 
@@ -9,10 +9,12 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | Control plane | 1–3 nodes (primary always included, up to 2 secondaries), HA via HAProxy + keepalived |
 | Workers | 1–13 nodes, Longhorn LVM on dedicated data disk |
 | Networking | Flannel VXLAN, MetalLB L2 LoadBalancer |
-| Ingress | Traefik v2 with TLS redirect |
-| TLS | cert-manager + Let's Encrypt + Cloudflare DNS-01 |
+| Ingress | Traefik v3 with HTTP→HTTPS redirect |
+| TLS | cert-manager + Let's Encrypt + Cloudflare DNS-01, wildcard cert for `*.ingress_domain` |
 | Storage | Longhorn with XFS LVM partition |
+| Dashboard | Headlamp (Kubernetes UI, token auth) |
 | Tooling | kubectl, Helm, k9s on all control plane nodes |
+| Addon versions | Resolved from GitHub releases at runtime — always installs latest |
 
 Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlplane_node_count` and `worker_node_count` (see [AWX Survey Variables](#awx-survey-variables)).
 
@@ -45,10 +47,10 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
     ├── proxmox_postconfig/    # EFI disk, rename, tags via Proxmox API
     ├── common/                # K8s prerequisites: containerd, kubelet, firewall
     ├── controlplane_infra/    # HAProxy, keepalived, controlplane firewall rules
-    ├── worker_storage/        # LVM setup for Longhorn on worker data disk
-    ├── cluster_bootstrap/     # kubeadm init/join, Flannel, tooling (Helm, k9s)
+    ├── worker_storage/        # LVM + XFS setup for Longhorn on worker data disk, iSCSI
+    ├── cluster_bootstrap/     # kubeadm init/join, Flannel, kubelet-serving-cert-approver, tooling
     ├── worker_join/           # Join worker nodes to the cluster
-    ├── cluster_addons/        # MetalLB, cert-manager, Traefik, Longhorn UI
+    ├── cluster_addons/        # MetalLB, Traefik, Longhorn, cert-manager, Headlamp
     ├── node_maintenance/      # Drain, update, reboot, uncordon
     └── cluster_cleanup/       # Remove hosts from Foreman and FreeIPA
 ```
@@ -58,9 +60,13 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 The playbook is safe to re-run against a partially or fully provisioned cluster:
 
 - **Prep phase** — each node checks for `/etc/kubernetes/kubelet.conf` before running `common`, `controlplane_infra`, and `worker_storage`. Nodes already in the cluster skip those roles entirely.
-- **Bootstrap phase** — `join_secondary` checks for `kubelet.conf` and skips the join if the node is already a cluster member. When `controlplane_node_count=0`, the entire bootstrap phase is skipped.
+- **Bootstrap phase** — `join_secondary` generates fresh join credentials at runtime via `delegate_to` against an existing control plane node (no cross-play hostvars required). It checks for `kubelet.conf` and skips the join if the node is already a cluster member. When `controlplane_node_count=0`, the entire bootstrap phase is skipped.
 - **Worker join** — workers are skipped if they already have `kubelet.conf`. The join token is generated fresh via `delegate_to` directly against a control plane node, so running with `--limit` scoped to only new workers works without needing the control plane in scope.
 - **Cluster add-ons** — skipped when `controlplane_node_count=0` (already installed on the running cluster).
+
+### AWX Compatibility
+
+All plays target static Foreman inventory groups. Primary vs secondary control plane targeting is done via `foreman_params.k8s_role` (an inventory variable set by the Foreman plugin) rather than dynamic groups — `group_by` and `add_host` do not reliably persist across plays in AWX's isolated executor.
 
 ## Vault Variables
 
@@ -77,10 +83,13 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `ipa_password` | FreeIPA admin password |
 | `keepalived_password` | Keepalived VRRP authentication password |
 
-Generate dashboard passwords with:
+Dashboard passwords must be htpasswd-formatted bcrypt hashes — **not raw passwords**. Traefik's BasicAuth middleware rejects raw strings and disables the route entirely (returning 404) if the format is wrong. Generate with:
+
 ```bash
 htpasswd -nbB admin 'yourpassword'
 ```
+
+The full output (e.g. `admin:$2y$05$...`) is what goes in the vault variable.
 
 ## AWX Survey Variables
 
@@ -128,17 +137,20 @@ ansible-playbook main.yml --tags provision
 # Phase 2: Install K8s prerequisites on all nodes (skips already-provisioned nodes)
 ansible-playbook main.yml --tags prep
 
-# Phase 3: Bootstrap control plane (kubeadm init, join secondaries, tooling)
+# Phase 3: Bootstrap control plane (kubeadm init, join secondaries, cert-approver, tooling)
 ansible-playbook main.yml --tags bootstrap
 
-# Phase 4: Join workers to the cluster
+# Phase 4: Join workers to the cluster and label them
 ansible-playbook main.yml --tags workers
 
-# Phase 5: Install add-ons (MetalLB, metrics-server)
+# Phase 5: Install add-ons (MetalLB, Traefik, Longhorn, cert-manager, Headlamp)
 ansible-playbook main.yml --tags addons
 
 # Skip VM provisioning for re-runs against existing nodes
 ansible-playbook main.yml --skip-tags provision
+
+# Ingress diagnostics (dump Traefik/cert state)
+ansible-playbook main.yml --tags debug
 ```
 
 ### Node Maintenance (Rolling OS Updates)
@@ -211,12 +223,21 @@ Create the token once in Proxmox before running the playbooks:
 
 ## Exposed Services
 
-After a successful run:
+After a successful run, all services are accessible via Traefik at the MetalLB LoadBalancer IP. Point `*.{{ ingress_domain }}` at that IP in Cloudflare DNS.
 
-| Service | URL |
-|---|---|
-| Traefik dashboard | `https://traefik.<domain>` |
-| Longhorn dashboard | `https://longhorn.<domain>` |
-| Kubernetes API | `https://<k8s_api_endpoint>:6443` |
+| Service | URL | Auth |
+|---|---|---|
+| Traefik dashboard | `https://traefik.{{ ingress_domain }}` | BasicAuth (vault) |
+| Longhorn dashboard | `https://longhorn.{{ ingress_domain }}` | BasicAuth (vault) |
+| Headlamp dashboard | `https://headlamp.{{ ingress_domain }}` | Kubernetes token |
+| Kubernetes API | `https://{{ k8s_api_endpoint }}:6443` | kubeconfig |
 
-Point `*.<domain>` at the Traefik MetalLB LoadBalancer IP in your DNS provider.
+`ingress_domain` defaults to `k8s.<domain>` and is configured in `roles/cluster_addons/defaults/main.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}` and is issued by Let's Encrypt via Cloudflare DNS-01.
+
+For Headlamp, generate a service account token to log in:
+
+```bash
+kubectl create serviceaccount headlamp-admin -n kube-system
+kubectl create clusterrolebinding headlamp-admin --clusterrole=cluster-admin --serviceaccount=kube-system:headlamp-admin
+kubectl create token headlamp-admin -n kube-system --duration=8760h
+```
