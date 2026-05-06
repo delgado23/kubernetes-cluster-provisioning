@@ -234,6 +234,11 @@
   environment:
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   tasks:
+    - name: Fetch latest addon versions from GitHub
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: fetch_versions
+
     - name: Verify workers are registered and Ready
       ansible.builtin.include_role:
         name: cluster_addons
