@@ -258,6 +258,11 @@
         name: cluster_addons
         tasks_from: traefik
 
+    - name: Install Longhorn distributed storage
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: longhorn
+
     - name: Install cert-manager with Cloudflare DNS-01
       ansible.builtin.include_role:
         name: cluster_addons
