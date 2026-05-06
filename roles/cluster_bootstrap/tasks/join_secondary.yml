@@ -12,13 +12,9 @@
 - name: Upload control plane certificates and capture fresh key
   ansible.builtin.command:
     cmd: kubeadm init phase upload-certs --upload-certs
-  delegate_to: >-
-    {{
-      groups['foreman_almalinux10_kubernetescontrolplanenode']
-      | difference([inventory_hostname])
-      | first
-    }}
-  become: true
+  delegate_to: "{{ groups['k8s_role_primary'][0] }}"
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
   register: upload_certs_output
   changed_when: true
   when: not kubelet_conf.stat.exists
@@ -28,16 +24,12 @@
     cp_certificate_key: "{{ upload_certs_output.stdout_lines | last | trim }}"
   when: not kubelet_conf.stat.exists
 
-- name: Generate join command from an existing control plane node
+- name: Generate fresh join command from primary control plane
   ansible.builtin.command:
     cmd: kubeadm token create --print-join-command
-  delegate_to: >-
-    {{
-      groups['foreman_almalinux10_kubernetescontrolplanenode']
-      | difference([inventory_hostname])
-      | first
-    }}
-  become: true
+  delegate_to: "{{ groups['k8s_role_primary'][0] }}"
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
   register: join_cmd_raw
   changed_when: true
   when: not kubelet_conf.stat.exists
