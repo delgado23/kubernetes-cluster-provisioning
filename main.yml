@@ -117,18 +117,8 @@
 # PHASE 3: Control Plane Bootstrap
 # -----------------------------------------------------------------------------
 
-- name: Group controlplanes by k8s_role Foreman parameter
-  hosts: foreman_almalinux10_kubernetescontrolplanenode
-  gather_facts: true
-  tags: [bootstrap, workers, addons]
-  tasks:
-    - name: Add host to k8s_role group
-      ansible.builtin.add_host:
-        name: "{{ inventory_hostname }}"
-        groups: "k8s_role_{{ foreman_params.k8s_role }}"
-
 - name: Initialize primary control plane
-  hosts: k8s_role_primary
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
   tags: [bootstrap]
@@ -136,6 +126,9 @@
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
       when: controlplane_node_count | int == 0
+    - name: Run on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
   tasks:
     - name: Bootstrap primary control plane
       ansible.builtin.include_role:
@@ -143,7 +136,7 @@
         tasks_from: init_primary
 
 - name: Join secondary control planes
-  hosts: k8s_role_secondary
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
   serial: 1
@@ -152,6 +145,9 @@
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
       when: controlplane_node_count | int == 0
+    - name: Skip non-secondary nodes
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'secondary'
   tasks:
     - name: Join secondary control plane node
       ansible.builtin.include_role:
@@ -159,7 +155,7 @@
         tasks_from: join_secondary
 
 - name: Install kubelet-serving-cert-approver
-  hosts: k8s_role_primary
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
   tags: [bootstrap]
@@ -167,6 +163,9 @@
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
       when: controlplane_node_count | int == 0
+    - name: Run on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
   tasks:
     - name: Install kubelet-serving-cert-approver
       ansible.builtin.include_role:
@@ -203,12 +202,16 @@
     - role: worker_join
 
 - name: Label worker nodes
-  hosts: k8s_role_primary
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
   tags: [workers]
   environment:
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  pre_tasks:
+    - name: Run on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
   tasks:
     - name: Label worker nodes
       ansible.builtin.include_role:
@@ -221,7 +224,7 @@
 # -----------------------------------------------------------------------------
 
 - name: Install cluster add-ons
-  hosts: k8s_role_primary
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
   tags: [addons]
@@ -229,6 +232,9 @@
     - name: Skip cluster add-ons when only adding worker nodes
       ansible.builtin.meta: end_play
       when: controlplane_node_count | int == 0
+    - name: Run add-ons on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
   vars_files:
     - vars/vault.yml
   environment:
