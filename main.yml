@@ -122,9 +122,10 @@
   gather_facts: true
   tags: [bootstrap, workers, addons]
   tasks:
-    - name: Group by k8s_role
-      ansible.builtin.group_by:
-        key: "k8s_role_{{ foreman_params.k8s_role }}"
+    - name: Add host to k8s_role group
+      ansible.builtin.add_host:
+        name: "{{ inventory_hostname }}"
+        groups: "k8s_role_{{ foreman_params.k8s_role }}"
 
 - name: Initialize primary control plane
   hosts: k8s_role_primary
