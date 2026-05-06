@@ -278,16 +278,25 @@
 # -----------------------------------------------------------------------------
 
 - name: Ingress debug
-  hosts: k8s_role_primary
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
-  gather_facts: false
+  gather_facts: true
   tags: [debug]
   vars_files:
     - vars/vault.yml
   environment:
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   tasks:
-    - name: Run ingress diagnostics
+    - name: Dump foreman_params variable
+      ansible.builtin.debug:
+        var: foreman_params
+
+    - name: Dump all groups containing this host
+      ansible.builtin.debug:
+        msg: "{{ group_names }}"
+
+    - name: Run ingress diagnostics (first CP only)
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: debug_ingress
+      run_once: true
