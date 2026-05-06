@@ -19,7 +19,7 @@
 
 - name: Fetch latest Headlamp release from GitHub
   ansible.builtin.uri:
-    url: https://api.github.com/repos/headlamp-k8s/headlamp/releases/latest
+    url: https://api.github.com/repos/kubernetes-sigs/headlamp/releases/latest
     return_content: true
   register: headlamp_release
 
