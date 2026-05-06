@@ -9,3 +9,4 @@ wildcard_secret_name: "garaventaville-wildcard-tls"
 traefik_namespace: traefik
 traefik_chart_version: "33.2.1"
 longhorn_namespace: longhorn-system
+longhorn_version: "1.7.2"
