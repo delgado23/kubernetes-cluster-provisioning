@@ -158,6 +158,18 @@
 
       ---
       apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: traefik-dashboard-redirect
+        namespace: {{ traefik_namespace }}
+      spec:
+        redirectRegex:
+          regex: "^https://traefik\\.{{ ingress_domain | regex_escape }}/?$"
+          replacement: "https://traefik.{{ ingress_domain }}/dashboard/"
+          permanent: false
+
+      ---
+      apiVersion: traefik.io/v1alpha1
       kind: IngressRoute
       metadata:
         name: traefik-dashboard
@@ -166,10 +178,17 @@
         entryPoints:
           - websecure
         routes:
-          - match: Host(`traefik.{{ ingress_domain }}`)
+          - match: Host(`traefik.{{ ingress_domain }}`) && (PathPrefix(`/dashboard`) || PathPrefix(`/api`))
             kind: Rule
             middlewares:
               - name: traefik-dashboard-auth
+            services:
+              - name: api@internal
+                kind: TraefikService
+          - match: Host(`traefik.{{ ingress_domain }}`) && Path(`/`)
+            kind: Rule
+            middlewares:
+              - name: traefik-dashboard-redirect
             services:
               - name: api@internal
                 kind: TraefikService
