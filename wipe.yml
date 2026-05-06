@@ -44,9 +44,13 @@
           Accept: application/json
       register: _existing_workers_result
 
+    - name: Initialise vms list
+      ansible.builtin.set_fact:
+        vms: []
+
     - name: Build vms list from Foreman query results
       ansible.builtin.set_fact:
-        vms: "{{ vms | default([]) + [{'name': item | regex_replace('\\.' + foreman_domain + '$', '')}] }}"
+        vms: "{{ vms + [{'name': item | regex_replace('\\.' + foreman_domain + '$', '')}] }}"
       loop: >-
         {{
           (_existing_cps_result.json.results + _existing_workers_result.json.results)

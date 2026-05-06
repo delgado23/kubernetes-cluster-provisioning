@@ -12,7 +12,14 @@
 - name: Upload control plane certificates and capture fresh key
   ansible.builtin.command:
     cmd: kubeadm init phase upload-certs --upload-certs
-  delegate_to: "{{ groups['k8s_role_primary'][0] }}"
+  delegate_to: >-
+    {{
+      groups['foreman_almalinux10_kubernetescontrolplanenode']
+      | map('extract', hostvars)
+      | selectattr('foreman_params.k8s_role', 'equalto', 'primary')
+      | map(attribute='inventory_hostname')
+      | first
+    }}
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
   register: upload_certs_output
@@ -27,7 +34,14 @@
 - name: Generate fresh join command from primary control plane
   ansible.builtin.command:
     cmd: kubeadm token create --print-join-command
-  delegate_to: "{{ groups['k8s_role_primary'][0] }}"
+  delegate_to: >-
+    {{
+      groups['foreman_almalinux10_kubernetescontrolplanenode']
+      | map('extract', hostvars)
+      | selectattr('foreman_params.k8s_role', 'equalto', 'primary')
+      | map(attribute='inventory_hostname')
+      | first
+    }}
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
   register: join_cmd_raw
