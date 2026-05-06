@@ -215,8 +215,8 @@ After a successful run:
 
 | Service | URL |
 |---|---|
-| Traefik dashboard | `https://traefik.<domain>` |
-| Longhorn dashboard | `https://longhorn.<domain>` |
+| Traefik dashboard | `https://traefik.k8s.<domain>` |
+| Longhorn dashboard | `https://longhorn.k8s.<domain>` |
 | Kubernetes API | `https://<k8s_api_endpoint>:6443` |
 
-Point `*.<domain>` at the Traefik MetalLB LoadBalancer IP in your DNS provider.
+Point `*.k8s.<domain>` at the Traefik MetalLB LoadBalancer IP in your DNS provider. The wildcard cert covers `*.k8s.<domain>` — configured via `ingress_domain` in `roles/cluster_addons/defaults/main.yml`.

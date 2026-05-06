@@ -166,9 +166,10 @@
         issuerRef:
           name: {{ _issuer_name }}
           kind: ClusterIssuer
-        commonName: "*.{{ domain }}"
+        commonName: "*.{{ ingress_domain }}"
         dnsNames:
-          - "*.{{ domain }}"
+          - "*.{{ ingress_domain }}"
+          - "{{ ingress_domain }}"
 
 - name: Apply wildcard Certificate
   ansible.builtin.command:
