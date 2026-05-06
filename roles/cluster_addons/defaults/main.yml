@@ -7,3 +7,4 @@ ingress_domain: "k8s.garaventaville.com"
 wildcard_secret_name: "garaventaville-wildcard-tls"
 traefik_namespace: traefik
 longhorn_namespace: longhorn-system
+headlamp_namespace: headlamp

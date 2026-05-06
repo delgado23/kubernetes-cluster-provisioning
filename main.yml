@@ -274,6 +274,11 @@
         name: cluster_addons
         tasks_from: cert_manager
 
+    - name: Install Headlamp Kubernetes dashboard
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: headlamp
+
     - name: Expose Longhorn UI via Traefik IngressRoute
       ansible.builtin.include_role:
         name: cluster_addons

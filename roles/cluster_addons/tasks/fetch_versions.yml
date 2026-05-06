@@ -17,11 +17,18 @@
     return_content: true
   register: cert_manager_release
 
+- name: Fetch latest Headlamp release from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/headlamp-k8s/headlamp/releases/latest
+    return_content: true
+  register: headlamp_release
+
 - name: Set resolved addon versions
   ansible.builtin.set_fact:
     longhorn_version: "{{ longhorn_release.json.tag_name | regex_replace('^v', '') }}"
     traefik_chart_version: "{{ traefik_release.json.tag_name | regex_replace('^v', '') }}"
     cert_manager_version: "{{ cert_manager_release.json.tag_name }}"
+    headlamp_version: "{{ headlamp_release.json.tag_name | regex_replace('^v', '') }}"
 
 - name: Display resolved addon versions
   ansible.builtin.debug:
@@ -29,3 +36,4 @@
       - "Longhorn:      {{ longhorn_version }}"
       - "Traefik chart: {{ traefik_chart_version }}"
       - "cert-manager:  {{ cert_manager_version }}"
+      - "Headlamp:      {{ headlamp_version }}"
