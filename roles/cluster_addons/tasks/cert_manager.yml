@@ -97,6 +97,21 @@
   changed_when: true
   no_log: true
 
+- name: Set Let's Encrypt ACME endpoint and issuer name
+  ansible.builtin.set_fact:
+    _acme_server: >-
+      {{ 'https://acme-staging-v02.api.letsencrypt.org/directory'
+         if letsencrypt_staging | bool
+         else 'https://acme-v02.api.letsencrypt.org/directory' }}
+    _issuer_name: >-
+      {{ 'letsencrypt-cloudflare-staging'
+         if letsencrypt_staging | bool
+         else 'letsencrypt-cloudflare' }}
+    _issuer_key_secret: >-
+      {{ 'letsencrypt-cloudflare-staging-account-key'
+         if letsencrypt_staging | bool
+         else 'letsencrypt-cloudflare-account-key' }}
+
 - name: Write ClusterIssuer manifest
   ansible.builtin.copy:
     dest: /tmp/clusterissuer-cloudflare.yml
@@ -105,13 +120,13 @@
       apiVersion: cert-manager.io/v1
       kind: ClusterIssuer
       metadata:
-        name: letsencrypt-cloudflare
+        name: {{ _issuer_name }}
       spec:
         acme:
-          server: https://acme-v02.api.letsencrypt.org/directory
+          server: {{ _acme_server }}
           email: {{ cloudflare_email }}
           privateKeySecretRef:
-            name: letsencrypt-cloudflare-account-key
+            name: {{ _issuer_key_secret }}
           solvers:
             - dns01:
                 cloudflare:
@@ -149,12 +164,11 @@
       spec:
         secretName: {{ wildcard_secret_name }}
         issuerRef:
-          name: letsencrypt-cloudflare
+          name: {{ _issuer_name }}
           kind: ClusterIssuer
-        commonName: "*.{{ domain }}"
+        commonName: "*.{{ ingress_domain }}"
         dnsNames:
-          - "*.{{ domain }}"
-          - "{{ domain }}"
+          - "*.{{ ingress_domain }}"
 
 - name: Apply wildcard Certificate
   ansible.builtin.command:
@@ -183,26 +197,29 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
-- name: Copy wildcard secret into traefik namespace
+- name: Ensure target namespaces exist for secret copy
   ansible.builtin.shell:
-    cmd: |
-      kubectl get secret {{ wildcard_secret_name }} \
-        --namespace {{ cert_manager_namespace }} \
-        -o json \
-      | jq 'del(.metadata.namespace, .metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.annotations, .metadata.managedFields) | .metadata.namespace = "traefik"' \
-      | kubectl apply -f -
+    cmd: kubectl create namespace {{ item }} --dry-run=client -o yaml | kubectl apply -f -
   environment:
     KUBECONFIG: /root/.kube/config
-  changed_when: true
+  loop:
+    - "{{ traefik_namespace }}"
+    - "{{ longhorn_namespace }}"
+    - "{{ headlamp_namespace }}"
+  changed_when: false
 
-- name: Copy wildcard secret into longhorn-system namespace
+- name: Copy wildcard secret into addon namespaces
   ansible.builtin.shell:
     cmd: |
       kubectl get secret {{ wildcard_secret_name }} \
         --namespace {{ cert_manager_namespace }} \
         -o json \
-      | jq 'del(.metadata.namespace, .metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.annotations, .metadata.managedFields) | .metadata.namespace = "longhorn-system"' \
+      | jq 'del(.metadata.namespace, .metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.annotations, .metadata.managedFields) | .metadata.namespace = "{{ item }}"' \
       | kubectl apply -f -
   environment:
     KUBECONFIG: /root/.kube/config
+  loop:
+    - "{{ traefik_namespace }}"
+    - "{{ longhorn_namespace }}"
+    - "{{ headlamp_namespace }}"
   changed_when: true

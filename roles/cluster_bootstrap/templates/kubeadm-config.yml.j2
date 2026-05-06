@@ -1,4 +1,4 @@
-apiVersion: kubeadm.k8s.io/v1beta3
+apiVersion: kubeadm.k8s.io/v1beta4
 kind: InitConfiguration
 bootstrapTokens:
 - groups:
@@ -9,9 +9,10 @@ bootstrapTokens:
   - authentication
 nodeRegistration:
   kubeletExtraArgs:
-    rotate-server-certificates: "true"
+    - name: rotate-server-certificates
+      value: "true"
 ---
-apiVersion: kubeadm.k8s.io/v1beta3
+apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
 controlPlaneEndpoint: "{{ foreman_params.k8s_api_endpoint }}:6443"
 networking:
@@ -20,8 +21,8 @@ networking:
 apiServer:
   certSANs:
 {% for host in groups['foreman_almalinux10_kubernetescontrolplanenode'] %}
-    - "{{ hostvars[host]['ansible_fqdn'] }}"
-    - "{{ hostvars[host]['ansible_default_ipv4']['address'] }}"
+    - "{{ hostvars[host]['ansible_facts']['fqdn'] }}"
+    - "{{ hostvars[host]['ansible_facts']['default_ipv4']['address'] }}"
 {% endfor %}
     - "{{ foreman_params.k8s_api_endpoint }}"
     - "{{ foreman_params.k8s_api_endpoint_ip }}"
