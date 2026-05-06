@@ -95,11 +95,11 @@
 
       ports:
         web:
-          redirectTo:
-            port: websecure
-        websecure:
-          tls:
-            enabled: true
+          redirections:
+            entryPoint:
+              to: websecure
+              scheme: https
+              permanent: true
 
       api:
         dashboard: true
