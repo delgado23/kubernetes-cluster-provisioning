@@ -117,17 +117,8 @@
 # PHASE 3: Control Plane Bootstrap
 # -----------------------------------------------------------------------------
 
-- name: Group controlplanes by k8s_role Foreman parameter
-  hosts: foreman_almalinux10_kubernetescontrolplanenode
-  gather_facts: true
-  tags: [bootstrap, workers, addons]
-  tasks:
-    - name: Group by k8s_role
-      ansible.builtin.group_by:
-        key: "k8s_role_{{ foreman_params.k8s_role }}"
-
 - name: Initialize primary control plane
-  hosts: k8s_role_primary
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
   tags: [bootstrap]
@@ -135,6 +126,9 @@
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
       when: controlplane_node_count | int == 0
+    - name: Run on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
   tasks:
     - name: Bootstrap primary control plane
       ansible.builtin.include_role:
@@ -142,7 +136,7 @@
         tasks_from: init_primary
 
 - name: Join secondary control planes
-  hosts: k8s_role_secondary
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
   serial: 1
@@ -151,6 +145,9 @@
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
       when: controlplane_node_count | int == 0
+    - name: Skip non-secondary nodes
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'secondary'
   tasks:
     - name: Join secondary control plane node
       ansible.builtin.include_role:
@@ -158,7 +155,7 @@
         tasks_from: join_secondary
 
 - name: Install kubelet-serving-cert-approver
-  hosts: k8s_role_primary
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
   tags: [bootstrap]
@@ -166,6 +163,9 @@
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
       when: controlplane_node_count | int == 0
+    - name: Run on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
   tasks:
     - name: Install kubelet-serving-cert-approver
       ansible.builtin.include_role:
@@ -201,13 +201,30 @@
   roles:
     - role: worker_join
 
+- name: Label worker nodes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  gather_facts: false
+  tags: [workers]
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  pre_tasks:
+    - name: Run on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
+  tasks:
+    - name: Label worker nodes
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: label_workers
+
 
 # -----------------------------------------------------------------------------
 # PHASE 5: Cluster Add-ons
 # -----------------------------------------------------------------------------
 
 - name: Install cluster add-ons
-  hosts: k8s_role_primary
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
   tags: [addons]
@@ -215,11 +232,19 @@
     - name: Skip cluster add-ons when only adding worker nodes
       ansible.builtin.meta: end_play
       when: controlplane_node_count | int == 0
+    - name: Run add-ons on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
   vars_files:
     - vars/vault.yml
   environment:
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   tasks:
+    - name: Fetch latest addon versions from GitHub
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: fetch_versions
+
     - name: Verify workers are registered and Ready
       ansible.builtin.include_role:
         name: cluster_addons
@@ -240,17 +265,55 @@
         name: cluster_addons
         tasks_from: metallb
 
-    - name: Install cert-manager with Cloudflare DNS-01
-      ansible.builtin.include_role:
-        name: cluster_addons
-        tasks_from: cert_manager
-
     - name: Install Traefik ingress controller
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: traefik
 
+    - name: Install Longhorn distributed storage
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: longhorn
+
+    - name: Install cert-manager with Cloudflare DNS-01
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: cert_manager
+
+    - name: Install Headlamp Kubernetes dashboard
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: headlamp
+
     - name: Expose Longhorn UI via Traefik IngressRoute
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: longhorn_ui
+
+# -----------------------------------------------------------------------------
+# DEBUG: Ingress diagnostics (ansible-playbook main.yml --tags debug)
+# -----------------------------------------------------------------------------
+
+- name: Ingress debug
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  gather_facts: true
+  tags: [debug]
+  vars_files:
+    - vars/vault.yml
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  tasks:
+    - name: Dump foreman_params variable
+      ansible.builtin.debug:
+        var: foreman_params
+
+    - name: Dump all groups containing this host
+      ansible.builtin.debug:
+        msg: "{{ group_names }}"
+
+    - name: Run ingress diagnostics (first CP only)
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: debug_ingress
+      run_once: true

@@ -1,0 +1,73 @@
+---
+- name: Add Headlamp Helm repo
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+- name: Update Helm repos
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo update
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Install or upgrade Headlamp via Helm
+  ansible.builtin.command:
+    cmd: >
+      /usr/local/bin/helm upgrade --install headlamp headlamp/headlamp
+      --namespace {{ headlamp_namespace }}
+      --create-namespace
+      --version {{ headlamp_version }}
+      --set service.type=ClusterIP
+      --wait
+      --timeout 5m
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: headlamp_helm_output
+  changed_when: true
+
+- name: Print Headlamp Helm output
+  ansible.builtin.debug:
+    var: headlamp_helm_output.stdout_lines
+
+- name: Write Headlamp IngressRoute manifest
+  ansible.builtin.copy:
+    dest: /tmp/headlamp-ingress.yml
+    mode: "0600"
+    content: |
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: headlamp
+        namespace: {{ headlamp_namespace }}
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - match: Host(`headlamp.{{ ingress_domain }}`)
+            kind: Rule
+            services:
+              - name: headlamp
+                port: 80
+        tls:
+          secretName: {{ wildcard_secret_name }}
+
+- name: Apply Headlamp IngressRoute
+  ansible.builtin.command:
+    cmd: kubectl apply -f /tmp/headlamp-ingress.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: headlamp_ingress_output
+  changed_when: true
+
+- name: Print Headlamp IngressRoute apply output
+  ansible.builtin.debug:
+    var: headlamp_ingress_output.stdout_lines
+
+- name: Remove Headlamp IngressRoute manifest
+  ansible.builtin.file:
+    path: /tmp/headlamp-ingress.yml
+    state: absent
