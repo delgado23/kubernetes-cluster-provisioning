@@ -9,26 +9,48 @@
     msg: "Node {{ inventory_hostname }} already has kubelet.conf — skipping join."
   when: kubelet_conf.stat.exists
 
-- name: Assert that primary join credentials are available
+- name: Upload control plane certificates and capture fresh key
+  ansible.builtin.command:
+    cmd: kubeadm init phase upload-certs --upload-certs
+  delegate_to: >-
+    {{
+      groups['foreman_almalinux10_kubernetescontrolplanenode']
+      | difference([inventory_hostname])
+      | first
+    }}
+  become: true
+  register: upload_certs_output
+  changed_when: true
   when: not kubelet_conf.stat.exists
-  ansible.builtin.assert:
-    that:
-      - hostvars[groups['k8s_role_primary'][0]]['kubeadm_controlplaneendpoint'] is defined
-      - hostvars[groups['k8s_role_primary'][0]]['join_token'] is defined
-      - hostvars[groups['k8s_role_primary'][0]]['discovery_hash'] is defined
-      - hostvars[groups['k8s_role_primary'][0]]['certificate_key'] is defined
-    fail_msg: >-
-      One or more join credentials are missing from the primary node's hostvars.
-      Ensure the init_primary tasks completed successfully before running join_secondary.
+
+- name: Extract certificate key from upload output
+  ansible.builtin.set_fact:
+    cp_certificate_key: "{{ upload_certs_output.stdout_lines | last | trim }}"
+  when: not kubelet_conf.stat.exists
+
+- name: Generate join command from an existing control plane node
+  ansible.builtin.command:
+    cmd: kubeadm token create --print-join-command
+  delegate_to: >-
+    {{
+      groups['foreman_almalinux10_kubernetescontrolplanenode']
+      | difference([inventory_hostname])
+      | first
+    }}
+  become: true
+  register: join_cmd_raw
+  changed_when: true
+  when: not kubelet_conf.stat.exists
+
+- name: Build control plane join command
+  ansible.builtin.set_fact:
+    kubeadm_cp_join_command: >-
+      {{ join_cmd_raw.stdout | trim }} --control-plane --certificate-key {{ cp_certificate_key }}
+  when: not kubelet_conf.stat.exists
 
 - name: Join cluster as control plane
   ansible.builtin.command:
-    cmd: >
-      kubeadm join {{ hostvars[groups['k8s_role_primary'][0]]['kubeadm_controlplaneendpoint'] }}
-      --token {{ hostvars[groups['k8s_role_primary'][0]]['join_token'] }}
-      --discovery-token-ca-cert-hash {{ hostvars[groups['k8s_role_primary'][0]]['discovery_hash'] }}
-      --control-plane
-      --certificate-key {{ hostvars[groups['k8s_role_primary'][0]]['certificate_key'] }}
+    cmd: "{{ kubeadm_cp_join_command }}"
   register: join_output
   changed_when: true
   when: not kubelet_conf.stat.exists
