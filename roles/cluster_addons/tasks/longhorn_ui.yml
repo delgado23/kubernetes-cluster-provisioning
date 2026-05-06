@@ -42,7 +42,7 @@
         entryPoints:
           - websecure
         routes:
-          - match: Host(`longhorn.{{ domain }}`)
+          - match: Host(`longhorn.{{ ingress_domain }}`)
             kind: Rule
             middlewares:
               - name: longhorn-dashboard-auth
@@ -86,8 +86,8 @@
       - "================================================================="
       - "Cluster ingress setup complete."
       - "Traefik LoadBalancer IP : {{ traefik_lb_ip.stdout }}"
-      - "Point *.{{ domain }} at this IP in Cloudflare DNS."
+      - "Point *.{{ ingress_domain }} at this IP in Cloudflare DNS."
       - "-----------------------------------------------------------------"
-      - "Traefik dashboard : https://traefik.{{ domain }}"
-      - "Longhorn dashboard: https://longhorn.{{ domain }}"
+      - "Traefik dashboard : https://traefik.{{ ingress_domain }}"
+      - "Longhorn dashboard: https://longhorn.{{ ingress_domain }}"
       - "================================================================="
