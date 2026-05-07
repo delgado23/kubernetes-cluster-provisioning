@@ -71,6 +71,7 @@
     mkdir -p /root/.kube
     cp /etc/kubernetes/admin.conf /root/.kube/config
     chown root:root /root/.kube/config
+    chmod 0600 /root/.kube/config
   changed_when: true
   when: not kubelet_conf.stat.exists
 

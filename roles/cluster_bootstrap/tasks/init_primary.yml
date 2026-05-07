@@ -3,7 +3,7 @@
   ansible.builtin.template:
     src: kubeadm-config.yml.j2
     dest: /tmp/kubeadm-config.yml
-    mode: "0644"
+    mode: "0600"
 
 - name: Pre-pull kubeadm images (retry on registry rate limits)
   ansible.builtin.command:
@@ -24,16 +24,34 @@
   ansible.builtin.debug:
     var: kubeadm_init_output.stdout_lines
 
+- name: Remove kubeadm config from tmp
+  ansible.builtin.file:
+    path: /tmp/kubeadm-config.yml
+    state: absent
+
 - name: Set up kubeconfig for root
   ansible.builtin.shell: |
     mkdir -p /root/.kube
     cp /etc/kubernetes/admin.conf /root/.kube/config
     chown root:root /root/.kube/config
+    chmod 0600 /root/.kube/config
   changed_when: true
+
+- name: Fetch latest Flannel release from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/flannel-io/flannel/releases/latest
+    return_content: true
+  register: flannel_release
+  delegate_to: localhost
+  become: false
+
+- name: Set Flannel version fact
+  ansible.builtin.set_fact:
+    flannel_version: "{{ flannel_release.json.tag_name }}"
 
 - name: Install Flannel CNI
   ansible.builtin.command:
-    cmd: kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+    cmd: kubectl apply -f https://github.com/flannel-io/flannel/releases/download/{{ flannel_version }}/kube-flannel.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: flannel_output

@@ -3,6 +3,7 @@
   ansible.builtin.set_fact:
     _auth: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_api_token }}"
     _base: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}"
+  no_log: true
 
 - name: Get full VM list from Proxmox node
   ansible.builtin.uri:

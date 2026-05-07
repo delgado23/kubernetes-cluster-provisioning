@@ -81,7 +81,7 @@
     - name: Wait for local API server to become healthy
       ansible.builtin.uri:
         url: https://127.0.0.1:6443/healthz
-        validate_certs: false
+        ca_path: /etc/kubernetes/pki/ca.crt
         status_code: 200
       register: apiserver_health
       retries: 24
@@ -93,6 +93,7 @@
         cmd: |
           cp /etc/kubernetes/admin.conf /root/.kube/config
           chown root:root /root/.kube/config
+          chmod 0600 /root/.kube/config
       changed_when: true
 
     - name: Wait for this node to show Ready
