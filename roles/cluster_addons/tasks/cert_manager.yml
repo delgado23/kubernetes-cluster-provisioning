@@ -1,15 +1,8 @@
 ---
-- name: Check if Helm is installed
-  ansible.builtin.command: which helm
-  changed_when: false
-  register: helm_check
-  failed_when: false
-
-- name: Install Helm if missing
-  ansible.builtin.shell:
-    cmd: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-  when: helm_check.rc != 0
-  changed_when: true
+- name: Ensure jq is installed
+  ansible.builtin.dnf:
+    name: jq
+    state: present
 
 - name: Add cert-manager Helm repo
   ansible.builtin.command:

@@ -1,4 +1,10 @@
 ---
+- name: Fetch latest Flannel release from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/flannel-io/flannel/releases/latest
+    return_content: true
+  register: flannel_release
+
 - name: Fetch latest Longhorn release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/longhorn/longhorn/releases/latest
@@ -25,6 +31,7 @@
 
 - name: Set resolved addon versions
   ansible.builtin.set_fact:
+    flannel_version: "{{ flannel_release.json.tag_name }}"
     longhorn_version: "{{ longhorn_release.json.tag_name | regex_replace('^v', '') }}"
     traefik_chart_version: "{{ traefik_release.json.tag_name | regex_replace('^v', '') }}"
     cert_manager_version: "{{ cert_manager_release.json.tag_name }}"
@@ -33,6 +40,7 @@
 - name: Display resolved addon versions
   ansible.builtin.debug:
     msg:
+      - "Flannel:       {{ flannel_version }}"
       - "Longhorn:      {{ longhorn_version }}"
       - "Traefik chart: {{ traefik_chart_version }}"
       - "cert-manager:  {{ cert_manager_version }}"
