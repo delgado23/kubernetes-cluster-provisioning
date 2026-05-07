@@ -13,5 +13,5 @@ backend kubernetes-backend
     timeout connect 10s
     timeout server  1m
 {% for host in groups['foreman_almalinux10_kubernetescontrolplanenode'] %}
-    server {{ hostvars[host]['ansible_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:6443 check fall 3 rise 2
+    server {{ hostvars[host]['ansible_facts']['hostname'] }} {{ hostvars[host]['ansible_facts']['default_ipv4']['address'] }}:6443 check fall 3 rise 2
 {% endfor %}
