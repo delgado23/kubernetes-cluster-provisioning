@@ -63,7 +63,7 @@
 - name: Disable swap (required by kubelet)
   ansible.builtin.command: swapoff -a
   changed_when: true
-  when: ansible_swaptotal_mb > 0
+  when: ansible_facts['swaptotal_mb'] > 0
 
 - name: Remove swap entries from /etc/fstab
   ansible.builtin.replace:
