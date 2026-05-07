@@ -153,6 +153,19 @@ ansible-playbook main.yml --skip-tags provision
 ansible-playbook main.yml --tags debug
 ```
 
+### Renew Control Plane Certificates
+
+kubeadm certificates expire after 1 year. Run this before expiry or whenever `kubeadm certs check-expiration` shows certs approaching their deadline. Processes one control plane at a time so the cluster stays available throughout.
+
+```bash
+ansible-playbook renew-certs.yml
+
+# Single node only
+ansible-playbook renew-certs.yml --limit k8s-cp-01.garaventaville.com
+```
+
+Covers all kubeadm-managed certs (apiserver, etcd, front-proxy, admin/controller-manager/scheduler kubeconfigs). Does **not** touch CA certs (10-year lifetime), kubelet client certs (auto-rotated by kubelet), or kubelet serving certs (handled by kubelet-serving-cert-approver).
+
 ### Node Maintenance (Rolling OS Updates)
 
 Drains, updates packages, reboots, and uncordons nodes. Control planes are rolled one at a time; workers two at a time.
