@@ -1,0 +1,36 @@
+---
+- name: Apply Pod Security Standards namespace labels
+  ansible.builtin.command:
+    cmd: >
+      kubectl label namespace {{ item.ns }}
+      pod-security.kubernetes.io/enforce={{ item.enforce }}
+      pod-security.kubernetes.io/enforce-version=latest
+      pod-security.kubernetes.io/warn={{ item.warn }}
+      pod-security.kubernetes.io/warn-version=latest
+      pod-security.kubernetes.io/audit={{ item.warn }}
+      pod-security.kubernetes.io/audit-version=latest
+      --overwrite
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop:
+    - { ns: "{{ longhorn_namespace }}",    enforce: privileged, warn: privileged }
+    - { ns: metallb-system,                enforce: privileged, warn: privileged }
+    - { ns: "{{ traefik_namespace }}",     enforce: baseline,   warn: restricted }
+    - { ns: "{{ cert_manager_namespace }}", enforce: restricted, warn: restricted }
+    - { ns: "{{ headlamp_namespace }}",    enforce: restricted, warn: restricted }
+    - { ns: "{{ argocd_namespace }}",      enforce: baseline,   warn: restricted }
+    - { ns: default,                        enforce: baseline,   warn: restricted }
+  changed_when: true
+
+- name: Print Pod Security Standards summary
+  ansible.builtin.debug:
+    msg:
+      - "Pod Security Standards applied."
+      - "longhorn-system : privileged (storage requires host privileges)"
+      - "metallb-system  : privileged (speaker requires host networking)"
+      - "traefik         : baseline enforce, restricted warn/audit"
+      - "cert-manager    : restricted enforce/warn/audit"
+      - "headlamp        : restricted enforce/warn/audit"
+      - "argocd          : baseline enforce, restricted warn/audit"
+      - "default         : baseline enforce, restricted warn/audit"
+      - "Check 'kubectl get events -A' for PSS violation warnings."

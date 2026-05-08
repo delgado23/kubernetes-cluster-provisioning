@@ -15,6 +15,9 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | GitOps | ArgoCD |
 | Dashboard | Headlamp (Kubernetes UI) |
 | Tooling | kubectl, Helm, k9s on all control plane nodes |
+| etcd encryption | AES-CBC encryption at rest for all Secrets, configured at kubeadm init time |
+| Pod Security Standards | Namespace-scoped enforcement — `privileged` for storage/network system namespaces, `baseline`/`restricted` for application namespaces |
+| Policy engine | Kyverno in Audit mode — reports violations for latest image tags, missing resource limits, privileged containers, and host namespace use |
 | Addon versions | Resolved from GitHub releases at runtime — always installs latest |
 
 Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlplane_node_count` and `worker_node_count` (see [AWX Survey Variables](#awx-survey-variables)).
@@ -79,10 +82,17 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
 | `vault_traefik_dashboard_password` | bcrypt htpasswd string for Traefik dashboard basic auth |
 | `vault_longhorn_dashboard_password` | bcrypt htpasswd string for Longhorn dashboard basic auth |
+| `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
 | `foreman_user_vault` | Foreman username |
 | `foreman_password_vault` | Foreman password |
 | `ipa_password` | FreeIPA admin password |
 | `keepalived_password` | Keepalived VRRP authentication password |
+
+Generate the etcd encryption key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
+
+```bash
+head -c 32 /dev/urandom | base64
+```
 
 Dashboard passwords must be htpasswd-formatted bcrypt hashes — **not raw passwords**. Traefik's BasicAuth middleware rejects raw strings and disables the route entirely (returning 404) if the format is wrong. Generate with:
 

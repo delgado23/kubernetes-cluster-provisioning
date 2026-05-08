@@ -1,4 +1,7 @@
 ---
+- name: Write etcd encryption config
+  ansible.builtin.include_tasks: etcd_encryption.yml
+
 - name: Deploy kubeadm config
   ansible.builtin.template:
     src: kubeadm-config.yml.j2

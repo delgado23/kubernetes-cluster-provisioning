@@ -122,6 +122,8 @@
   become: true
   gather_facts: false
   tags: [bootstrap]
+  vars_files:
+    - vars/vault.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
@@ -141,6 +143,8 @@
   gather_facts: false
   serial: 1
   tags: [bootstrap]
+  vars_files:
+    - vars/vault.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
@@ -255,6 +259,11 @@
         name: cluster_addons
         tasks_from: label_workers
 
+    - name: Install Kyverno policy engine
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: kyverno
+
     - name: Install metrics-server
       ansible.builtin.include_role:
         name: cluster_addons
@@ -294,6 +303,11 @@
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: argocd
+
+    - name: Apply Pod Security Standards namespace labels
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: pss
 
     - name: Expose Longhorn UI via Traefik IngressRoute
       ansible.builtin.include_role:
