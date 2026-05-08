@@ -18,7 +18,8 @@
   ansible.builtin.command:
     cmd: >
       /usr/local/bin/helm upgrade --install kyverno kyverno/kyverno
-      --namespace kube-system
+      --namespace {{ kyverno_namespace }}
+      --create-namespace
       --wait
       --timeout 5m
   environment:
