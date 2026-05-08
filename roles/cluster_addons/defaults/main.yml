@@ -9,3 +9,4 @@ traefik_namespace: traefik
 longhorn_namespace: longhorn-system
 headlamp_namespace: headlamp
 argocd_namespace: argocd
+kyverno_namespace: kyverno
