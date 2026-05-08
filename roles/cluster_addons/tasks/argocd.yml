@@ -1,0 +1,131 @@
+---
+- name: Add Argo Helm repo
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo add argo https://argoproj.github.io/argo-helm
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+- name: Update Helm repos
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo update
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Create ArgoCD namespace
+  ansible.builtin.command:
+    cmd: kubectl create namespace {{ argocd_namespace }} --dry-run=client -o yaml
+  register: argocd_ns_yaml
+  changed_when: false
+
+- name: Apply ArgoCD namespace
+  ansible.builtin.shell:
+    cmd: "echo '{{ argocd_ns_yaml.stdout }}' | kubectl apply -f -"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Write ArgoCD Helm values
+  ansible.builtin.copy:
+    dest: /tmp/argocd-values.yml
+    mode: "0600"
+    content: |
+      configs:
+        params:
+          server.insecure: true
+
+      server:
+        replicas: 2
+
+      repoServer:
+        replicas: 2
+
+      applicationSet:
+        replicas: 2
+
+- name: Install or upgrade ArgoCD via Helm
+  ansible.builtin.command:
+    cmd: >
+      /usr/local/bin/helm upgrade --install argocd argo/argo-cd
+      --namespace {{ argocd_namespace }}
+      --version {{ argocd_version }}
+      --values /tmp/argocd-values.yml
+      --wait
+      --timeout 10m
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: argocd_helm_output
+  changed_when: true
+
+- name: Print ArgoCD Helm output
+  ansible.builtin.debug:
+    var: argocd_helm_output.stdout_lines
+
+- name: Remove ArgoCD values file
+  ansible.builtin.file:
+    path: /tmp/argocd-values.yml
+    state: absent
+
+- name: Write ArgoCD IngressRoute manifest
+  ansible.builtin.copy:
+    dest: /tmp/argocd-ingress.yml
+    mode: "0600"
+    content: |
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: argocd
+        namespace: {{ argocd_namespace }}
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - match: Host(`argocd.{{ ingress_domain }}`)
+            kind: Rule
+            services:
+              - name: argocd-server
+                port: 80
+        tls:
+          secretName: {{ wildcard_secret_name }}
+
+- name: Apply ArgoCD IngressRoute
+  ansible.builtin.command:
+    cmd: kubectl apply -f /tmp/argocd-ingress.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: argocd_ingress_output
+  changed_when: true
+
+- name: Print ArgoCD IngressRoute apply output
+  ansible.builtin.debug:
+    var: argocd_ingress_output.stdout_lines
+
+- name: Remove ArgoCD IngressRoute manifest
+  ansible.builtin.file:
+    path: /tmp/argocd-ingress.yml
+    state: absent
+
+- name: Retrieve ArgoCD initial admin password
+  ansible.builtin.command:
+    cmd: >
+      kubectl get secret argocd-initial-admin-secret
+      --namespace {{ argocd_namespace }}
+      -o jsonpath='{.data.password}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: argocd_admin_password_b64
+  changed_when: false
+
+- name: Print ArgoCD access summary
+  ansible.builtin.debug:
+    msg:
+      - "================================================="
+      - "ArgoCD installed."
+      - "URL      : https://argocd.{{ ingress_domain }}"
+      - "Username : admin"
+      - "Password : {{ argocd_admin_password_b64.stdout | b64decode }}"
+      - "Change the password after first login."
+      - "================================================="
+  no_log: false
