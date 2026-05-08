@@ -8,3 +8,4 @@ wildcard_secret_name: "example-com-wildcard-tls"
 traefik_namespace: traefik
 longhorn_namespace: longhorn-system
 headlamp_namespace: headlamp
+argocd_namespace: argocd
