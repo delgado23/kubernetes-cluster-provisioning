@@ -290,6 +290,11 @@
         name: cluster_addons
         tasks_from: headlamp
 
+    - name: Install ArgoCD GitOps controller
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: argocd
+
     - name: Expose Longhorn UI via Traefik IngressRoute
       ansible.builtin.include_role:
         name: cluster_addons
