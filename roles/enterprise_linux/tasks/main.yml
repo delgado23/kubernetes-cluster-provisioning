@@ -36,9 +36,6 @@
       - katello-host-tools-tracer
       - yum-utils
       - duo_unix
-      - git-credential-oauth
-      - certbot
-      - python3-certbot-dns-cloudflare
 
 - name: Enable services and timers
   ansible.builtin.systemd_service:
