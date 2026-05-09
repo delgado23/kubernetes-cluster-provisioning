@@ -127,6 +127,92 @@
       ansible.builtin.wait_for_connection:
         timeout: 600
 
+- name: Linux base provisioning
+  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
+  become: true
+  become_user: root
+  gather_facts: true
+  strategy: free
+  tags: [prep]
+  vars_files:
+    - vars/vault.yml
+  handlers:
+    - import_tasks: handlers/main.yml
+  pre_tasks:
+    - name: Check for provisioned sentinel file
+      ansible.builtin.stat:
+        path: /tmp/provisioned
+      register: provisioned_file
+    - name: Skip host if already provisioned
+      ansible.builtin.meta: end_host
+      when: provisioned_file.stat.exists
+  tasks:
+    - name: Provision an Enterprise Linux server
+      ansible.builtin.include_role:
+        name: enterprise_linux
+      when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Enroll nodes into FreeIPA
+  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
+  become: true
+  become_user: root
+  gather_facts: false
+  strategy: free
+  tags: [prep]
+  vars_files:
+    - vars/vault.yml
+    - vars/freeipa.yml
+  pre_tasks:
+    - name: Check for provisioned sentinel file
+      ansible.builtin.stat:
+        path: /tmp/provisioned
+      register: provisioned_file
+    - name: Skip host if already provisioned
+      ansible.builtin.meta: end_host
+      when: provisioned_file.stat.exists
+  tasks:
+    - name: Enroll into FreeIPA
+      ansible.builtin.include_role:
+        name: freeipa.ansible_freeipa.ipaclient
+
+- name: Post-enrollment configuration
+  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
+  become: true
+  become_user: root
+  gather_facts: false
+  strategy: free
+  tags: [prep]
+  vars_files:
+    - vars/vault.yml
+  handlers:
+    - import_tasks: handlers/main.yml
+  pre_tasks:
+    - name: Check for provisioned sentinel file
+      ansible.builtin.stat:
+        path: /tmp/provisioned
+      register: provisioned_file
+    - name: Skip host if already provisioned
+      ansible.builtin.meta: end_host
+      when: provisioned_file.stat.exists
+  tasks:
+    - name: Reboot the system
+      ansible.builtin.reboot:
+    - name: Deploy DUO config
+      ansible.builtin.template:
+        src: templates/login_duo.conf.j2
+        dest: /etc/duo/login_duo.conf
+    - name: Deploy SSH config changes
+      ansible.builtin.template:
+        src: templates/00-duo.conf.j2
+        dest: /etc/ssh/sshd_config.d/00-duo.conf
+      notify:
+        - Reload ssh
+    - name: Create provisioned sentinel
+      ansible.builtin.file:
+        path: /tmp/provisioned
+        state: touch
+        mode: "0644"
+
 - name: Common Kubernetes prerequisites (all nodes)
   hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
   become: true

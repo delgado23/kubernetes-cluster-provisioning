@@ -3,3 +3,11 @@ ipaadmin_password: "{{ ipa_password }}"
 ipa_server: vek-lor.example.com
 ipadomain: example.com
 iparealm: GARAVENTAVILLE.COM
+
+ipaclient_ntp_servers:
+  - vek-lor.example.com
+  - vek-nilash.example.com
+ipaclient_mkhomedir: true
+ipaclient_automount_location: default
+ipaclient_force_join: true
+ipaclient_unattended: true

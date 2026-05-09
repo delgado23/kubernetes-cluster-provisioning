@@ -40,15 +40,21 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ├── main.yml              # Full cluster provisioning pipeline
 ├── maintenance.yml       # Rolling OS maintenance (drain/update/reboot/uncordon)
 ├── wipe.yml              # Remove all nodes from Foreman and FreeIPA
+├── handlers/
+│   └── main.yml          # Shared handlers (e.g. Reload ssh)
+├── templates/
+│   ├── login_duo.conf.j2 # DUO Unix SSH integration config
+│   └── 00-duo.conf.j2    # sshd_config.d snippet enabling ForceCommand login_duo
 ├── vars/
 │   ├── foreman.yml       # Foreman connection settings and compute profile IDs
-│   ├── freeipa.yml       # FreeIPA connection settings
+│   ├── freeipa.yml       # FreeIPA connection settings and ipaclient vars
 │   ├── vault.yml         # Ansible Vault: API tokens and passwords
 │   ├── vms.yml           # VM definitions (names, hostgroups, Foreman parameters)
 │   └── vm_defaults.yml   # Default VM hardware specs
 └── roles/
     ├── vm_provisioning/       # Create VMs in Foreman/Proxmox, filters by node counts
     ├── proxmox_postconfig/    # EFI disk, rename, tags via Proxmox API
+    ├── enterprise_linux/      # Base OS provisioning: repos, packages, atop, DUO install
     ├── common/                # K8s prerequisites: containerd, kubelet, firewall
     ├── controlplane_infra/    # HAProxy, keepalived, controlplane firewall rules
     ├── worker_storage/        # LVM + XFS setup for Longhorn on worker data disk, iSCSI
@@ -63,6 +69,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 
 The playbook is safe to re-run against a partially or fully provisioned cluster:
 
+- **Linux provisioning** — base OS hardening (`enterprise_linux` role), FreeIPA enrollment (`ipaclient`), DUO SSH 2FA config, and reboot are guarded by a sentinel file at `/tmp/provisioned`. Nodes that have already been through this phase are skipped on re-runs.
 - **Prep phase** — each node checks for `/etc/kubernetes/kubelet.conf` before running `common`, `controlplane_infra`, and `worker_storage`. Nodes already in the cluster skip those roles entirely.
 - **Bootstrap phase** — `join_secondary` generates fresh join credentials at runtime via `delegate_to` against an existing control plane node (no cross-play hostvars required). It checks for `kubelet.conf` and skips the join if the node is already a cluster member. When `controlplane_node_count=0`, the entire bootstrap phase is skipped.
 - **Worker join** — workers are skipped if they already have `kubelet.conf`. The join token is generated fresh via `delegate_to` directly against a control plane node, so running with `--limit` scoped to only new workers works without needing the control plane in scope.
@@ -83,6 +90,7 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_traefik_dashboard_password` | bcrypt htpasswd string for Traefik dashboard basic auth |
 | `vault_longhorn_dashboard_password` | bcrypt htpasswd string for Longhorn dashboard basic auth |
 | `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
+| `vault_duo_secret_key` | DUO Unix integration secret key for SSH 2FA |
 | `foreman_user_vault` | Foreman username |
 | `foreman_password_vault` | Foreman password |
 | `ipa_password` | FreeIPA admin password |
