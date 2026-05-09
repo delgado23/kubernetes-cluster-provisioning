@@ -90,16 +90,11 @@
     - join_result is defined
     - not kubelet_conf.stat.exists
 
-- name: Pause to allow kubelet to initialize
-  ansible.builtin.pause:
-    seconds: 15
+- name: Wait for kubelet to become active after join
+  ansible.builtin.command: systemctl is-active kubelet
+  register: _kubelet_active
+  until: _kubelet_active.rc == 0
+  retries: 12
+  delay: 5
+  changed_when: false
   when: not kubelet_conf.stat.exists
-
-- name: Confirm kubelet is running after join
-  ansible.builtin.service_facts:
-
-- name: Assert kubelet is active
-  ansible.builtin.assert:
-    that: ansible_facts.services['kubelet.service'].state == 'running'
-    fail_msg: "kubelet is NOT running on {{ inventory_hostname }} after join!"
-    success_msg: "kubelet is running on {{ inventory_hostname }}."
