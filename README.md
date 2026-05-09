@@ -106,11 +106,11 @@ The full output (e.g. `admin:$2y$05$...`) is what goes in the vault variable.
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `wipe_cluster` | Boolean | `false` | When `true`, removes all cluster nodes from Foreman and FreeIPA then stops. All provisioning and bootstrap phases are skipped. Use to fully tear down a cluster from AWX. |
+| `wipe_cluster` | Boolean | `false` | When `true`, removes all existing cluster nodes from Foreman and FreeIPA first, then provisions a fresh cluster using the current `controlplane_node_count` and `worker_node_count` values. |
 | `controlplane_node_count` | Integer | 1 | Number of control plane nodes to provision this run. Set to `0` when only adding worker nodes — this skips the bootstrap and cluster add-ons phases entirely. Max 3. |
 | `worker_node_count` | Integer | 1 | Number of worker nodes to add this run. The provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
 
-`wipe_cluster=true` is mutually exclusive with provisioning — when set, the playbook tears down the cluster and exits. All subsequent plays targeting Foreman inventory groups are automatically skipped because those hosts no longer exist.
+`wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
 
 Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. Name prefixes and Foreman hostgroup strings are configured in `vars/vms.yml`.
 
