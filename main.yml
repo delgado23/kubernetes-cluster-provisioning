@@ -351,7 +351,7 @@
   hosts: foreman_almalinux10_kubernetesworkernode
   become: true
   gather_facts: true
-  serial: 1
+  strategy: free
   tags: [workers]
   roles:
     - role: worker_join
