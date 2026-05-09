@@ -25,6 +25,7 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
+  failed_when: false
   register: out
 - ansible.builtin.debug:
     var: out.stdout_lines
@@ -35,6 +36,7 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
+  failed_when: false
   register: out
 - ansible.builtin.debug:
     var: out.stdout_lines
@@ -78,6 +80,7 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
+  failed_when: false
   register: out
 - ansible.builtin.debug:
     var: out.stdout_lines
