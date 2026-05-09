@@ -28,6 +28,8 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  vars:
+    wipe_cluster: false
   vars_files:
     - vars/vault.yml
     - vars/vms.yml
@@ -36,7 +38,7 @@
   pre_tasks:
     - name: Skip wipe — wipe_cluster is not set
       ansible.builtin.meta: end_play
-      when: not wipe_cluster | bool
+      when: not (wipe_cluster | bool)
 
     - name: Query Foreman for existing control plane nodes
       ansible.builtin.uri:
