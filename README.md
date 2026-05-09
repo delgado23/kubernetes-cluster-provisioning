@@ -69,7 +69,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 
 The playbook is safe to re-run against a partially or fully provisioned cluster:
 
-- **Linux provisioning** — base OS hardening (`enterprise_linux` role), FreeIPA enrollment (`ipaclient`), DUO SSH 2FA config, and reboot are guarded by a sentinel file at `/tmp/provisioned`. Nodes that have already been through this phase are skipped on re-runs.
+- **Linux provisioning** — base OS hardening (`enterprise_linux` role), FreeIPA enrollment (`ipaclient`), DUO SSH 2FA config, and reboot are guarded by a sentinel file at `/root/.provisioned`. Nodes that have already been through this phase are skipped on re-runs.
 - **Prep phase** — each node checks for `/etc/kubernetes/kubelet.conf` before running `common`, `controlplane_infra`, and `worker_storage`. Nodes already in the cluster skip those roles entirely.
 - **Bootstrap phase** — `join_secondary` generates fresh join credentials at runtime via `delegate_to` against an existing control plane node (no cross-play hostvars required). It checks for `kubelet.conf` and skips the join if the node is already a cluster member. When `controlplane_node_count=0`, the entire bootstrap phase is skipped.
 - **Worker join** — workers are skipped if they already have `kubelet.conf`. The join token is generated fresh via `delegate_to` directly against a control plane node, so running with `--limit` scoped to only new workers works without needing the control plane in scope.
