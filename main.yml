@@ -141,7 +141,7 @@
   pre_tasks:
     - name: Check for provisioned sentinel file
       ansible.builtin.stat:
-        path: /tmp/provisioned
+        path: /root/.provisioned
       register: provisioned_file
     - name: Skip host if already provisioned
       ansible.builtin.meta: end_host
@@ -165,7 +165,7 @@
   pre_tasks:
     - name: Check for provisioned sentinel file
       ansible.builtin.stat:
-        path: /tmp/provisioned
+        path: /root/.provisioned
       register: provisioned_file
     - name: Skip host if already provisioned
       ansible.builtin.meta: end_host
@@ -189,7 +189,7 @@
   pre_tasks:
     - name: Check for provisioned sentinel file
       ansible.builtin.stat:
-        path: /tmp/provisioned
+        path: /root/.provisioned
       register: provisioned_file
     - name: Skip host if already provisioned
       ansible.builtin.meta: end_host
@@ -209,7 +209,7 @@
         - Reload ssh
     - name: Create provisioned sentinel
       ansible.builtin.file:
-        path: /tmp/provisioned
+        path: /root/.provisioned
         state: touch
         mode: "0644"
 
