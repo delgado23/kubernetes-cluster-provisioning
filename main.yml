@@ -96,10 +96,6 @@
     - vars/vault.yml
     - vars/foreman.yml
     - vars/vms.yml
-  pre_tasks:
-    - name: Skip provisioning — wipe_cluster is set
-      ansible.builtin.meta: end_play
-      when: wipe_cluster | bool
   roles:
     - role: vm_provisioning
 
