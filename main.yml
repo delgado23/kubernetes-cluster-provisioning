@@ -21,6 +21,69 @@
 
 
 # -----------------------------------------------------------------------------
+# WIPE (conditional — only runs when wipe_cluster=true)
+# -----------------------------------------------------------------------------
+
+- name: Wipe cluster nodes from Foreman and FreeIPA
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars/vault.yml
+    - vars/vms.yml
+    - vars/foreman.yml
+    - vars/freeipa.yml
+  pre_tasks:
+    - name: Skip wipe — wipe_cluster is not set
+      ansible.builtin.meta: end_play
+      when: not wipe_cluster | bool
+
+    - name: Query Foreman for existing control plane nodes
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (controlplane_name_prefix + '-') | urlencode }}%22&per_page=250"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: _existing_cps_result
+
+    - name: Query Foreman for existing worker nodes
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (worker_name_prefix + '-') | urlencode }}%22&per_page=250"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: _existing_workers_result
+
+    - name: Initialise vms list
+      ansible.builtin.set_fact:
+        vms: []
+
+    - name: Build vms list from Foreman query results
+      ansible.builtin.set_fact:
+        vms: "{{ vms + [{'name': item | regex_replace('\\.' + foreman_domain + '$', '')}] }}"
+      loop: >-
+        {{
+          (_existing_cps_result.json.results + _existing_workers_result.json.results)
+          | map(attribute='name') | list
+        }}
+
+    - name: Report nodes to be wiped
+      ansible.builtin.debug:
+        msg: "Wiping {{ vms | length }} node(s): {{ vms | map(attribute='name') | join(', ') }}"
+
+  roles:
+    - role: cluster_cleanup
+
+
+# -----------------------------------------------------------------------------
 # PHASE 1: VM Provisioning
 # -----------------------------------------------------------------------------
 
@@ -33,6 +96,10 @@
     - vars/vault.yml
     - vars/foreman.yml
     - vars/vms.yml
+  pre_tasks:
+    - name: Skip provisioning — wipe_cluster is set
+      ansible.builtin.meta: end_play
+      when: wipe_cluster | bool
   roles:
     - role: vm_provisioning
 
