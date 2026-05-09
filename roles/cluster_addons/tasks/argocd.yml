@@ -34,10 +34,12 @@
     content: |
       configs:
         params:
-          server.insecure: true
+          server.insecure: "true"
 
       server:
         replicas: 2
+        extraArgs:
+          - --insecure
 
       repoServer:
         replicas: 2
