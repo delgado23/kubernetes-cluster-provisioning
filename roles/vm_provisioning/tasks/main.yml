@@ -72,18 +72,15 @@
         )[:worker_node_count | int]
       }}
 
-- name: Report worker indices to be provisioned
-  ansible.builtin.debug:
-    msg: >-
-      Provisioning {{ worker_node_count }} worker(s):
-      {{ _new_worker_indices | map('string') | map('zfill', 2)
-         | map('regex_replace', '^', worker_name_prefix + '-') | list | join(', ') }}
-
 - name: Generate worker node definitions
   ansible.builtin.set_fact:
     _generated_workers: >-
       {{ _generated_workers | default([]) + [{'name': worker_name_prefix + '-' + '%02d' | format(item), 'hostgroup': worker_hostgroup}] }}
   loop: "{{ _new_worker_indices }}"
+
+- name: Report worker nodes to be provisioned
+  ansible.builtin.debug:
+    msg: "Provisioning {{ worker_node_count }} worker(s): {{ _generated_workers | default([]) | map(attribute='name') | join(', ') }}"
 
 - name: Build vms list
   ansible.builtin.set_fact:
