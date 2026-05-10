@@ -390,16 +390,6 @@
     - name: Run add-ons on primary control plane only
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'primary'
-    - name: Resolve selected addons list
-      ansible.builtin.set_fact:
-        _addons: >-
-          {{
-            (install_addons | default('longhorn\ntraefik\nheadlamp\nargocd'))
-            .split('\n') | map('trim') | select('ne', '') | list
-          }}
-    - name: Report selected addons
-      ansible.builtin.debug:
-        msg: "Installing addons: {{ _addons | join(', ') }}"
   vars_files:
     - vars/vault.yml
   environment:
@@ -439,37 +429,31 @@
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: traefik
-      when: "'traefik' in _addons"
 
     - name: Install Longhorn distributed storage
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: longhorn
-      when: "'longhorn' in _addons"
 
     - name: Install reflector secret mirror operator
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: reflector
-      when: "'traefik' in _addons"
 
     - name: Install cert-manager with Cloudflare DNS-01
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: cert_manager
-      when: "'traefik' in _addons"
 
     - name: Install Headlamp Kubernetes dashboard
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: headlamp
-      when: "'headlamp' in _addons"
 
     - name: Install ArgoCD GitOps controller
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: argocd
-      when: "'argocd' in _addons"
 
     - name: Apply Pod Security Standards namespace labels
       ansible.builtin.include_role:
@@ -480,7 +464,6 @@
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: longhorn_ui
-      when: "'longhorn' in _addons and 'traefik' in _addons"
 
 # -----------------------------------------------------------------------------
 # DEBUG: Ingress diagnostics (ansible-playbook main.yml --tags debug)
