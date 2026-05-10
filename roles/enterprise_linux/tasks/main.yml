@@ -1,0 +1,55 @@
+- name: Find AlmaLinux Repos
+  ansible.builtin.find:
+    path: /etc/yum.repos.d/
+    patterns: "Alma*.repo,alma*.repo"
+  register: alma_repos
+
+- name: Remove AlmaLinux Repos
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ alma_repos.files }}"
+
+- name: Make sure system is up to date
+  ansible.builtin.yum:
+    state: latest
+    name: "*"
+
+- name: Install packages
+  ansible.builtin.yum:
+    state: latest
+    name:
+      - ipa-client
+      - autofs
+      - vim
+      - rsync
+      - tmux
+      - shadow-utils
+      - zsh
+      - perl
+      - bash-completion
+      - git
+      - htop
+      - btop
+      - nmon
+      - atop
+      - katello-host-tools-tracer
+      - yum-utils
+      - duo_unix
+
+- name: Enable services and timers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - atop-rotate.timer
+    - atop.service
+
+- name: Ensure /home/nfs exists
+  ansible.builtin.file:
+    path: /home/nfs
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'

@@ -1,0 +1,148 @@
+---
+# Audit-mode policies — violations are reported but never block workloads.
+# Switch validationFailureAction to Enforce once your workloads are compliant.
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/description: >
+      Warns when container images use the 'latest' tag or have no tag at all,
+      making it impossible to track exactly what is running.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      validate:
+        message: "Image must have an explicit version tag (e.g. nginx:1.27, not nginx or nginx:latest)."
+        pattern:
+          spec:
+            containers:
+              - image: "?*:?*"
+            =(initContainers):
+              - image: "?*:?*"
+
+    - name: disallow-latest-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      validate:
+        message: "The ':latest' image tag is not allowed. Pin a specific version."
+        deny:
+          conditions:
+            any:
+              - key: "{{request.object.spec.containers[].image}}"
+                operator: AnyIn
+                value:
+                  - "*:latest"
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/description: >
+      Warns when containers do not declare CPU and memory limits, which can
+      lead to noisy-neighbour problems on shared nodes.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: check-container-limits
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - longhorn-system
+                - metallb-system
+      validate:
+        message: "CPU and memory limits are required on all containers."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  limits:
+                    memory: "?*"
+                    cpu: "?*"
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privileged-containers
+  annotations:
+    policies.kyverno.io/description: >
+      Warns when containers run in privileged mode. System namespaces that
+      legitimately need privileges are excluded.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: check-privileged
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - longhorn-system
+                - metallb-system
+      validate:
+        message: "Privileged containers are not allowed outside system namespaces."
+        pattern:
+          spec:
+            containers:
+              - =(securityContext):
+                  =(privileged): "false"
+            =(initContainers):
+              - =(securityContext):
+                  =(privileged): "false"
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-host-namespaces
+  annotations:
+    policies.kyverno.io/description: >
+      Warns when pods use host networking, PID, or IPC namespaces, which
+      break workload isolation. System namespaces that require host access
+      are excluded.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: check-host-namespaces
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - metallb-system
+      validate:
+        message: "Use of hostNetwork, hostPID, or hostIPC is not allowed."
+        pattern:
+          spec:
+            =(hostPID): "false"
+            =(hostIPC): "false"
+            =(hostNetwork): "false"

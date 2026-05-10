@@ -1,28 +1,4 @@
 ---
-- name: Ensure jq is installed
-  ansible.builtin.command: which jq
-  changed_when: false
-  failed_when: false
-  register: jq_check
-
-- name: Install jq if missing
-  ansible.builtin.dnf:
-    name: jq
-    state: present
-  when: jq_check.rc != 0
-
-- name: Ensure helm is installed
-  ansible.builtin.command: which helm
-  changed_when: false
-  register: helm_check
-  failed_when: false
-
-- name: Install Helm if missing
-  ansible.builtin.shell:
-    cmd: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-  when: helm_check.rc != 0
-  changed_when: true
-
 - name: Add Traefik Helm repo
   ansible.builtin.command:
     cmd: /usr/local/bin/helm repo add traefik https://traefik.github.io/charts

@@ -1,0 +1,118 @@
+---
+# =============================================================================
+# renew-certs.yml — Renew kubeadm-managed control plane certificates
+# =============================================================================
+# kubeadm certificates expire after 1 year by default. Run this playbook
+# before expiry or whenever `kubeadm certs check-expiration` shows certs
+# approaching their deadline.
+#
+# Processes one control plane node at a time (serial: 1) so the cluster
+# maintains HA quorum throughout. Each node's API server is briefly
+# unavailable during the static pod restart cycle; HAProxy routes traffic
+# to the remaining nodes during that window.
+#
+# Covers: apiserver, apiserver-kubelet-client, apiserver-etcd-client,
+#         etcd-server, etcd-peer, etcd-healthcheck-client,
+#         front-proxy-client, admin/controller-manager/scheduler kubeconfigs.
+# Does NOT touch: CA certs (10-year lifetime), kubelet client certs
+#                 (auto-rotated), kubelet serving certs (cert-approver).
+#
+# Usage:
+#   ansible-playbook renew-certs.yml
+#   ansible-playbook renew-certs.yml --limit k8s-cp-01.example.com
+# =============================================================================
+
+- name: Renew Kubernetes control plane certificates
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  gather_facts: false
+  serial: 1
+  tasks:
+
+    - name: Check certificate expiry before renewal
+      ansible.builtin.command:
+        cmd: kubeadm certs check-expiration
+      register: certs_before
+      changed_when: false
+      failed_when: false
+
+    - name: Print certificate expiry (before)
+      ansible.builtin.debug:
+        var: certs_before.stdout_lines
+
+    - name: Renew all kubeadm-managed certificates
+      ansible.builtin.command:
+        cmd: kubeadm certs renew all
+      register: renew_output
+      changed_when: true
+
+    - name: Print renewal output
+      ansible.builtin.debug:
+        var: renew_output.stdout_lines
+
+    - name: Move static pod manifests out (triggers graceful shutdown)
+      ansible.builtin.shell:
+        cmd: |
+          for f in kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml etcd.yaml; do
+            [ -f /etc/kubernetes/manifests/$f ] && mv /etc/kubernetes/manifests/$f /tmp/$f || true
+          done
+      changed_when: true
+
+    - name: Wait for local API server to stop
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6443
+        state: stopped
+        timeout: 60
+
+    - name: Restore static pod manifests (triggers restart with new certs)
+      ansible.builtin.shell:
+        cmd: |
+          for f in kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml etcd.yaml; do
+            [ -f /tmp/$f ] && mv /tmp/$f /etc/kubernetes/manifests/$f || true
+          done
+      changed_when: true
+
+    - name: Restart kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        state: restarted
+
+    - name: Wait for local API server to become healthy
+      ansible.builtin.uri:
+        url: https://127.0.0.1:6443/healthz
+        ca_path: /etc/kubernetes/pki/ca.crt
+        status_code: 200
+      register: apiserver_health
+      retries: 24
+      delay: 10
+      until: apiserver_health.status == 200
+
+    - name: Update root kubeconfig from renewed admin.conf
+      ansible.builtin.shell:
+        cmd: |
+          cp /etc/kubernetes/admin.conf /root/.kube/config
+          chown root:root /root/.kube/config
+          chmod 0600 /root/.kube/config
+      changed_when: true
+
+    - name: Wait for this node to show Ready
+      ansible.builtin.command:
+        cmd: kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=120s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: node_ready
+      changed_when: false
+      retries: 5
+      delay: 15
+      until: node_ready.rc == 0
+
+    - name: Check certificate expiry after renewal
+      ansible.builtin.command:
+        cmd: kubeadm certs check-expiration
+      register: certs_after
+      changed_when: false
+
+    - name: Print certificate expiry (after)
+      ansible.builtin.debug:
+        var: certs_after.stdout_lines
