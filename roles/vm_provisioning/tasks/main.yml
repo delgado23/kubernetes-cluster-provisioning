@@ -21,10 +21,12 @@
     _existing_cp_count: "{{ _existing_cps_result.json.results | length }}"
     controlplane_node_count: "{{ [controlplane_node_count | int, [3 - (_existing_cps_result.json.results | length), 0] | max] | min }}"
 
-- name: Warn if control plane node limit already reached
-  ansible.builtin.debug:
-    msg: "WARNING: {{ _existing_cp_count }} control plane node(s) already exist — no new control plane nodes will be created."
-  when: _existing_cp_count | int >= 3
+- name: Fail if control plane node limit already reached
+  ansible.builtin.fail:
+    msg: >-
+      Cannot provision control plane nodes: {{ _existing_cp_count }} of 3 already exist in Foreman.
+      Set controlplane_node_count=0 to add workers only, or wipe the cluster first.
+  when: _existing_cp_count | int >= 3 and controlplane_node_count | int > 0
 
 - name: Generate control plane node definitions
   ansible.builtin.set_fact:
