@@ -9,6 +9,10 @@
     msg: "Node {{ inventory_hostname }} already has kubelet.conf — skipping join."
   when: kubelet_conf.stat.exists
 
+- name: Write etcd encryption config
+  ansible.builtin.include_tasks: etcd_encryption.yml
+  when: not kubelet_conf.stat.exists
+
 - name: Upload control plane certificates and capture fresh key
   ansible.builtin.command:
     cmd: kubeadm init phase upload-certs --upload-certs
@@ -71,6 +75,7 @@
     mkdir -p /root/.kube
     cp /etc/kubernetes/admin.conf /root/.kube/config
     chown root:root /root/.kube/config
+    chmod 0600 /root/.kube/config
   changed_when: true
   when: not kubelet_conf.stat.exists
 
