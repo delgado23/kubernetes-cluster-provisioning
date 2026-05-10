@@ -236,11 +236,44 @@
   tags: [prep]
   vars_files:
     - vars/vault.yml
+    - vars/foreman.yml
+    - vars/vms.yml
   pre_tasks:
     - name: Check if node is already in the cluster
       ansible.builtin.stat:
         path: /etc/kubernetes/kubelet.conf
       register: kubelet_conf
+
+    - name: Re-fetch host parameters from Foreman
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ inventory_hostname }}/parameters"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: _fresh_params
+      delegate_to: localhost
+      become: false
+      when: not kubelet_conf.stat.exists
+
+    - name: Merge fresh host parameters into foreman_params
+      ansible.builtin.set_fact:
+        foreman_params: >-
+          {{
+            (foreman_params | default({})) | combine(
+              dict(
+                _fresh_params.json.results | map(attribute='name')
+                | zip(_fresh_params.json.results | map(attribute='value'))
+              )
+            )
+          }}
+      when:
+        - not kubelet_conf.stat.exists
+        - _fresh_params is defined
+        - _fresh_params.status == 200
   tasks:
     - name: Apply controlplane infrastructure
       ansible.builtin.include_role:

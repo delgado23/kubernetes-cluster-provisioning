@@ -9,6 +9,11 @@
 # failover order.  Only the first controlplane_node_count entries are
 # provisioned; the primary is always entry [0].
 # ------------------------------------------------------------------
+# Cluster-wide network settings
+# ------------------------------------------------------------------
+keepalived_vip: "172.16.0.29"        # VIP shared by all control plane nodes
+
+# ------------------------------------------------------------------
 # Naming and hostgroup strings
 # ------------------------------------------------------------------
 controlplane_hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
