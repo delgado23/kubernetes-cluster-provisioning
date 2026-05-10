@@ -1,5 +1,5 @@
 ---
-- name: Apply Pod Security Standards namespace labels
+- name: Apply Pod Security Standards to core namespaces
   ansible.builtin.command:
     cmd: >
       kubectl label namespace {{ item.ns }}
@@ -13,24 +13,71 @@
   environment:
     KUBECONFIG: /root/.kube/config
   loop:
-    - { ns: "{{ longhorn_namespace }}",    enforce: privileged, warn: privileged }
-    - { ns: metallb-system,                enforce: privileged, warn: privileged }
-    - { ns: "{{ traefik_namespace }}",     enforce: baseline,   warn: restricted }
-    - { ns: "{{ cert_manager_namespace }}", enforce: restricted, warn: restricted }
-    - { ns: "{{ headlamp_namespace }}",    enforce: restricted, warn: restricted }
-    - { ns: "{{ argocd_namespace }}",      enforce: baseline,   warn: restricted }
-    - { ns: default,                        enforce: baseline,   warn: restricted }
+    - { ns: metallb-system,                  enforce: privileged, warn: privileged }
+    - { ns: "{{ cert_manager_namespace }}",  enforce: restricted, warn: restricted }
+    - { ns: default,                          enforce: baseline,   warn: restricted }
   changed_when: true
 
-- name: Print Pod Security Standards summary
-  ansible.builtin.debug:
-    msg:
-      - "Pod Security Standards applied."
-      - "longhorn-system : privileged (storage requires host privileges)"
-      - "metallb-system  : privileged (speaker requires host networking)"
-      - "traefik         : baseline enforce, restricted warn/audit"
-      - "cert-manager    : restricted enforce/warn/audit"
-      - "headlamp        : restricted enforce/warn/audit"
-      - "argocd          : baseline enforce, restricted warn/audit"
-      - "default         : baseline enforce, restricted warn/audit"
-      - "Check 'kubectl get events -A' for PSS violation warnings."
+- name: Apply Pod Security Standards to Traefik namespace
+  ansible.builtin.command:
+    cmd: >
+      kubectl label namespace {{ traefik_namespace }}
+      pod-security.kubernetes.io/enforce=baseline
+      pod-security.kubernetes.io/enforce-version=latest
+      pod-security.kubernetes.io/warn=restricted
+      pod-security.kubernetes.io/warn-version=latest
+      pod-security.kubernetes.io/audit=restricted
+      pod-security.kubernetes.io/audit-version=latest
+      --overwrite
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+  when: "'traefik' in _addons"
+
+- name: Apply Pod Security Standards to Longhorn namespace
+  ansible.builtin.command:
+    cmd: >
+      kubectl label namespace {{ longhorn_namespace }}
+      pod-security.kubernetes.io/enforce=privileged
+      pod-security.kubernetes.io/enforce-version=latest
+      pod-security.kubernetes.io/warn=privileged
+      pod-security.kubernetes.io/warn-version=latest
+      pod-security.kubernetes.io/audit=privileged
+      pod-security.kubernetes.io/audit-version=latest
+      --overwrite
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+  when: "'longhorn' in _addons"
+
+- name: Apply Pod Security Standards to Headlamp namespace
+  ansible.builtin.command:
+    cmd: >
+      kubectl label namespace {{ headlamp_namespace }}
+      pod-security.kubernetes.io/enforce=restricted
+      pod-security.kubernetes.io/enforce-version=latest
+      pod-security.kubernetes.io/warn=restricted
+      pod-security.kubernetes.io/warn-version=latest
+      pod-security.kubernetes.io/audit=restricted
+      pod-security.kubernetes.io/audit-version=latest
+      --overwrite
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+  when: "'headlamp' in _addons"
+
+- name: Apply Pod Security Standards to ArgoCD namespace
+  ansible.builtin.command:
+    cmd: >
+      kubectl label namespace {{ argocd_namespace }}
+      pod-security.kubernetes.io/enforce=baseline
+      pod-security.kubernetes.io/enforce-version=latest
+      pod-security.kubernetes.io/warn=restricted
+      pod-security.kubernetes.io/warn-version=latest
+      pod-security.kubernetes.io/audit=restricted
+      pod-security.kubernetes.io/audit-version=latest
+      --overwrite
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+  when: "'argocd' in _addons"
