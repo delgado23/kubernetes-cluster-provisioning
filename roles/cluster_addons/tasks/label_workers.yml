@@ -5,6 +5,10 @@
     node-role.kubernetes.io/worker=worker
     --overwrite
   loop: "{{ groups['foreman_almalinux10_kubernetesworkernode'] }}"
+  register: _label_result
+  until: _label_result.rc == 0
+  retries: 18
+  delay: 10
   changed_when: true
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
