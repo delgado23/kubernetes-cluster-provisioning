@@ -218,6 +218,8 @@
   become: true
   strategy: free
   tags: [prep]
+  vars_files:
+    - vars/vms.yml
   pre_tasks:
     - name: Check if node is already in the cluster
       ansible.builtin.stat:
@@ -308,6 +310,7 @@
   tags: [bootstrap]
   vars_files:
     - vars/vault.yml
+    - vars/vms.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
