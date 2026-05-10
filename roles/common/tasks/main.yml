@@ -97,7 +97,7 @@
 - name: Trust pod network CIDR
   ansible.posix.firewalld:
     zone: trusted
-    source: "{{ foreman_params.k8s_pod_cidr }}"
+    source: "{{ k8s_pod_cidr }}"
     permanent: true
     state: enabled
     immediate: true
@@ -105,7 +105,7 @@
 - name: Trust service network CIDR
   ansible.posix.firewalld:
     zone: trusted
-    source: "{{ foreman_params.k8s_service_cidr }}"
+    source: "{{ k8s_service_cidr }}"
     permanent: true
     state: enabled
     immediate: true

@@ -16,8 +16,8 @@ apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
 controlPlaneEndpoint: "{{ foreman_params.k8s_api_endpoint }}:6443"
 networking:
-  podSubnet: "{{ foreman_params.k8s_pod_cidr }}"
-  serviceSubnet: "{{ foreman_params.k8s_service_cidr }}"
+  podSubnet: "{{ k8s_pod_cidr }}"
+  serviceSubnet: "{{ k8s_service_cidr }}"
 apiServer:
   certSANs:
 {% for host in groups['foreman_almalinux10_kubernetescontrolplanenode'] %}

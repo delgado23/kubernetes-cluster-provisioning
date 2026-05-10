@@ -11,7 +11,9 @@
 # ------------------------------------------------------------------
 # Cluster-wide network settings
 # ------------------------------------------------------------------
-keepalived_vip: "172.16.0.29"        # VIP shared by all control plane nodes
+keepalived_vip:      "172.16.0.29"   # VIP shared by all control plane nodes
+k8s_pod_cidr:        "10.244.0.0/16" # Flannel pod network
+k8s_service_cidr:    "10.96.0.0/12"  # Kubernetes service network
 
 # ------------------------------------------------------------------
 # Naming and hostgroup strings
