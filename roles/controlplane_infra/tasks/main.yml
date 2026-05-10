@@ -8,7 +8,7 @@
 
 - name: Open HAProxy port
   ansible.posix.firewalld:
-    port: "{{ foreman_params.haproxy_port }}/tcp"
+    port: "{{ haproxy_port }}/tcp"
     permanent: true
     state: enabled
     immediate: true
