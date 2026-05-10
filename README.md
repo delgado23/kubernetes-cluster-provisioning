@@ -117,8 +117,11 @@ The full output (e.g. `admin:$2y$05$...`) is what goes in the vault variable.
 | `wipe_cluster` | Boolean | `false` | When `true`, removes all existing cluster nodes from Foreman and FreeIPA first, then provisions a fresh cluster using the current `controlplane_node_count` and `worker_node_count` values. |
 | `controlplane_node_count` | Integer | 1 | Number of control plane nodes to provision this run. Set to `0` when only adding worker nodes — this skips the bootstrap and cluster add-ons phases entirely. Max 3. |
 | `worker_node_count` | Integer | 1 | Number of worker nodes to add this run. The provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
+| `install_addons` | Multiple Choice | all | Newline-separated list of optional add-ons to install. Choices: `longhorn`, `traefik`, `headlamp`, `argocd`. Omit or leave all selected to install everything. |
 
 `wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
+
+`install_addons` controls which optional add-ons are deployed. In AWX, configure this as a **Multiple Choice (multiple select)** question with the choices `longhorn`, `traefik`, `headlamp`, `argocd` and all selected by default. Note that `reflector` and `cert-manager` are tied to Traefik — they are installed automatically when `traefik` is selected and skipped when it is not. The Longhorn UI IngressRoute is only created when both `longhorn` and `traefik` are selected. Kyverno, metrics-server, and MetalLB are always installed regardless of this setting.
 
 Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. Name prefixes and Foreman hostgroup strings are configured in `vars/vms.yml`.
 
