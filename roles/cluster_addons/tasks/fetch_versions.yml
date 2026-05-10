@@ -1,39 +1,93 @@
 ---
-- name: Fetch latest Longhorn release from GitHub
+- name: Fetch Flannel release from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/flannel-io/flannel/releases/latest
+    return_content: true
+  async: 60
+  poll: 0
+  register: _flannel_job
+
+- name: Fetch Longhorn release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/longhorn/longhorn/releases/latest
     return_content: true
-  register: longhorn_release
+  async: 60
+  poll: 0
+  register: _longhorn_job
 
-- name: Fetch latest Traefik Helm chart release from GitHub
+- name: Fetch Traefik Helm chart release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/traefik/traefik-helm-chart/releases/latest
     return_content: true
-  register: traefik_release
+  async: 60
+  poll: 0
+  register: _traefik_job
 
-- name: Fetch latest cert-manager release from GitHub
+- name: Fetch cert-manager release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/cert-manager/cert-manager/releases/latest
     return_content: true
-  register: cert_manager_release
+  async: 60
+  poll: 0
+  register: _certmgr_job
 
-- name: Fetch latest Headlamp release from GitHub
+- name: Fetch Headlamp release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/kubernetes-sigs/headlamp/releases/latest
     return_content: true
-  register: headlamp_release
+  async: 60
+  poll: 0
+  register: _headlamp_job
+
+- name: Fetch reflector release from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/emberstack/kubernetes-reflector/releases/latest
+    return_content: true
+  async: 60
+  poll: 0
+  register: _reflector_job
+
+- name: Fetch ArgoCD release from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/argoproj/argo-cd/releases/latest
+    return_content: true
+  async: 60
+  poll: 0
+  register: _argocd_job
+
+- name: Wait for all GitHub version fetches to complete
+  ansible.builtin.async_status:
+    jid: "{{ item.ansible_job_id }}"
+  register: _fetch_results
+  until: _fetch_results.finished
+  retries: 20
+  delay: 3
+  loop:
+    - "{{ _flannel_job }}"
+    - "{{ _longhorn_job }}"
+    - "{{ _traefik_job }}"
+    - "{{ _certmgr_job }}"
+    - "{{ _headlamp_job }}"
+    - "{{ _reflector_job }}"
+    - "{{ _argocd_job }}"
 
 - name: Set resolved addon versions
   ansible.builtin.set_fact:
-    longhorn_version: "{{ longhorn_release.json.tag_name | regex_replace('^v', '') }}"
-    traefik_chart_version: "{{ traefik_release.json.tag_name | regex_replace('^v', '') }}"
-    cert_manager_version: "{{ cert_manager_release.json.tag_name }}"
-    headlamp_version: "{{ headlamp_release.json.tag_name | regex_replace('^v', '') }}"
+    flannel_version:       "{{ _fetch_results.results[0].json.tag_name }}"
+    longhorn_version:      "{{ _fetch_results.results[1].json.tag_name | regex_replace('^v', '') }}"
+    traefik_chart_version: "{{ _fetch_results.results[2].json.tag_name | regex_replace('^v', '') }}"
+    cert_manager_version:  "{{ _fetch_results.results[3].json.tag_name }}"
+    headlamp_version:      "{{ _fetch_results.results[4].json.tag_name | regex_replace('^v', '') }}"
+    reflector_version:     "{{ _fetch_results.results[5].json.tag_name | regex_replace('^v', '') }}"
+    argocd_version:        "{{ _fetch_results.results[6].json.tag_name | regex_replace('^v', '') }}"
 
 - name: Display resolved addon versions
   ansible.builtin.debug:
     msg:
+      - "Flannel:       {{ flannel_version }}"
       - "Longhorn:      {{ longhorn_version }}"
       - "Traefik chart: {{ traefik_chart_version }}"
       - "cert-manager:  {{ cert_manager_version }}"
       - "Headlamp:      {{ headlamp_version }}"
+      - "Reflector:     {{ reflector_version }}"
+      - "ArgoCD:        {{ argocd_version }}"

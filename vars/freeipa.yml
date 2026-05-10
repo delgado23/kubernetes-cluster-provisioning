@@ -3,3 +3,11 @@ ipaadmin_password: "{{ ipa_password }}"
 ipa_server: vek-lor.garaventaville.com
 ipadomain: garaventaville.com
 iparealm: GARAVENTAVILLE.COM
+
+ipaclient_ntp_servers:
+  - vek-lor.garaventaville.com
+  - vek-nilash.garaventaville.com
+ipaclient_mkhomedir: true
+ipaclient_automount_location: default
+ipaclient_force_join: true
+ipaclient_unattended: true
