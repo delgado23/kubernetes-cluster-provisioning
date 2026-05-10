@@ -21,6 +21,71 @@
 
 
 # -----------------------------------------------------------------------------
+# WIPE (conditional — only runs when wipe_cluster=true)
+# -----------------------------------------------------------------------------
+
+- name: Wipe cluster nodes from Foreman and FreeIPA
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    wipe_cluster: false
+  vars_files:
+    - vars/vault.yml
+    - vars/vms.yml
+    - vars/foreman.yml
+    - vars/freeipa.yml
+  pre_tasks:
+    - name: Skip wipe — wipe_cluster is not set
+      ansible.builtin.meta: end_play
+      when: not (wipe_cluster | bool)
+
+    - name: Query Foreman for existing control plane nodes
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (controlplane_name_prefix + '-') | urlencode }}%22&per_page=250"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: _existing_cps_result
+
+    - name: Query Foreman for existing worker nodes
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (worker_name_prefix + '-') | urlencode }}%22&per_page=250"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: _existing_workers_result
+
+    - name: Initialise vms list
+      ansible.builtin.set_fact:
+        vms: []
+
+    - name: Build vms list from Foreman query results
+      ansible.builtin.set_fact:
+        vms: "{{ vms + [{'name': item | regex_replace('\\.' + foreman_domain + '$', '')}] }}"
+      loop: >-
+        {{
+          (_existing_cps_result.json.results + _existing_workers_result.json.results)
+          | map(attribute='name') | list
+        }}
+
+    - name: Report nodes to be wiped
+      ansible.builtin.debug:
+        msg: "Wiping {{ vms | length }} node(s): {{ vms | map(attribute='name') | join(', ') }}"
+
+  roles:
+    - role: cluster_cleanup
+
+
+# -----------------------------------------------------------------------------
 # PHASE 1: VM Provisioning
 # -----------------------------------------------------------------------------
 
@@ -61,6 +126,92 @@
     - name: Wait for SSH connectivity
       ansible.builtin.wait_for_connection:
         timeout: 600
+
+- name: Linux base provisioning
+  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
+  become: true
+  become_user: root
+  gather_facts: true
+  strategy: free
+  tags: [prep]
+  vars_files:
+    - vars/vault.yml
+  handlers:
+    - import_tasks: handlers/main.yml
+  pre_tasks:
+    - name: Check for provisioned sentinel file
+      ansible.builtin.stat:
+        path: /root/.provisioned
+      register: provisioned_file
+    - name: Skip host if already provisioned
+      ansible.builtin.meta: end_host
+      when: provisioned_file.stat.exists
+  tasks:
+    - name: Provision an Enterprise Linux server
+      ansible.builtin.include_role:
+        name: enterprise_linux
+      when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Enroll nodes into FreeIPA
+  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
+  become: true
+  become_user: root
+  gather_facts: false
+  strategy: free
+  tags: [prep]
+  vars_files:
+    - vars/vault.yml
+    - vars/freeipa.yml
+  pre_tasks:
+    - name: Check for provisioned sentinel file
+      ansible.builtin.stat:
+        path: /root/.provisioned
+      register: provisioned_file
+    - name: Skip host if already provisioned
+      ansible.builtin.meta: end_host
+      when: provisioned_file.stat.exists
+  tasks:
+    - name: Enroll into FreeIPA
+      ansible.builtin.include_role:
+        name: freeipa.ansible_freeipa.ipaclient
+
+- name: Post-enrollment configuration
+  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
+  become: true
+  become_user: root
+  gather_facts: false
+  strategy: free
+  tags: [prep]
+  vars_files:
+    - vars/vault.yml
+  handlers:
+    - import_tasks: handlers/main.yml
+  pre_tasks:
+    - name: Check for provisioned sentinel file
+      ansible.builtin.stat:
+        path: /root/.provisioned
+      register: provisioned_file
+    - name: Skip host if already provisioned
+      ansible.builtin.meta: end_host
+      when: provisioned_file.stat.exists
+  tasks:
+    - name: Reboot the system
+      ansible.builtin.reboot:
+    - name: Deploy DUO config
+      ansible.builtin.template:
+        src: templates/login_duo.conf.j2
+        dest: /etc/duo/login_duo.conf
+    - name: Deploy SSH config changes
+      ansible.builtin.template:
+        src: templates/00-duo.conf.j2
+        dest: /etc/ssh/sshd_config.d/00-duo.conf
+      notify:
+        - Reload ssh
+    - name: Create provisioned sentinel
+      ansible.builtin.file:
+        path: /root/.provisioned
+        state: touch
+        mode: "0644"
 
 - name: Common Kubernetes prerequisites (all nodes)
   hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
@@ -122,6 +273,8 @@
   become: true
   gather_facts: false
   tags: [bootstrap]
+  vars_files:
+    - vars/vault.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
@@ -141,6 +294,8 @@
   gather_facts: false
   serial: 1
   tags: [bootstrap]
+  vars_files:
+    - vars/vault.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
@@ -196,7 +351,7 @@
   hosts: foreman_almalinux10_kubernetesworkernode
   become: true
   gather_facts: true
-  serial: 1
+  strategy: free
   tags: [workers]
   roles:
     - role: worker_join
@@ -255,6 +410,11 @@
         name: cluster_addons
         tasks_from: label_workers
 
+    - name: Install Kyverno policy engine
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: kyverno
+
     - name: Install metrics-server
       ansible.builtin.include_role:
         name: cluster_addons
@@ -275,6 +435,11 @@
         name: cluster_addons
         tasks_from: longhorn
 
+    - name: Install reflector secret mirror operator
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: reflector
+
     - name: Install cert-manager with Cloudflare DNS-01
       ansible.builtin.include_role:
         name: cluster_addons
@@ -284,6 +449,16 @@
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: headlamp
+
+    - name: Install ArgoCD GitOps controller
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: argocd
+
+    - name: Apply Pod Security Standards namespace labels
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: pss
 
     - name: Expose Longhorn UI via Traefik IngressRoute
       ansible.builtin.include_role:
