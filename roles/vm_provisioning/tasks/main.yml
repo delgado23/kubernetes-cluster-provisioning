@@ -48,23 +48,42 @@
       Accept: application/json
   register: _existing_workers_result
 
-- name: Determine next worker index
+- name: Determine existing worker indices
   ansible.builtin.set_fact:
-    _worker_start_index: >-
+    _existing_indices: >-
       {{
-        ((_existing_workers_result.json.results
+        (_existing_workers_result.json.results
           | map(attribute='name')
           | select('match', '^' + worker_name_prefix + '-\d+\.')
           | map('regex_replace', '^' + worker_name_prefix + '-(\d+)\..*', '\1')
           | map('int')
-          | list) or [0]) | max + 1
+          | list) or []
       }}
+
+- name: Determine new worker indices (fill gaps first, then extend)
+  ansible.builtin.set_fact:
+    _new_worker_indices: >-
+      {{
+        (
+          range(1, (_existing_indices | max | default(0)) + (worker_node_count | int) + 2)
+          | list
+          | difference(_existing_indices)
+          | sort
+        )[:worker_node_count | int]
+      }}
+
+- name: Report worker indices to be provisioned
+  ansible.builtin.debug:
+    msg: >-
+      Provisioning {{ worker_node_count }} worker(s):
+      {{ _new_worker_indices | map('string') | map('zfill', 2)
+         | map('regex_replace', '^', worker_name_prefix + '-') | list | join(', ') }}
 
 - name: Generate worker node definitions
   ansible.builtin.set_fact:
     _generated_workers: >-
       {{ _generated_workers | default([]) + [{'name': worker_name_prefix + '-' + '%02d' | format(item), 'hostgroup': worker_hostgroup}] }}
-  loop: "{{ range(_worker_start_index | int, _worker_start_index | int + worker_node_count | int) | list }}"
+  loop: "{{ _new_worker_indices }}"
 
 - name: Build vms list
   ansible.builtin.set_fact:
