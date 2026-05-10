@@ -1,6 +1,6 @@
 # Kubernetes Cluster Provisioning
 
-Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), Longhorn storage, and Headlamp.
+Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), Longhorn storage, Headlamp, and ArgoCD.
 
 ## Cluster Architecture
 
@@ -10,10 +10,14 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | Workers | 1–13 nodes, Longhorn LVM on dedicated data disk |
 | Networking | Flannel VXLAN, MetalLB L2 LoadBalancer |
 | Ingress | Traefik v3 with HTTP→HTTPS redirect |
-| TLS | cert-manager + Let's Encrypt + Cloudflare DNS-01, wildcard cert for `*.ingress_domain` |
+| TLS | cert-manager + Let's Encrypt + Cloudflare DNS-01, wildcard cert for `*.ingress_domain` — automatically mirrored to all addon namespaces by reflector and renewed without manual intervention |
 | Storage | Longhorn with XFS LVM partition |
-| Dashboard | Headlamp (Kubernetes UI, token auth) |
+| GitOps | ArgoCD |
+| Dashboard | Headlamp (Kubernetes UI) |
 | Tooling | kubectl, Helm, k9s on all control plane nodes |
+| etcd encryption | AES-CBC encryption at rest for all Secrets, configured at kubeadm init time |
+| Pod Security Standards | Namespace-scoped enforcement — `privileged` for storage/network system namespaces, `baseline`/`restricted` for application namespaces |
+| Policy engine | Kyverno in Audit mode — reports violations for latest image tags, missing resource limits, privileged containers, and host namespace use |
 | Addon versions | Resolved from GitHub releases at runtime — always installs latest |
 
 Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlplane_node_count` and `worker_node_count` (see [AWX Survey Variables](#awx-survey-variables)).
@@ -36,21 +40,27 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ├── main.yml              # Full cluster provisioning pipeline
 ├── maintenance.yml       # Rolling OS maintenance (drain/update/reboot/uncordon)
 ├── wipe.yml              # Remove all nodes from Foreman and FreeIPA
+├── handlers/
+│   └── main.yml          # Shared handlers (e.g. Reload ssh)
+├── templates/
+│   ├── login_duo.conf.j2 # DUO Unix SSH integration config
+│   └── 00-duo.conf.j2    # sshd_config.d snippet enabling ForceCommand login_duo
 ├── vars/
 │   ├── foreman.yml       # Foreman connection settings and compute profile IDs
-│   ├── freeipa.yml       # FreeIPA connection settings
+│   ├── freeipa.yml       # FreeIPA connection settings and ipaclient vars
 │   ├── vault.yml         # Ansible Vault: API tokens and passwords
 │   ├── vms.yml           # VM definitions (names, hostgroups, Foreman parameters)
 │   └── vm_defaults.yml   # Default VM hardware specs
 └── roles/
     ├── vm_provisioning/       # Create VMs in Foreman/Proxmox, filters by node counts
     ├── proxmox_postconfig/    # EFI disk, rename, tags via Proxmox API
+    ├── enterprise_linux/      # Base OS provisioning: repos, packages, atop, DUO install
     ├── common/                # K8s prerequisites: containerd, kubelet, firewall
     ├── controlplane_infra/    # HAProxy, keepalived, controlplane firewall rules
     ├── worker_storage/        # LVM + XFS setup for Longhorn on worker data disk, iSCSI
     ├── cluster_bootstrap/     # kubeadm init/join, Flannel, kubelet-serving-cert-approver, tooling
     ├── worker_join/           # Join worker nodes to the cluster
-    ├── cluster_addons/        # MetalLB, Traefik, Longhorn, cert-manager, Headlamp
+    ├── cluster_addons/        # MetalLB, Traefik, Longhorn, reflector, cert-manager, Headlamp, ArgoCD
     ├── node_maintenance/      # Drain, update, reboot, uncordon
     └── cluster_cleanup/       # Remove hosts from Foreman and FreeIPA
 ```
@@ -59,6 +69,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 
 The playbook is safe to re-run against a partially or fully provisioned cluster:
 
+- **Linux provisioning** — base OS hardening (`enterprise_linux` role), FreeIPA enrollment (`ipaclient`), DUO SSH 2FA config, and reboot are guarded by a sentinel file at `/root/.provisioned`. Nodes that have already been through this phase are skipped on re-runs.
 - **Prep phase** — each node checks for `/etc/kubernetes/kubelet.conf` before running `common`, `controlplane_infra`, and `worker_storage`. Nodes already in the cluster skip those roles entirely.
 - **Bootstrap phase** — `join_secondary` generates fresh join credentials at runtime via `delegate_to` against an existing control plane node (no cross-play hostvars required). It checks for `kubelet.conf` and skips the join if the node is already a cluster member. When `controlplane_node_count=0`, the entire bootstrap phase is skipped.
 - **Worker join** — workers are skipped if they already have `kubelet.conf`. The join token is generated fresh via `delegate_to` directly against a control plane node, so running with `--limit` scoped to only new workers works without needing the control plane in scope.
@@ -76,12 +87,20 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 |---|---|
 | `vault_proxmox_api_token` | Proxmox API token secret |
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
-| `vault_traefik_dashboard_password` | bcrypt htpasswd string for Traefik dashboard |
-| `vault_longhorn_dashboard_password` | bcrypt htpasswd string for Longhorn dashboard |
+| `vault_traefik_dashboard_password` | bcrypt htpasswd string for Traefik dashboard basic auth |
+| `vault_longhorn_dashboard_password` | bcrypt htpasswd string for Longhorn dashboard basic auth |
+| `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
+| `vault_duo_secret_key` | DUO Unix integration secret key for SSH 2FA |
 | `foreman_user_vault` | Foreman username |
 | `foreman_password_vault` | Foreman password |
 | `ipa_password` | FreeIPA admin password |
 | `keepalived_password` | Keepalived VRRP authentication password |
+
+Generate the etcd encryption key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
+
+```bash
+head -c 32 /dev/urandom | base64
+```
 
 Dashboard passwords must be htpasswd-formatted bcrypt hashes — **not raw passwords**. Traefik's BasicAuth middleware rejects raw strings and disables the route entirely (returning 404) if the format is wrong. Generate with:
 
@@ -93,12 +112,13 @@ The full output (e.g. `admin:$2y$05$...`) is what goes in the vault variable.
 
 ## AWX Survey Variables
 
-When running via AWX/Tower, these survey variables control how many nodes are provisioned. Both default to `1` if not provided by a survey.
-
 | Variable | Type | Default | Description |
 |---|---|---|---|
+| `wipe_cluster` | Boolean | `false` | When `true`, removes all existing cluster nodes from Foreman and FreeIPA first, then provisions a fresh cluster using the current `controlplane_node_count` and `worker_node_count` values. |
 | `controlplane_node_count` | Integer | 1 | Number of control plane nodes to provision this run. Set to `0` when only adding worker nodes — this skips the bootstrap and cluster add-ons phases entirely. Max 3. |
 | `worker_node_count` | Integer | 1 | Number of worker nodes to add this run. The provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
+
+`wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
 
 Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. Name prefixes and Foreman hostgroup strings are configured in `vars/vms.yml`.
 
@@ -117,6 +137,22 @@ Add 3 control plane nodes and 5 worker nodes:
 ```bash
 ansible-playbook main.yml --ask-vault-pass -e "controlplane_node_count=3 worker_node_count=5"
 ```
+
+### Removing Worker Nodes (Scale Down)
+
+Drains the node, removes it from Kubernetes, resets kubeadm state on the VM itself, then deletes the host from Foreman and FreeIPA. Pass one or more short hostnames (without the domain suffix):
+
+```bash
+# Remove a single worker
+ansible-playbook remove-workers.yml --ask-vault-pass -e "remove_workers=k8s-worker-03"
+
+# Remove multiple workers
+ansible-playbook remove-workers.yml --ask-vault-pass -e "remove_workers=k8s-worker-03,k8s-worker-04"
+```
+
+In AWX, configure `remove_workers` as a **Text** survey question. The playbook validates that each named host exists in Foreman before proceeding.
+
+The playbook also clears the `/root/.provisioned` sentinel on each removed node, so the same VM can be re-provisioned cleanly if it is added back later.
 
 ### Adding Worker Nodes to an Existing Cluster
 
@@ -143,7 +179,7 @@ ansible-playbook main.yml --tags bootstrap
 # Phase 4: Join workers to the cluster and label them
 ansible-playbook main.yml --tags workers
 
-# Phase 5: Install add-ons (MetalLB, Traefik, Longhorn, cert-manager, Headlamp)
+# Phase 5: Install add-ons (MetalLB, Traefik, Longhorn, reflector, cert-manager, Headlamp, ArgoCD)
 ansible-playbook main.yml --tags addons
 
 # Skip VM provisioning for re-runs against existing nodes
@@ -152,6 +188,19 @@ ansible-playbook main.yml --skip-tags provision
 # Ingress diagnostics (dump Traefik/cert state)
 ansible-playbook main.yml --tags debug
 ```
+
+### Renew Control Plane Certificates
+
+kubeadm certificates expire after 1 year. Run this before expiry or whenever `kubeadm certs check-expiration` shows certs approaching their deadline. Processes one control plane at a time so the cluster stays available throughout.
+
+```bash
+ansible-playbook renew-certs.yml
+
+# Single node only
+ansible-playbook renew-certs.yml --limit k8s-cp-01.example.com
+```
+
+Covers all kubeadm-managed certs (apiserver, etcd, front-proxy, admin/controller-manager/scheduler kubeconfigs). Does **not** touch CA certs (10-year lifetime), kubelet client certs (auto-rotated by kubelet), or kubelet serving certs (handled by kubelet-serving-cert-approver).
 
 ### Node Maintenance (Rolling OS Updates)
 
@@ -177,7 +226,7 @@ ansible-playbook wipe.yml --ask-vault-pass
 
 ## VM Definitions
 
-Edit `vars/vms.yml` to configure nodes. There are no hardcoded hostnames — both control plane and worker names are generated at runtime from a prefix and a counter (e.g. `naxxramas-cp-01`, `naxxramas-worker-03`).
+Edit `vars/vms.yml` to configure nodes. There are no hardcoded hostnames — both control plane and worker names are generated at runtime from a prefix and a counter (e.g. `k8s-cp-01`, `k8s-worker-03`).
 
 Control plane configs are ordered: index 0 is always the primary. Only the first `controlplane_node_count` entries are provisioned.
 
@@ -230,9 +279,10 @@ After a successful run, all services are accessible via Traefik at the MetalLB L
 | Traefik dashboard | `https://traefik.{{ ingress_domain }}` | BasicAuth (vault) |
 | Longhorn dashboard | `https://longhorn.{{ ingress_domain }}` | BasicAuth (vault) |
 | Headlamp dashboard | `https://headlamp.{{ ingress_domain }}` | Kubernetes token |
+| ArgoCD | `https://argocd.{{ ingress_domain }}` | Admin password (printed at end of run) |
 | Kubernetes API | `https://{{ k8s_api_endpoint }}:6443` | kubeconfig |
 
-`ingress_domain` defaults to `k8s.<domain>` and is configured in `roles/cluster_addons/defaults/main.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}` and is issued by Let's Encrypt via Cloudflare DNS-01.
+`ingress_domain` defaults to `k8s.<domain>` and is configured in `roles/cluster_addons/defaults/main.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}`, is issued by Let's Encrypt via Cloudflare DNS-01, and is automatically mirrored to all addon namespaces by [reflector](https://github.com/emberstack/kubernetes-reflector). When cert-manager renews the cert, reflector pushes the updated secret to every namespace without any manual intervention.
 
 For Headlamp, generate a service account token to log in:
 
@@ -241,3 +291,5 @@ kubectl create serviceaccount headlamp-admin -n kube-system
 kubectl create clusterrolebinding headlamp-admin --clusterrole=cluster-admin --serviceaccount=kube-system:headlamp-admin
 kubectl create token headlamp-admin -n kube-system --duration=8760h
 ```
+
+The ArgoCD initial admin password is printed at the end of the addons run. Change it after first login — ArgoCD deletes the `argocd-initial-admin-secret` once the password is updated, which is expected.
