@@ -28,6 +28,15 @@ apiServer:
     - "{{ foreman_params.k8s_api_endpoint_ip }}"
     - "127.0.0.1"
     - "localhost"
+  extraArgs:
+    - name: encryption-provider-config
+      value: /etc/kubernetes/enc/enc.yaml
+  extraVolumes:
+    - name: enc
+      hostPath: /etc/kubernetes/enc
+      mountPath: /etc/kubernetes/enc
+      readOnly: false
+      pathType: DirectoryOrCreate
 ---
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration

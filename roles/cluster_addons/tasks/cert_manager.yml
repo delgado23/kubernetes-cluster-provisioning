@@ -1,16 +1,4 @@
 ---
-- name: Check if Helm is installed
-  ansible.builtin.command: which helm
-  changed_when: false
-  register: helm_check
-  failed_when: false
-
-- name: Install Helm if missing
-  ansible.builtin.shell:
-    cmd: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-  when: helm_check.rc != 0
-  changed_when: true
-
 - name: Add cert-manager Helm repo
   ansible.builtin.command:
     cmd: /usr/local/bin/helm repo add jetstack https://charts.jetstack.io
@@ -163,6 +151,12 @@
         namespace: {{ cert_manager_namespace }}
       spec:
         secretName: {{ wildcard_secret_name }}
+        secretTemplate:
+          annotations:
+            reflector.v1.k8s.emberstack.com/reflection-allowed: "true"
+            reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces: "{{ traefik_namespace }},{{ longhorn_namespace }},{{ headlamp_namespace }},{{ argocd_namespace }}"
+            reflector.v1.k8s.emberstack.com/reflection-auto-enabled: "true"
+            reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: "{{ traefik_namespace }},{{ longhorn_namespace }},{{ headlamp_namespace }},{{ argocd_namespace }}"
         issuerRef:
           name: {{ _issuer_name }}
           kind: ClusterIssuer
@@ -197,29 +191,3 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
-- name: Ensure target namespaces exist for secret copy
-  ansible.builtin.shell:
-    cmd: kubectl create namespace {{ item }} --dry-run=client -o yaml | kubectl apply -f -
-  environment:
-    KUBECONFIG: /root/.kube/config
-  loop:
-    - "{{ traefik_namespace }}"
-    - "{{ longhorn_namespace }}"
-    - "{{ headlamp_namespace }}"
-  changed_when: false
-
-- name: Copy wildcard secret into addon namespaces
-  ansible.builtin.shell:
-    cmd: |
-      kubectl get secret {{ wildcard_secret_name }} \
-        --namespace {{ cert_manager_namespace }} \
-        -o json \
-      | jq 'del(.metadata.namespace, .metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.annotations, .metadata.managedFields) | .metadata.namespace = "{{ item }}"' \
-      | kubectl apply -f -
-  environment:
-    KUBECONFIG: /root/.kube/config
-  loop:
-    - "{{ traefik_namespace }}"
-    - "{{ longhorn_namespace }}"
-    - "{{ headlamp_namespace }}"
-  changed_when: true

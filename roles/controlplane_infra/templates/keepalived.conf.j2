@@ -6,7 +6,7 @@ vrrp_script check_haproxy {
 
 vrrp_instance VI_1 {
     state {{ foreman_params.keepalived_state }}
-    interface {{ ansible_default_ipv4.interface }}         # change to your actual interface
+    interface {{ ansible_facts['default_ipv4']['interface'] }}
     virtual_router_id 51
     priority {{ foreman_params.keepalived_priority }}
     advert_int 1

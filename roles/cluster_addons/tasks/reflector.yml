@@ -1,0 +1,32 @@
+---
+- name: Add emberstack Helm repo
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo add emberstack https://emberstack.github.io/helm-charts
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+- name: Update Helm repos
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo update
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Install or upgrade reflector via Helm
+  ansible.builtin.command:
+    cmd: >
+      /usr/local/bin/helm upgrade --install reflector emberstack/reflector
+      --namespace kube-system
+      --version {{ reflector_version }}
+      --wait
+      --timeout 3m
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: reflector_helm_output
+  changed_when: true
+
+- name: Print reflector Helm output
+  ansible.builtin.debug:
+    var: reflector_helm_output.stdout_lines
