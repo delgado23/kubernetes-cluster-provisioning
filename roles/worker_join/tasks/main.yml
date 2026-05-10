@@ -3,10 +3,9 @@
   ansible.builtin.command: kubeadm token create --print-join-command
   delegate_to: "{{ groups['foreman_almalinux10_kubernetescontrolplanenode'] | first }}"
   register: kubeadm_join_cmd
-  run_once: true
   changed_when: true
 
-- name: Set join command fact on all workers
+- name: Set join command fact
   ansible.builtin.set_fact:
     kubeadm_join_command: "{{ kubeadm_join_cmd.stdout }}"
 
