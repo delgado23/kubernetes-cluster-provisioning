@@ -138,6 +138,22 @@ Add 3 control plane nodes and 5 worker nodes:
 ansible-playbook main.yml --ask-vault-pass -e "controlplane_node_count=3 worker_node_count=5"
 ```
 
+### Removing Worker Nodes (Scale Down)
+
+Drains the node, removes it from Kubernetes, resets kubeadm state on the VM itself, then deletes the host from Foreman and FreeIPA. Pass one or more short hostnames (without the domain suffix):
+
+```bash
+# Remove a single worker
+ansible-playbook remove-workers.yml --ask-vault-pass -e "remove_workers=k8s-worker-03"
+
+# Remove multiple workers
+ansible-playbook remove-workers.yml --ask-vault-pass -e "remove_workers=k8s-worker-03,k8s-worker-04"
+```
+
+In AWX, configure `remove_workers` as a **Text** survey question. The playbook validates that each named host exists in Foreman before proceeding.
+
+The playbook also clears the `/root/.provisioned` sentinel on each removed node, so the same VM can be re-provisioned cleanly if it is added back later.
+
 ### Adding Worker Nodes to an Existing Cluster
 
 Set `controlplane_node_count=0` to skip bootstrap and cluster add-ons. The playbook provisions the new VMs, preps them, joins them to the cluster, and stops — existing nodes that already have `kubelet.conf` are skipped during prep:

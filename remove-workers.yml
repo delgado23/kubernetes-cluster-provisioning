@@ -1,0 +1,241 @@
+---
+# =============================================================================
+# remove-workers.yml — Safely remove worker nodes from the cluster
+# =============================================================================
+# Drains each node, removes it from Kubernetes, resets kubeadm state,
+# then deletes the host from Foreman and FreeIPA.
+#
+# Required variable (AWX survey or -e):
+#   remove_workers  — comma or newline separated short hostnames to remove
+#                     e.g. "k8s-worker-03" or "k8s-worker-03,k8s-worker-04"
+#
+# Example:
+#   ansible-playbook remove-workers.yml --ask-vault-pass \
+#     -e "remove_workers=k8s-worker-03"
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Play 1: Validate input and build the target list
+# -----------------------------------------------------------------------------
+
+- name: Validate remove_workers input
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars/vault.yml
+    - vars/foreman.yml
+    - vars/freeipa.yml
+  tasks:
+    - name: Fail if remove_workers is not provided
+      ansible.builtin.fail:
+        msg: "remove_workers is required. Pass short hostnames e.g. -e 'remove_workers=k8s-worker-03'"
+      when: remove_workers is not defined or remove_workers | string | trim == ''
+
+    - name: Normalise remove_workers to a list
+      ansible.builtin.set_fact:
+        _target_workers: >-
+          {{
+            remove_workers | string
+            | regex_replace('\n', ',')
+            | split(',')
+            | map('trim')
+            | select('ne', '')
+            | list
+          }}
+
+    - name: Confirm nodes to be removed
+      ansible.builtin.debug:
+        msg: "Removing {{ _target_workers | length }} worker(s): {{ _target_workers | join(', ') }}"
+
+    - name: Verify each target exists in Foreman
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ item }}.{{ foreman_domain }}"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        status_code: [200, 404]
+        headers:
+          Accept: application/json
+      register: _foreman_check
+      loop: "{{ _target_workers }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Fail if any target was not found in Foreman
+      ansible.builtin.fail:
+        msg: "Host '{{ item.item }}' not found in Foreman — aborting."
+      when: item.status == 404
+      loop: "{{ _foreman_check.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+
+# -----------------------------------------------------------------------------
+# Play 2: Drain and delete nodes from the Kubernetes cluster
+# -----------------------------------------------------------------------------
+
+- name: Drain and delete worker nodes from Kubernetes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/vault.yml
+    - vars/foreman.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  pre_tasks:
+    - name: Run on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
+
+    - name: Normalise remove_workers to a list
+      ansible.builtin.set_fact:
+        _target_workers: >-
+          {{
+            remove_workers | string
+            | regex_replace('\n', ',')
+            | split(',')
+            | map('trim')
+            | select('ne', '')
+            | list
+          }}
+  tasks:
+    - name: Cordon node
+      ansible.builtin.command:
+        cmd: kubectl cordon {{ item }}.{{ foreman_domain }}
+      loop: "{{ _target_workers }}"
+      loop_control:
+        label: "{{ item }}"
+      changed_when: true
+      failed_when: false
+
+    - name: Drain node (evict pods, ignore daemonsets, delete emptydir data)
+      ansible.builtin.command:
+        cmd: >
+          kubectl drain {{ item }}.{{ foreman_domain }}
+          --ignore-daemonsets
+          --delete-emptydir-data
+          --force
+          --timeout=300s
+      loop: "{{ _target_workers }}"
+      loop_control:
+        label: "{{ item }}"
+      changed_when: true
+
+    - name: Delete node from Kubernetes
+      ansible.builtin.command:
+        cmd: kubectl delete node {{ item }}.{{ foreman_domain }}
+      loop: "{{ _target_workers }}"
+      loop_control:
+        label: "{{ item }}"
+      changed_when: true
+      failed_when: false
+
+
+# -----------------------------------------------------------------------------
+# Play 3: Reset kubeadm state on the departing workers
+# -----------------------------------------------------------------------------
+
+- name: Reset kubeadm on departing workers
+  hosts: foreman_almalinux10_kubernetesworkernode
+  become: true
+  gather_facts: false
+  strategy: free
+  vars_files:
+    - vars/vault.yml
+    - vars/foreman.yml
+  pre_tasks:
+    - name: Normalise remove_workers to a list
+      ansible.builtin.set_fact:
+        _target_workers: >-
+          {{
+            remove_workers | string
+            | regex_replace('\n', ',')
+            | split(',')
+            | map('trim')
+            | select('ne', '')
+            | list
+          }}
+
+    - name: Skip nodes not in the removal list
+      ansible.builtin.meta: end_host
+      when: inventory_hostname | regex_replace('\\..*$', '') not in _target_workers
+  tasks:
+    - name: Reset kubeadm state
+      ansible.builtin.command: kubeadm reset --force
+      changed_when: true
+
+    - name: Remove CNI configuration
+      ansible.builtin.file:
+        path: /etc/cni/net.d
+        state: absent
+
+    - name: Remove kubelet config
+      ansible.builtin.file:
+        path: /etc/kubernetes
+        state: absent
+
+    - name: Remove provisioned sentinel to allow re-provisioning
+      ansible.builtin.file:
+        path: /root/.provisioned
+        state: absent
+
+
+# -----------------------------------------------------------------------------
+# Play 4: Delete from Foreman and FreeIPA
+# -----------------------------------------------------------------------------
+
+- name: Remove worker nodes from Foreman and FreeIPA
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars/vault.yml
+    - vars/foreman.yml
+    - vars/freeipa.yml
+  tasks:
+    - name: Normalise remove_workers to a list
+      ansible.builtin.set_fact:
+        _target_workers: >-
+          {{
+            remove_workers | string
+            | regex_replace('\n', ',')
+            | split(',')
+            | map('trim')
+            | select('ne', '')
+            | list
+          }}
+
+    - name: Remove hosts from Foreman
+      theforeman.foreman.host:
+        username: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        server_url: "{{ foreman_url }}"
+        validate_certs: "{{ foreman_validate_certs }}"
+        name: "{{ item }}.{{ foreman_domain }}"
+        state: absent
+      loop: "{{ _target_workers }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Remove hosts from FreeIPA
+      community.general.ipa_host:
+        ipa_user: admin
+        ipa_pass: "{{ ipaadmin_password }}"
+        ipa_host: "{{ ipa_server }}"
+        name: "{{ item }}.{{ foreman_domain }}"
+        state: absent
+        update_dns: true
+      loop: "{{ _target_workers }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >-
+          Removed {{ _target_workers | length }} worker(s): {{ _target_workers | join(', ') }}.
+          Drained from Kubernetes, reset kubeadm, deleted from Foreman and FreeIPA.
