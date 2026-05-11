@@ -17,7 +17,7 @@ vrrp_instance VI_1 {
     }
 
     virtual_ipaddress {
-        {{ foreman_params.keepalived_vip }}     # your chosen VIP
+        {{ keepalived_vip }}
     }
 
     track_script {

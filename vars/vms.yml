@@ -9,6 +9,14 @@
 # failover order.  Only the first controlplane_node_count entries are
 # provisioned; the primary is always entry [0].
 # ------------------------------------------------------------------
+# Cluster-wide network settings
+# ------------------------------------------------------------------
+keepalived_vip:      "172.16.0.29"   # VIP shared by all control plane nodes
+k8s_pod_cidr:        "10.244.0.0/16" # Flannel pod network
+k8s_service_cidr:    "10.96.0.0/12"  # Kubernetes service network
+haproxy_port:        7443             # HAProxy frontend port for kube-apiserver
+
+# ------------------------------------------------------------------
 # Naming and hostgroup strings
 # ------------------------------------------------------------------
 controlplane_hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"

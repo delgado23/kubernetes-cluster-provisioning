@@ -301,6 +301,24 @@
     label: "{{ item.name }}"
   changed_when: false
 
+- name: Add newly provisioned hosts to Foreman inventory groups
+  ansible.builtin.add_host:
+    name: "{{ item.0.name }}.{{ foreman_domain }}"
+    groups:
+      - "{{ 'foreman_almalinux10_kubernetescontrolplanenode' if 'Controlplane' in item.0.hostgroup else 'foreman_almalinux10_kubernetesworkernode' }}"
+    foreman_params: >-
+      {{
+        dict(
+          item.0.host_parameters | default([]) | map(attribute='name')
+          | zip(item.0.host_parameters | default([]) | map(attribute='value'))
+        )
+      }}
+  loop: "{{ vms | zip(existing_hosts.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}"
+  when: item.1.status == 404
+  changed_when: false
+
 - name: Wait for hosts to finish building (build flag clears)
   ansible.builtin.uri:
     url: "{{ foreman_url }}/api/hosts/{{ item.name }}.{{ foreman_domain }}"
