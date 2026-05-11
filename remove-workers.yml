@@ -161,6 +161,15 @@
       changed_when: true
       failed_when: false
 
+    - name: Delete Longhorn node object (prevents stale scheduling flags on re-add)
+      ansible.builtin.command:
+        cmd: kubectl -n longhorn-system delete node.longhorn.io {{ item }}.{{ foreman_domain }}
+      loop: "{{ _target_workers }}"
+      loop_control:
+        label: "{{ item }}"
+      changed_when: true
+      failed_when: false
+
 
 # -----------------------------------------------------------------------------
 # Play 3: Reset kubeadm state on the departing workers
