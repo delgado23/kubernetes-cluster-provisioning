@@ -1,14 +1,23 @@
 ---
+- name: Get worker nodes registered in Kubernetes
+  ansible.builtin.command: >
+    kubectl get nodes --no-headers
+    -l '!node-role.kubernetes.io/control-plane'
+    -o custom-columns=NAME:.metadata.name
+  register: _k8s_workers
+  changed_when: false
+  retries: 18
+  delay: 10
+  until: _k8s_workers.stdout_lines | select('ne', '') | list | length > 0
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
 - name: Label each worker node
   ansible.builtin.command: >
     kubectl label node {{ item }}
     node-role.kubernetes.io/worker=worker
     --overwrite
-  loop: "{{ groups['foreman_almalinux10_kubernetesworkernode'] }}"
-  register: _label_result
-  until: _label_result.rc == 0
-  retries: 18
-  delay: 10
+  loop: "{{ _k8s_workers.stdout_lines | select('ne', '') | list }}"
   changed_when: true
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
