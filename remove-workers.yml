@@ -104,6 +104,32 @@
             | list
           }}
   tasks:
+    - name: Disable Longhorn scheduling and request replica eviction
+      ansible.builtin.command:
+        cmd: >
+          kubectl -n longhorn-system patch node.longhorn.io {{ item }}.{{ foreman_domain }}
+          --type=merge -p '{"spec":{"allowScheduling":false,"evictionRequested":true}}'
+      loop: "{{ _target_workers }}"
+      loop_control:
+        label: "{{ item }}"
+      changed_when: true
+      failed_when: false
+
+    - name: Wait for Longhorn replicas to evacuate
+      ansible.builtin.shell: |
+        kubectl -n longhorn-system get replicas.longhorn.io \
+          -o custom-columns=NODE:.spec.nodeID --no-headers \
+          | grep -c "^{{ item }}.{{ foreman_domain }}$" || true
+      register: _replica_count
+      until: (_replica_count.stdout | trim | int) == 0
+      retries: 60
+      delay: 15
+      loop: "{{ _target_workers }}"
+      loop_control:
+        label: "{{ item }}"
+      changed_when: false
+      failed_when: false
+
     - name: Cordon node
       ansible.builtin.command:
         cmd: kubectl cordon {{ item }}.{{ foreman_domain }}
@@ -129,6 +155,15 @@
     - name: Delete node from Kubernetes
       ansible.builtin.command:
         cmd: kubectl delete node {{ item }}.{{ foreman_domain }}
+      loop: "{{ _target_workers }}"
+      loop_control:
+        label: "{{ item }}"
+      changed_when: true
+      failed_when: false
+
+    - name: Delete Longhorn node object (prevents stale scheduling flags on re-add)
+      ansible.builtin.command:
+        cmd: kubectl -n longhorn-system delete node.longhorn.io {{ item }}.{{ foreman_domain }}
       loop: "{{ _target_workers }}"
       loop_control:
         label: "{{ item }}"
