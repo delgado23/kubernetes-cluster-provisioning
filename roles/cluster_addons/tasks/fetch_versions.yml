@@ -77,7 +77,7 @@
     longhorn_version:      "{{ _fetch_results.results[1].json.tag_name | regex_replace('^v', '') }}"
     traefik_chart_version: "{{ _fetch_results.results[2].json.tag_name | regex_replace('^v', '') }}"
     cert_manager_version:  "{{ _fetch_results.results[3].json.tag_name }}"
-    headlamp_version:      "{{ _fetch_results.results[4].json.tag_name | regex_replace('^v', '') }}"
+    headlamp_version:      "{{ _fetch_results.results[4].json.tag_name | regex_replace('^headlamp-plugin-', '') | regex_replace('^v', '') }}"
     reflector_version:     "{{ _fetch_results.results[5].json.tag_name | regex_replace('^v', '') }}"
     argocd_version:        "{{ _fetch_results.results[6].json.tag_name | regex_replace('^v', '') }}"
 
