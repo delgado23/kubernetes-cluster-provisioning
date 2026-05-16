@@ -10,3 +10,15 @@ longhorn_namespace: longhorn-system
 headlamp_namespace: headlamp
 argocd_namespace: argocd
 kyverno_namespace: kyverno
+
+# Authentik SSO — set authentik_url before running addons
+# e.g. https://auth.example.com
+authentik_url: ""
+# OIDC client IDs must match the Client ID configured in each Authentik provider.
+# The issuer URL is derived as: {{ authentik_url }}/application/o/<client_id>/
+# Override authentik_argocd_issuer / authentik_headlamp_issuer if your app slug
+# differs from the client ID.
+authentik_argocd_client_id: "argocd"
+authentik_argocd_issuer: "{{ authentik_url }}/application/o/{{ authentik_argocd_client_id }}/"
+authentik_headlamp_client_id: "headlamp"
+authentik_headlamp_issuer: "{{ authentik_url }}/application/o/{{ authentik_headlamp_client_id }}/"
