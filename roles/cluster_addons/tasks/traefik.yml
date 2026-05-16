@@ -27,25 +27,6 @@
     KUBECONFIG: /root/.kube/config
   changed_when: true
 
-- name: Create Traefik dashboard basic auth secret
-  ansible.builtin.command:
-    cmd: >
-      kubectl create secret generic traefik-dashboard-auth
-      --namespace {{ traefik_namespace }}
-      --from-literal=users={{ vault_traefik_dashboard_password }}
-      --dry-run=client -o yaml
-  register: traefik_auth_yaml
-  changed_when: false
-  no_log: true
-
-- name: Apply Traefik dashboard basic auth secret
-  ansible.builtin.shell:
-    cmd: "echo '{{ traefik_auth_yaml.stdout }}' | kubectl apply -f -"
-  environment:
-    KUBECONFIG: /root/.kube/config
-  changed_when: true
-  no_log: true
-
 - name: Write Traefik Helm values
   ansible.builtin.copy:
     dest: /tmp/traefik-values.yml
@@ -127,11 +108,24 @@
       apiVersion: traefik.io/v1alpha1
       kind: Middleware
       metadata:
-        name: traefik-dashboard-auth
+        name: authentik-forward-auth
         namespace: {{ traefik_namespace }}
       spec:
-        basicAuth:
-          secret: traefik-dashboard-auth
+        forwardAuth:
+          address: "{{ authentik_url }}/outpost.goauthentik.io/auth/traefik"
+          trustForwardHeader: true
+          authResponseHeaders:
+            - X-authentik-username
+            - X-authentik-groups
+            - X-authentik-email
+            - X-authentik-name
+            - X-authentik-uid
+            - X-authentik-jwt
+            - X-authentik-meta-jwks
+            - X-authentik-meta-outpost
+            - X-authentik-meta-provider
+            - X-authentik-meta-app
+            - X-authentik-meta-version
 
       ---
       apiVersion: traefik.io/v1alpha1
@@ -158,7 +152,7 @@
           - match: Host(`traefik.{{ ingress_domain }}`) && (PathPrefix(`/dashboard`) || PathPrefix(`/api`))
             kind: Rule
             middlewares:
-              - name: traefik-dashboard-auth
+              - name: authentik-forward-auth
             services:
               - name: api@internal
                 kind: TraefikService
