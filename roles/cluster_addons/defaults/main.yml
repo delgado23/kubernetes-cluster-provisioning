@@ -13,7 +13,7 @@ kyverno_namespace: kyverno
 
 # Authentik SSO — set authentik_url before running addons
 # e.g. https://auth.garaventaville.com
-authentik_url: ""
+authentik_url: "https://auth.garaventaville.com"
 # OIDC client IDs must match the Client ID configured in each Authentik provider.
 # The issuer URL is derived as: {{ authentik_url }}/application/o/<client_id>/
 # Override authentik_argocd_issuer / authentik_headlamp_issuer if your app slug
