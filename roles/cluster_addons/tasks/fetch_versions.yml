@@ -47,9 +47,9 @@
   poll: 0
   register: _reflector_job
 
-- name: Fetch ArgoCD release from GitHub
+- name: Fetch ArgoCD Helm chart releases from GitHub
   ansible.builtin.uri:
-    url: https://api.github.com/repos/argoproj/argo-cd/releases/latest
+    url: https://api.github.com/repos/argoproj/argo-helm/releases?per_page=20
     return_content: true
   async: 60
   poll: 0
@@ -79,7 +79,14 @@
     cert_manager_version:  "{{ _fetch_results.results[3].json.tag_name }}"
     headlamp_version:      "{{ _fetch_results.results[4].json.tag_name | regex_replace('^headlamp-plugin-', '') | regex_replace('^v', '') }}"
     reflector_version:     "{{ _fetch_results.results[5].json.tag_name | regex_replace('^v', '') }}"
-    argocd_version:        "{{ _fetch_results.results[6].json.tag_name | regex_replace('^v', '') }}"
+    argocd_version: >-
+      {{
+        _fetch_results.results[6].json
+        | selectattr('tag_name', 'match', '^argo-cd-')
+        | map(attribute='tag_name')
+        | first
+        | regex_replace('^argo-cd-', '')
+      }}
 
 - name: Display resolved addon versions
   ansible.builtin.debug:
