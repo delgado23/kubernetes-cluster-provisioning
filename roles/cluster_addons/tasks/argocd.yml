@@ -35,6 +35,21 @@
       configs:
         params:
           server.insecure: "true"
+        cm:
+          url: "https://argocd.{{ ingress_domain }}"
+          oidc.config: |
+            name: Authentik
+            issuer: {{ authentik_argocd_issuer }}
+            clientID: {{ authentik_argocd_client_id }}
+            clientSecret: $oidc.authentik.clientSecret
+            requestedScopes:
+              - openid
+              - profile
+              - email
+              - groups
+        secret:
+          extra:
+            oidc.authentik.clientSecret: "{{ vault_authentik_argocd_client_secret }}"
 
       server:
         replicas: 2
@@ -46,6 +61,7 @@
 
       applicationSet:
         replicas: 2
+  no_log: true
 
 - name: Install or upgrade ArgoCD via Helm
   ansible.builtin.command:

@@ -14,6 +14,22 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
+- name: Write Headlamp Helm values
+  ansible.builtin.copy:
+    dest: /tmp/headlamp-values.yml
+    mode: "0600"
+    content: |
+      service:
+        type: ClusterIP
+
+      config:
+        oidc:
+          clientID: "{{ authentik_headlamp_client_id }}"
+          clientSecret: "{{ vault_authentik_headlamp_client_secret }}"
+          issuerURL: "{{ authentik_headlamp_issuer }}"
+          scopes: "openid,profile,email,groups"
+  no_log: true
+
 - name: Install or upgrade Headlamp via Helm
   ansible.builtin.command:
     cmd: >
@@ -21,7 +37,7 @@
       --namespace {{ headlamp_namespace }}
       --create-namespace
       --version {{ headlamp_version }}
-      --set service.type=ClusterIP
+      --values /tmp/headlamp-values.yml
       --wait
       --timeout 5m
   environment:
@@ -32,6 +48,11 @@
 - name: Print Headlamp Helm output
   ansible.builtin.debug:
     var: headlamp_helm_output.stdout_lines
+
+- name: Remove Headlamp values file
+  ansible.builtin.file:
+    path: /tmp/headlamp-values.yml
+    state: absent
 
 - name: Write Headlamp IngressRoute manifest
   ansible.builtin.copy:

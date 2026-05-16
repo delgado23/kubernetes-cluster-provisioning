@@ -13,6 +13,7 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | TLS | cert-manager + Let's Encrypt + Cloudflare DNS-01, wildcard cert for `*.ingress_domain` — automatically mirrored to all addon namespaces by reflector and renewed without manual intervention |
 | Storage | Longhorn with XFS LVM partition |
 | GitOps | ArgoCD |
+| SSO | Authentik (external) — ForwardAuth for Traefik/Longhorn, native OIDC for ArgoCD/Headlamp |
 | Dashboard | Headlamp (Kubernetes UI) |
 | Tooling | kubectl, Helm, k9s on all control plane nodes |
 | etcd encryption | AES-CBC encryption at rest for all Secrets, configured at kubeadm init time |
@@ -91,6 +92,8 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_longhorn_dashboard_password` | bcrypt htpasswd string for Longhorn dashboard basic auth |
 | `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
 | `vault_duo_secret_key` | DUO Unix integration secret key for SSH 2FA |
+| `vault_authentik_argocd_client_secret` | OIDC client secret for the ArgoCD application in Authentik |
+| `vault_authentik_headlamp_client_secret` | OIDC client secret for the Headlamp application in Authentik |
 | `foreman_user_vault` | Foreman username |
 | `foreman_password_vault` | Foreman password |
 | `ipa_password` | FreeIPA admin password |
@@ -270,16 +273,52 @@ Create the token once in Proxmox before running the playbooks:
 2. User: `root@pam`, Token ID: `ansible`, Privilege Separation: **No**
 3. Copy the displayed secret (shown only once) into vault as `vault_proxmox_api_token`
 
+## Authentik SSO Setup
+
+Authentik runs externally (not in the cluster). Set `authentik_url` in `roles/cluster_addons/defaults/main.yml` before running the addons phase.
+
+### Proxy outpost — ForwardAuth (Traefik dashboard + Longhorn)
+
+The `authentik-forward-auth` Traefik middleware is created in the `traefik` namespace during the Traefik addon install. It forwards unauthenticated requests to:
+```
+{{ authentik_url }}/outpost.goauthentik.io/auth/traefik
+```
+
+In Authentik, create a **Proxy Provider** for each domain using **Forward auth (domain level)** mode, then assign each provider an Application and add both to your proxy outpost:
+
+| Application | Domain | Redirect URI |
+|---|---|---|
+| Traefik | `traefik.{{ ingress_domain }}` | Handled by outpost |
+| Longhorn | `longhorn.{{ ingress_domain }}` | Handled by outpost |
+
+### OIDC — ArgoCD
+
+1. In Authentik, create an **OAuth2/OIDC Provider**:
+   - Client type: **Confidential**
+   - Redirect URI: `https://argocd.{{ ingress_domain }}/auth/callback`
+   - Scopes: `openid`, `profile`, `email`, `groups`
+2. Create an **Application** with slug matching `authentik_argocd_client_id` (default: `argocd`)
+3. Note the Client ID and Client Secret — add the secret to vault as `vault_authentik_argocd_client_secret`
+
+### OIDC — Headlamp
+
+1. In Authentik, create an **OAuth2/OIDC Provider**:
+   - Client type: **Confidential**
+   - Redirect URI: `https://headlamp.{{ ingress_domain }}/oidc-callback`
+   - Scopes: `openid`, `profile`, `email`, `groups`
+2. Create an **Application** with slug matching `authentik_headlamp_client_id` (default: `headlamp`)
+3. Note the Client ID and Client Secret — add the secret to vault as `vault_authentik_headlamp_client_secret`
+
 ## Exposed Services
 
 After a successful run, all services are accessible via Traefik at the MetalLB LoadBalancer IP. Point `*.{{ ingress_domain }}` at that IP in Cloudflare DNS.
 
 | Service | URL | Auth |
 |---|---|---|
-| Traefik dashboard | `https://traefik.{{ ingress_domain }}` | BasicAuth (vault) |
-| Longhorn dashboard | `https://longhorn.{{ ingress_domain }}` | BasicAuth (vault) |
-| Headlamp dashboard | `https://headlamp.{{ ingress_domain }}` | Kubernetes token |
-| ArgoCD | `https://argocd.{{ ingress_domain }}` | Admin password (printed at end of run) |
+| Traefik dashboard | `https://traefik.{{ ingress_domain }}` | Authentik SSO (ForwardAuth) |
+| Longhorn dashboard | `https://longhorn.{{ ingress_domain }}` | Authentik SSO (ForwardAuth) |
+| Headlamp dashboard | `https://headlamp.{{ ingress_domain }}` | Authentik SSO (OIDC) |
+| ArgoCD | `https://argocd.{{ ingress_domain }}` | Authentik SSO (OIDC) |
 | Kubernetes API | `https://{{ k8s_api_endpoint }}:6443` | kubeconfig |
 
 `ingress_domain` defaults to `k8s.<domain>` and is configured in `roles/cluster_addons/defaults/main.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}`, is issued by Let's Encrypt via Cloudflare DNS-01, and is automatically mirrored to all addon namespaces by [reflector](https://github.com/emberstack/kubernetes-reflector). When cert-manager renews the cert, reflector pushes the updated secret to every namespace without any manual intervention.
