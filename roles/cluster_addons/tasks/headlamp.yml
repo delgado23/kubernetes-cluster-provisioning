@@ -46,7 +46,7 @@
           clientID: "{{ vault_authentik_headlamp_client_id }}"
           clientSecret: "{{ vault_authentik_headlamp_client_secret }}"
           issuerURL: "{{ authentik_headlamp_issuer }}"
-          scopes: "openid,profile,email,groups"
+          scopes: "openid,profile,email,groups,offline_access"
   no_log: true
 
 - name: Install or upgrade Headlamp via Helm
