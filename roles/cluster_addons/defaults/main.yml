@@ -13,6 +13,8 @@ kyverno_namespace: kyverno
 
 # Authentik SSO — set authentik_url before running addons
 # e.g. https://auth.garaventaville.com
+k8s_manifests_dir: /root/k8s-manifests
+
 authentik_url: "https://auth.garaventaville.com"
 # OIDC client IDs must match the Client ID configured in each Authentik provider.
 # The issuer URL is derived as: {{ authentik_url }}/application/o/<client_id>/

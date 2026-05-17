@@ -27,9 +27,15 @@
     KUBECONFIG: /root/.kube/config
   changed_when: true
 
+- name: Create ArgoCD manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/argocd"
+    state: directory
+    mode: '0700'
+
 - name: Write ArgoCD Helm values
   ansible.builtin.copy:
-    dest: /tmp/argocd-values.yml
+    dest: "{{ k8s_manifests_dir }}/argocd/values.yml"
     mode: "0600"
     content: |
       configs:
@@ -69,7 +75,7 @@
       /usr/local/bin/helm upgrade --install argocd argo/argo-cd
       --namespace {{ argocd_namespace }}
       --version {{ argocd_version }}
-      --values /tmp/argocd-values.yml
+      --values {{ k8s_manifests_dir }}/argocd/values.yml
       --wait
       --timeout 10m
   environment:
@@ -81,14 +87,9 @@
   ansible.builtin.debug:
     var: argocd_helm_output.stdout_lines
 
-- name: Remove ArgoCD values file
-  ansible.builtin.file:
-    path: /tmp/argocd-values.yml
-    state: absent
-
 - name: Write ArgoCD IngressRoute manifest
   ansible.builtin.copy:
-    dest: /tmp/argocd-ingress.yml
+    dest: "{{ k8s_manifests_dir }}/argocd/ingress.yml"
     mode: "0600"
     content: |
       apiVersion: traefik.io/v1alpha1
@@ -110,7 +111,7 @@
 
 - name: Apply ArgoCD IngressRoute
   ansible.builtin.command:
-    cmd: kubectl apply -f /tmp/argocd-ingress.yml
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/argocd/ingress.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: argocd_ingress_output
@@ -119,11 +120,6 @@
 - name: Print ArgoCD IngressRoute apply output
   ansible.builtin.debug:
     var: argocd_ingress_output.stdout_lines
-
-- name: Remove ArgoCD IngressRoute manifest
-  ansible.builtin.file:
-    path: /tmp/argocd-ingress.yml
-    state: absent
 
 - name: Retrieve ArgoCD initial admin password
   ansible.builtin.command:

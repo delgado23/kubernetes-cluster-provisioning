@@ -100,9 +100,15 @@
          if letsencrypt_staging | bool
          else 'letsencrypt-cloudflare-account-key' }}
 
+- name: Create cert-manager manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/cert-manager"
+    state: directory
+    mode: '0700'
+
 - name: Write ClusterIssuer manifest
   ansible.builtin.copy:
-    dest: /tmp/clusterissuer-cloudflare.yml
+    dest: "{{ k8s_manifests_dir }}/cert-manager/clusterissuer.yml"
     mode: "0600"
     content: |
       apiVersion: cert-manager.io/v1
@@ -124,7 +130,7 @@
 
 - name: Apply ClusterIssuer
   ansible.builtin.command:
-    cmd: kubectl apply -f /tmp/clusterissuer-cloudflare.yml
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/cert-manager/clusterissuer.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: issuer_output
@@ -133,11 +139,6 @@
 - name: Print ClusterIssuer apply output
   ansible.builtin.debug:
     var: issuer_output.stdout_lines
-
-- name: Remove ClusterIssuer manifest
-  ansible.builtin.file:
-    path: /tmp/clusterissuer-cloudflare.yml
-    state: absent
 
 - name: Wait for ClusterIssuer to be ready (ACME account registration)
   ansible.builtin.command:
@@ -150,7 +151,7 @@
 
 - name: Write wildcard Certificate manifest
   ansible.builtin.copy:
-    dest: /tmp/wildcard-cert.yml
+    dest: "{{ k8s_manifests_dir }}/cert-manager/wildcard-cert.yml"
     mode: "0600"
     content: |
       apiVersion: cert-manager.io/v1
@@ -175,7 +176,7 @@
 
 - name: Apply wildcard Certificate
   ansible.builtin.command:
-    cmd: kubectl apply -f /tmp/wildcard-cert.yml
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/cert-manager/wildcard-cert.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: cert_output
@@ -184,11 +185,6 @@
 - name: Print Certificate apply output
   ansible.builtin.debug:
     var: cert_output.stdout_lines
-
-- name: Remove wildcard Certificate manifest
-  ansible.builtin.file:
-    path: /tmp/wildcard-cert.yml
-    state: absent
 
 - name: Wait for ClusterIssuer to be ready (ACME account registration)
   ansible.builtin.command:
