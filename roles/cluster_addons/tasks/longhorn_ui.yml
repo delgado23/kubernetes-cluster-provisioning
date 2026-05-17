@@ -1,7 +1,13 @@
 ---
+- name: Create Longhorn manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/longhorn"
+    state: directory
+    mode: '0700'
+
 - name: Write Longhorn IngressRoute manifest
   ansible.builtin.copy:
-    dest: /tmp/longhorn-ingress.yml
+    dest: "{{ k8s_manifests_dir }}/longhorn/ingress.yml"
     mode: "0600"
     content: |
       apiVersion: traefik.io/v1alpha1
@@ -26,7 +32,7 @@
 
 - name: Apply Longhorn IngressRoute
   ansible.builtin.command:
-    cmd: kubectl apply -f /tmp/longhorn-ingress.yml
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/longhorn/ingress.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: longhorn_ingress_output
@@ -35,11 +41,6 @@
 - name: Print Longhorn IngressRoute apply output
   ansible.builtin.debug:
     var: longhorn_ingress_output.stdout_lines
-
-- name: Remove Longhorn IngressRoute manifest
-  ansible.builtin.file:
-    path: /tmp/longhorn-ingress.yml
-    state: absent
 
 - name: Retrieve Traefik LoadBalancer IP
   ansible.builtin.command:

@@ -14,9 +14,15 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
+- name: Create Headlamp manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/headlamp"
+    state: directory
+    mode: '0700'
+
 - name: Write Headlamp Helm values
   ansible.builtin.copy:
-    dest: /tmp/headlamp-values.yml
+    dest: "{{ k8s_manifests_dir }}/headlamp/values.yml"
     mode: "0600"
     content: |
       service:
@@ -37,7 +43,7 @@
       --namespace {{ headlamp_namespace }}
       --create-namespace
       --version {{ headlamp_version }}
-      --values /tmp/headlamp-values.yml
+      --values {{ k8s_manifests_dir }}/headlamp/values.yml
       --wait
       --timeout 5m
   environment:
@@ -49,14 +55,9 @@
   ansible.builtin.debug:
     var: headlamp_helm_output.stdout_lines
 
-- name: Remove Headlamp values file
-  ansible.builtin.file:
-    path: /tmp/headlamp-values.yml
-    state: absent
-
 - name: Write Headlamp IngressRoute manifest
   ansible.builtin.copy:
-    dest: /tmp/headlamp-ingress.yml
+    dest: "{{ k8s_manifests_dir }}/headlamp/ingress.yml"
     mode: "0600"
     content: |
       apiVersion: traefik.io/v1alpha1
@@ -78,7 +79,7 @@
 
 - name: Apply Headlamp IngressRoute
   ansible.builtin.command:
-    cmd: kubectl apply -f /tmp/headlamp-ingress.yml
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/headlamp/ingress.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: headlamp_ingress_output
@@ -88,7 +89,3 @@
   ansible.builtin.debug:
     var: headlamp_ingress_output.stdout_lines
 
-- name: Remove Headlamp IngressRoute manifest
-  ansible.builtin.file:
-    path: /tmp/headlamp-ingress.yml
-    state: absent
