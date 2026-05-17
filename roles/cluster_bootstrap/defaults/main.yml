@@ -1,0 +1,3 @@
+---
+authentik_url: "https://auth.garaventaville.com"
+authentik_headlamp_issuer: "{{ authentik_url }}/application/o/headlamp/"
