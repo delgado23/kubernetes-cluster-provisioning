@@ -41,6 +41,7 @@
         type: ClusterIP
 
       config:
+        baseURL: "https://headlamp.{{ ingress_domain }}"
         oidc:
           clientID: "{{ vault_authentik_headlamp_client_id }}"
           clientSecret: "{{ vault_authentik_headlamp_client_secret }}"
