@@ -414,6 +414,19 @@
 # PHASE 5: Cluster Add-ons
 # -----------------------------------------------------------------------------
 
+- name: Configure kube-apiserver OIDC for Headlamp
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  gather_facts: false
+  tags: [addons]
+  vars_files:
+    - vars/vault.yml
+  tasks:
+    - name: Patch kube-apiserver OIDC configuration
+      ansible.builtin.include_role:
+        name: cluster_bootstrap
+        tasks_from: patch_apiserver_oidc
+
 - name: Install cluster add-ons
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
