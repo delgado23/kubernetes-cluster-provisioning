@@ -31,6 +31,14 @@ apiServer:
   extraArgs:
     - name: encryption-provider-config
       value: /etc/kubernetes/enc/enc.yaml
+    - name: oidc-issuer-url
+      value: "{{ authentik_headlamp_issuer }}"
+    - name: oidc-client-id
+      value: "{{ vault_authentik_headlamp_client_id }}"
+    - name: oidc-username-claim
+      value: email
+    - name: oidc-groups-claim
+      value: groups
   extraVolumes:
     - name: enc
       hostPath: /etc/kubernetes/enc
