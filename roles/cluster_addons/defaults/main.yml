@@ -19,11 +19,8 @@ authentik_url: "https://auth.example.com"
 # Internal outpost URL used by Traefik ForwardAuth — communicates directly with
 # the proxy outpost over HTTP on port 9000 (no TLS needed for cluster-internal traffic).
 authentik_outpost_url: "http://{{ authentik_url | regex_replace('^https?://', '') }}:9000"
-# OIDC client IDs must match the Client ID configured in each Authentik provider.
-# The issuer URL is derived as: {{ authentik_url }}/application/o/<client_id>/
-# Override authentik_argocd_issuer / authentik_headlamp_issuer if your app slug
-# differs from the client ID.
-authentik_argocd_client_id: "argocd"
-authentik_argocd_issuer: "{{ authentik_url }}/application/o/{{ authentik_argocd_client_id }}/"
-authentik_headlamp_client_id: "headlamp"
-authentik_headlamp_issuer: "{{ authentik_url }}/application/o/{{ authentik_headlamp_client_id }}/"
+# OIDC issuer URLs — set to the application slug configured in Authentik.
+# Client IDs are stored in vault as vault_authentik_argocd_client_id
+# and vault_authentik_headlamp_client_id.
+authentik_argocd_issuer: "{{ authentik_url }}/application/o/argocd/"
+authentik_headlamp_issuer: "{{ authentik_url }}/application/o/headlamp/"
