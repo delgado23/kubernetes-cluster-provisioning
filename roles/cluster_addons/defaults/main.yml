@@ -9,6 +9,7 @@ traefik_namespace: traefik
 longhorn_namespace: longhorn-system
 headlamp_namespace: headlamp
 argocd_namespace: argocd
+argocd_admin_group: "authentik Admins"
 kyverno_namespace: kyverno
 
 # Authentik SSO — set authentik_url before running addons
