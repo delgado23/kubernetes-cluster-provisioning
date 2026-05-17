@@ -27,9 +27,15 @@
     KUBECONFIG: /root/.kube/config
   changed_when: true
 
+- name: Create Traefik manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/traefik"
+    state: directory
+    mode: '0700'
+
 - name: Write Traefik Helm values
   ansible.builtin.copy:
-    dest: /tmp/traefik-values.yml
+    dest: "{{ k8s_manifests_dir }}/traefik/values.yml"
     mode: "0600"
     content: |
       deployment:
@@ -83,7 +89,7 @@
       /usr/local/bin/helm upgrade --install traefik traefik/traefik
       --namespace {{ traefik_namespace }}
       --version {{ traefik_chart_version }}
-      --values /tmp/traefik-values.yml
+      --values {{ k8s_manifests_dir }}/traefik/values.yml
       --wait
       --timeout 5m
   environment:
@@ -95,14 +101,9 @@
   ansible.builtin.debug:
     var: traefik_helm_output.stdout_lines
 
-- name: Remove Traefik values file
-  ansible.builtin.file:
-    path: /tmp/traefik-values.yml
-    state: absent
-
 - name: Write Traefik dashboard IngressRoute manifest
   ansible.builtin.copy:
-    dest: /tmp/traefik-dashboard-ingress.yml
+    dest: "{{ k8s_manifests_dir }}/traefik/dashboard-ingress.yml"
     mode: "0600"
     content: |
       apiVersion: traefik.io/v1alpha1
@@ -168,7 +169,7 @@
 
 - name: Apply Traefik dashboard IngressRoute
   ansible.builtin.command:
-    cmd: kubectl apply -f /tmp/traefik-dashboard-ingress.yml
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/traefik/dashboard-ingress.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: traefik_ingress_output
@@ -178,7 +179,3 @@
   ansible.builtin.debug:
     var: traefik_ingress_output.stdout_lines
 
-- name: Remove Traefik dashboard IngressRoute manifest
-  ansible.builtin.file:
-    path: /tmp/traefik-dashboard-ingress.yml
-    state: absent
