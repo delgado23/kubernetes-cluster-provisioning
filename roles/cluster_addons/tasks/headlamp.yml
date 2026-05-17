@@ -123,6 +123,9 @@
         - kind: ServiceAccount
           name: headlamp
           namespace: {{ headlamp_namespace }}
+        - kind: Group
+          name: "{{ headlamp_admin_group }}"
+          apiGroup: rbac.authorization.k8s.io
 
 - name: Apply Headlamp RBAC
   ansible.builtin.command:
