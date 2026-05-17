@@ -88,8 +88,6 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 |---|---|
 | `vault_proxmox_api_token` | Proxmox API token secret |
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
-| `vault_traefik_dashboard_password` | bcrypt htpasswd string for Traefik dashboard basic auth |
-| `vault_longhorn_dashboard_password` | bcrypt htpasswd string for Longhorn dashboard basic auth |
 | `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
 | `vault_duo_secret_key` | DUO Unix integration secret key for SSH 2FA |
 | `vault_authentik_argocd_client_id` | OIDC client ID for the ArgoCD application in Authentik |
@@ -106,14 +104,6 @@ Generate the etcd encryption key once and store it in the vault — **do not cha
 ```bash
 head -c 32 /dev/urandom | base64
 ```
-
-Dashboard passwords must be htpasswd-formatted bcrypt hashes — **not raw passwords**. Traefik's BasicAuth middleware rejects raw strings and disables the route entirely (returning 404) if the format is wrong. Generate with:
-
-```bash
-htpasswd -nbB admin 'yourpassword'
-```
-
-The full output (e.g. `admin:$2y$05$...`) is what goes in the vault variable.
 
 ## AWX Survey Variables
 
@@ -293,6 +283,8 @@ In Authentik, create a **Proxy Provider** for each domain using **Forward auth (
 | Traefik | `traefik.{{ ingress_domain }}` | Handled by outpost |
 | Longhorn | `longhorn.{{ ingress_domain }}` | Handled by outpost |
 
+The Traefik and Longhorn IngressRoutes include a dedicated route for `/outpost.goauthentik.io/` that forwards callback requests directly to the outpost via an ExternalName service (with `passHostHeader: false`). This requires `allowExternalNameServices: true` in both the `kubernetesCRD` and `kubernetesIngress` Traefik providers, which is set in the Helm values. The outpost is expected to be reachable from within the cluster at `{{ authentik_url }}:9000`.
+
 ### OIDC — ArgoCD
 
 1. In Authentik, create an **OAuth2/OIDC Provider**:
@@ -307,9 +299,12 @@ In Authentik, create a **Proxy Provider** for each domain using **Forward auth (
 1. In Authentik, create an **OAuth2/OIDC Provider**:
    - Client type: **Confidential**
    - Redirect URI: `https://headlamp.{{ ingress_domain }}/oidc-callback`
-   - Scopes: `openid`, `profile`, `email`, `groups`
+   - Scopes: `openid`, `profile`, `email`, `groups`, `offline_access` (`offline_access` is required for refresh tokens — without it Headlamp will loop back to the login page when the access token expires)
 2. Create an **Application** with slug matching `authentik_headlamp_client_id` (default: `headlamp`)
 3. Note the Client ID and Client Secret — add the secret to vault as `vault_authentik_headlamp_client_secret`
+4. In Authentik, ensure the user's email is marked as **verified** — kube-apiserver rejects OIDC tokens where `email_verified: false` when `--oidc-username-claim=email` is set
+
+The kube-apiserver is configured with OIDC flags (`--oidc-issuer-url`, `--oidc-client-id`, `--oidc-username-claim=email`, `--oidc-groups-claim=groups`) so that Headlamp can make Kubernetes API calls using the user's OIDC token directly. This configuration is applied automatically during the addons phase via the `patch_apiserver_oidc` task, which patches the static pod manifest on all control plane nodes and waits for the apiserver to restart. The `headlamp_admin_group` default (`"authentik Admins"`) is bound to `cluster-admin` via a ClusterRoleBinding that covers both the Headlamp service account and OIDC group subjects.
 
 ## Exposed Services
 
@@ -325,12 +320,6 @@ After a successful run, all services are accessible via Traefik at the MetalLB L
 
 `ingress_domain` defaults to `k8s.<domain>` and is configured in `roles/cluster_addons/defaults/main.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}`, is issued by Let's Encrypt via Cloudflare DNS-01, and is automatically mirrored to all addon namespaces by [reflector](https://github.com/emberstack/kubernetes-reflector). When cert-manager renews the cert, reflector pushes the updated secret to every namespace without any manual intervention.
 
-For Headlamp, generate a service account token to log in:
-
-```bash
-kubectl create serviceaccount headlamp-admin -n kube-system
-kubectl create clusterrolebinding headlamp-admin --clusterrole=cluster-admin --serviceaccount=kube-system:headlamp-admin
-kubectl create token headlamp-admin -n kube-system --duration=8760h
-```
+Headlamp login uses Authentik OIDC — click **Sign in** on the Headlamp page and you will be redirected to Authentik. No service account token is needed.
 
 The ArgoCD initial admin password is printed at the end of the addons run. Change it after first login — ArgoCD deletes the `argocd-initial-admin-secret` once the password is updated, which is expected.
