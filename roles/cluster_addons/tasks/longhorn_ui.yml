@@ -25,6 +25,7 @@
               - name: authentik-outpost
                 namespace: {{ traefik_namespace }}
                 port: 9000
+                passHostHeader: false
           - match: Host(`longhorn.{{ ingress_domain }}`)
             kind: Rule
             middlewares:

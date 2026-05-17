@@ -168,6 +168,7 @@
             services:
               - name: authentik-outpost
                 port: 9000
+                passHostHeader: false
           - match: Host(`traefik.{{ ingress_domain }}`) && (PathPrefix(`/dashboard`) || PathPrefix(`/api`))
             kind: Rule
             middlewares:
