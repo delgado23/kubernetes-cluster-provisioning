@@ -1,4 +1,16 @@
 ---
+- name: Verify Authentik OIDC vault variables are defined for ArgoCD
+  ansible.builtin.assert:
+    that:
+      - vault_authentik_argocd_client_id is defined
+      - vault_authentik_argocd_client_id | length > 0
+      - vault_authentik_argocd_client_secret is defined
+      - vault_authentik_argocd_client_secret | length > 0
+    fail_msg: |
+      Missing vault variables for ArgoCD OIDC. Add to vars/vault.yml:
+        vault_authentik_argocd_client_id: "<client id from Authentik>"
+        vault_authentik_argocd_client_secret: "<client secret from Authentik>"
+
 - name: Add Argo Helm repo
   ansible.builtin.command:
     cmd: /usr/local/bin/helm repo add argo https://argoproj.github.io/argo-helm
@@ -27,14 +39,39 @@
     KUBECONFIG: /root/.kube/config
   changed_when: true
 
+- name: Create ArgoCD manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/argocd"
+    state: directory
+    mode: '0700'
+
 - name: Write ArgoCD Helm values
   ansible.builtin.copy:
-    dest: /tmp/argocd-values.yml
+    dest: "{{ k8s_manifests_dir }}/argocd/values.yml"
     mode: "0600"
     content: |
       configs:
         params:
           server.insecure: "true"
+        cm:
+          url: "https://argocd.{{ ingress_domain }}"
+          oidc.config: |
+            name: Authentik
+            issuer: {{ authentik_argocd_issuer }}
+            clientID: {{ vault_authentik_argocd_client_id }}
+            clientSecret: $oidc.authentik.clientSecret
+            requestedScopes:
+              - openid
+              - profile
+              - email
+              - groups
+        secret:
+          extra:
+            oidc.authentik.clientSecret: "{{ vault_authentik_argocd_client_secret }}"
+        rbac:
+          policy.default: role:readonly
+          policy.csv: |
+            g, {{ argocd_admin_group }}, role:admin
 
       server:
         replicas: 2
@@ -46,6 +83,7 @@
 
       applicationSet:
         replicas: 2
+  no_log: true
 
 - name: Install or upgrade ArgoCD via Helm
   ansible.builtin.command:
@@ -53,7 +91,7 @@
       /usr/local/bin/helm upgrade --install argocd argo/argo-cd
       --namespace {{ argocd_namespace }}
       --version {{ argocd_version }}
-      --values /tmp/argocd-values.yml
+      --values {{ k8s_manifests_dir }}/argocd/values.yml
       --wait
       --timeout 10m
   environment:
@@ -65,14 +103,9 @@
   ansible.builtin.debug:
     var: argocd_helm_output.stdout_lines
 
-- name: Remove ArgoCD values file
-  ansible.builtin.file:
-    path: /tmp/argocd-values.yml
-    state: absent
-
 - name: Write ArgoCD IngressRoute manifest
   ansible.builtin.copy:
-    dest: /tmp/argocd-ingress.yml
+    dest: "{{ k8s_manifests_dir }}/argocd/ingress.yml"
     mode: "0600"
     content: |
       apiVersion: traefik.io/v1alpha1
@@ -94,7 +127,7 @@
 
 - name: Apply ArgoCD IngressRoute
   ansible.builtin.command:
-    cmd: kubectl apply -f /tmp/argocd-ingress.yml
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/argocd/ingress.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: argocd_ingress_output
@@ -103,11 +136,6 @@
 - name: Print ArgoCD IngressRoute apply output
   ansible.builtin.debug:
     var: argocd_ingress_output.stdout_lines
-
-- name: Remove ArgoCD IngressRoute manifest
-  ansible.builtin.file:
-    path: /tmp/argocd-ingress.yml
-    state: absent
 
 - name: Retrieve ArgoCD initial admin password
   ansible.builtin.command:

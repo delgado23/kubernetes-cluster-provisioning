@@ -1,4 +1,16 @@
 ---
+- name: Verify Authentik OIDC vault variables are defined for Headlamp
+  ansible.builtin.assert:
+    that:
+      - vault_authentik_headlamp_client_id is defined
+      - vault_authentik_headlamp_client_id | length > 0
+      - vault_authentik_headlamp_client_secret is defined
+      - vault_authentik_headlamp_client_secret | length > 0
+    fail_msg: |
+      Missing vault variables for Headlamp OIDC. Add to vars/vault.yml:
+        vault_authentik_headlamp_client_id: "<client id from Authentik>"
+        vault_authentik_headlamp_client_secret: "<client secret from Authentik>"
+
 - name: Add Headlamp Helm repo
   ansible.builtin.command:
     cmd: /usr/local/bin/helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/
@@ -14,6 +26,29 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
+- name: Create Headlamp manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/headlamp"
+    state: directory
+    mode: '0700'
+
+- name: Write Headlamp Helm values
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/headlamp/values.yml"
+    mode: "0600"
+    content: |
+      service:
+        type: ClusterIP
+
+      config:
+        baseURL: ""
+        oidc:
+          clientID: "{{ vault_authentik_headlamp_client_id }}"
+          clientSecret: "{{ vault_authentik_headlamp_client_secret }}"
+          issuerURL: "{{ authentik_headlamp_issuer }}"
+          scopes: "openid,profile,email,groups,offline_access"
+  no_log: true
+
 - name: Install or upgrade Headlamp via Helm
   ansible.builtin.command:
     cmd: >
@@ -21,21 +56,92 @@
       --namespace {{ headlamp_namespace }}
       --create-namespace
       --version {{ headlamp_version }}
-      --set service.type=ClusterIP
+      --values {{ k8s_manifests_dir }}/headlamp/values.yml
       --wait
-      --timeout 5m
+      --timeout 10m
   environment:
     KUBECONFIG: /root/.kube/config
   register: headlamp_helm_output
   changed_when: true
+  ignore_errors: true
 
 - name: Print Headlamp Helm output
   ansible.builtin.debug:
     var: headlamp_helm_output.stdout_lines
 
+- name: Dump Headlamp pod status on install failure
+  ansible.builtin.command:
+    cmd: kubectl get pods -n {{ headlamp_namespace }} -o wide
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  when: headlamp_helm_output.rc != 0
+  ignore_errors: true
+  register: _headlamp_pod_status
+
+- name: Print Headlamp pod status
+  ansible.builtin.debug:
+    var: _headlamp_pod_status.stdout_lines
+  when: headlamp_helm_output.rc != 0
+
+- name: Dump Headlamp pod logs on install failure
+  ansible.builtin.shell:
+    cmd: >
+      kubectl logs -n {{ headlamp_namespace }}
+      -l app.kubernetes.io/name=headlamp
+      --tail=50 2>&1 || true
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  when: headlamp_helm_output.rc != 0
+  register: _headlamp_pod_logs
+
+- name: Print Headlamp pod logs
+  ansible.builtin.debug:
+    var: _headlamp_pod_logs.stdout_lines
+  when: headlamp_helm_output.rc != 0
+
+- name: Fail after Headlamp diagnostics
+  ansible.builtin.fail:
+    msg: "Headlamp Helm install failed — see pod status and logs above"
+  when: headlamp_helm_output.rc != 0
+
+- name: Write Headlamp RBAC manifest
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/headlamp/rbac.yml"
+    mode: "0600"
+    content: |
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: headlamp-admin
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: cluster-admin
+      subjects:
+        - kind: ServiceAccount
+          name: headlamp
+          namespace: {{ headlamp_namespace }}
+        - kind: Group
+          name: "{{ headlamp_admin_group }}"
+          apiGroup: rbac.authorization.k8s.io
+
+- name: Apply Headlamp RBAC
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/headlamp/rbac.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: headlamp_rbac_output
+  changed_when: true
+
+- name: Print Headlamp RBAC apply output
+  ansible.builtin.debug:
+    var: headlamp_rbac_output.stdout_lines
+
 - name: Write Headlamp IngressRoute manifest
   ansible.builtin.copy:
-    dest: /tmp/headlamp-ingress.yml
+    dest: "{{ k8s_manifests_dir }}/headlamp/ingress.yml"
     mode: "0600"
     content: |
       apiVersion: traefik.io/v1alpha1
@@ -57,7 +163,7 @@
 
 - name: Apply Headlamp IngressRoute
   ansible.builtin.command:
-    cmd: kubectl apply -f /tmp/headlamp-ingress.yml
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/headlamp/ingress.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: headlamp_ingress_output
@@ -67,7 +173,3 @@
   ansible.builtin.debug:
     var: headlamp_ingress_output.stdout_lines
 
-- name: Remove Headlamp IngressRoute manifest
-  ansible.builtin.file:
-    path: /tmp/headlamp-ingress.yml
-    state: absent

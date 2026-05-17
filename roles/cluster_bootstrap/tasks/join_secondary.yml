@@ -15,7 +15,7 @@
 
 - name: Upload control plane certificates and capture fresh key
   ansible.builtin.command:
-    cmd: kubeadm init phase upload-certs --upload-certs
+    cmd: kubeadm init phase upload-certs --upload-certs --config /etc/kubernetes/kubeadm-config.yml
   delegate_to: >-
     {{
       groups['foreman_almalinux10_kubernetescontrolplanenode']
