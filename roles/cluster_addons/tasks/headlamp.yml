@@ -58,15 +58,53 @@
       --version {{ headlamp_version }}
       --values {{ k8s_manifests_dir }}/headlamp/values.yml
       --wait
-      --timeout 5m
+      --timeout 10m
   environment:
     KUBECONFIG: /root/.kube/config
   register: headlamp_helm_output
   changed_when: true
+  failed_when: headlamp_helm_output.rc != 0
 
 - name: Print Headlamp Helm output
   ansible.builtin.debug:
     var: headlamp_helm_output.stdout_lines
+
+- name: Dump Headlamp pod status on install failure
+  ansible.builtin.command:
+    cmd: kubectl get pods -n {{ headlamp_namespace }} -o wide
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  when: headlamp_helm_output.rc != 0
+  ignore_errors: true
+  register: _headlamp_pod_status
+
+- name: Print Headlamp pod status
+  ansible.builtin.debug:
+    var: _headlamp_pod_status.stdout_lines
+  when: headlamp_helm_output.rc != 0
+
+- name: Dump Headlamp pod logs on install failure
+  ansible.builtin.shell:
+    cmd: >
+      kubectl logs -n {{ headlamp_namespace }}
+      -l app.kubernetes.io/name=headlamp
+      --tail=50 2>&1 || true
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  when: headlamp_helm_output.rc != 0
+  register: _headlamp_pod_logs
+
+- name: Print Headlamp pod logs
+  ansible.builtin.debug:
+    var: _headlamp_pod_logs.stdout_lines
+  when: headlamp_helm_output.rc != 0
+
+- name: Fail after Headlamp diagnostics
+  ansible.builtin.fail:
+    msg: "Headlamp Helm install failed — see pod status and logs above"
+  when: headlamp_helm_output.rc != 0
 
 - name: Write Headlamp IngressRoute manifest
   ansible.builtin.copy:
