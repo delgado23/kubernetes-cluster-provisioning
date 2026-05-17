@@ -1,13 +1,25 @@
 ---
-- name: Wait for all worker nodes to appear as Ready
-  ansible.builtin.command: kubectl get nodes --no-headers
-  register: node_list
-  retries: 12
+- name: Wait for worker nodes to appear in the cluster
+  ansible.builtin.command:
+    cmd: >
+      kubectl get nodes --no-headers
+      -l '!node-role.kubernetes.io/control-plane'
+      -o custom-columns=NAME:.metadata.name
+  register: _worker_nodes
+  retries: 18
   delay: 10
-  until: >-
-    groups['foreman_almalinux10_kubernetesworkernode'] | map('extract', hostvars, 'inventory_hostname') | list
-    | difference(node_list.stdout_lines | map('regex_search', '^(\S+)') | list)
-    | length == 0
+  until: _worker_nodes.stdout_lines | select('ne', '') | list | length > 0
+  changed_when: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
+- name: Wait for all worker nodes to be Ready
+  ansible.builtin.command:
+    cmd: >
+      kubectl wait node
+      --for=condition=Ready
+      -l '!node-role.kubernetes.io/control-plane'
+      --timeout=180s
   changed_when: false
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
