@@ -19,6 +19,12 @@
         entryPoints:
           - websecure
         routes:
+          - match: Host(`longhorn.{{ ingress_domain }}`) && PathPrefix(`/outpost.goauthentik.io/`)
+            kind: Rule
+            services:
+              - name: authentik-outpost
+                namespace: {{ traefik_namespace }}
+                port: 9000
           - match: Host(`longhorn.{{ ingress_domain }}`)
             kind: Rule
             middlewares:
