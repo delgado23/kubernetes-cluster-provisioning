@@ -1,4 +1,16 @@
 ---
+- name: Verify Authentik OIDC vault variables are defined for ArgoCD
+  ansible.builtin.assert:
+    that:
+      - vault_authentik_argocd_client_id is defined
+      - vault_authentik_argocd_client_id | length > 0
+      - vault_authentik_argocd_client_secret is defined
+      - vault_authentik_argocd_client_secret | length > 0
+    fail_msg: |
+      Missing vault variables for ArgoCD OIDC. Add to vars/vault.yml:
+        vault_authentik_argocd_client_id: "<client id from Authentik>"
+        vault_authentik_argocd_client_secret: "<client secret from Authentik>"
+
 - name: Add Argo Helm repo
   ansible.builtin.command:
     cmd: /usr/local/bin/helm repo add argo https://argoproj.github.io/argo-helm
