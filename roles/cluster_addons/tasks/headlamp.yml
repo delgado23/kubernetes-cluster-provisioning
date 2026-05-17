@@ -106,6 +106,36 @@
     msg: "Headlamp Helm install failed — see pod status and logs above"
   when: headlamp_helm_output.rc != 0
 
+- name: Write Headlamp RBAC manifest
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/headlamp/rbac.yml"
+    mode: "0600"
+    content: |
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: headlamp-admin
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: cluster-admin
+      subjects:
+        - kind: ServiceAccount
+          name: headlamp
+          namespace: {{ headlamp_namespace }}
+
+- name: Apply Headlamp RBAC
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/headlamp/rbac.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: headlamp_rbac_output
+  changed_when: true
+
+- name: Print Headlamp RBAC apply output
+  ansible.builtin.debug:
+    var: headlamp_rbac_output.stdout_lines
+
 - name: Write Headlamp IngressRoute manifest
   ansible.builtin.copy:
     dest: "{{ k8s_manifests_dir }}/headlamp/ingress.yml"

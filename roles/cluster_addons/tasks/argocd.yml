@@ -68,6 +68,10 @@
         secret:
           extra:
             oidc.authentik.clientSecret: "{{ vault_authentik_argocd_client_secret }}"
+        rbac:
+          policy.default: role:readonly
+          policy.csv: |
+            g, {{ argocd_admin_group }}, role:admin
 
       server:
         replicas: 2
