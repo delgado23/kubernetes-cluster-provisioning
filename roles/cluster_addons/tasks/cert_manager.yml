@@ -100,9 +100,15 @@
          if letsencrypt_staging | bool
          else 'letsencrypt-cloudflare-account-key' }}
 
+- name: Create cert-manager manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/cert-manager"
+    state: directory
+    mode: '0700'
+
 - name: Write ClusterIssuer manifest
   ansible.builtin.copy:
-    dest: /tmp/clusterissuer-cloudflare.yml
+    dest: "{{ k8s_manifests_dir }}/cert-manager/clusterissuer.yml"
     mode: "0600"
     content: |
       apiVersion: cert-manager.io/v1
@@ -124,7 +130,7 @@
 
 - name: Apply ClusterIssuer
   ansible.builtin.command:
-    cmd: kubectl apply -f /tmp/clusterissuer-cloudflare.yml
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/cert-manager/clusterissuer.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: issuer_output
@@ -134,14 +140,18 @@
   ansible.builtin.debug:
     var: issuer_output.stdout_lines
 
-- name: Remove ClusterIssuer manifest
-  ansible.builtin.file:
-    path: /tmp/clusterissuer-cloudflare.yml
-    state: absent
+- name: Wait for ClusterIssuer to be ready (ACME account registration)
+  ansible.builtin.command:
+    cmd: >
+      kubectl wait --for=condition=Ready clusterissuer/{{ _issuer_name }}
+      --timeout=120s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
 
 - name: Write wildcard Certificate manifest
   ansible.builtin.copy:
-    dest: /tmp/wildcard-cert.yml
+    dest: "{{ k8s_manifests_dir }}/cert-manager/wildcard-cert.yml"
     mode: "0600"
     content: |
       apiVersion: cert-manager.io/v1
@@ -166,7 +176,7 @@
 
 - name: Apply wildcard Certificate
   ansible.builtin.command:
-    cmd: kubectl apply -f /tmp/wildcard-cert.yml
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/cert-manager/wildcard-cert.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: cert_output
@@ -176,10 +186,14 @@
   ansible.builtin.debug:
     var: cert_output.stdout_lines
 
-- name: Remove wildcard Certificate manifest
-  ansible.builtin.file:
-    path: /tmp/wildcard-cert.yml
-    state: absent
+- name: Wait for ClusterIssuer to be ready (ACME account registration)
+  ansible.builtin.command:
+    cmd: >
+      kubectl wait --for=condition=Ready clusterissuer/{{ _issuer_name }}
+      --timeout=120s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
 
 - name: Wait for wildcard certificate to be issued (up to 20 min)
   ansible.builtin.command:
@@ -189,5 +203,61 @@
       --timeout=1200s
   environment:
     KUBECONFIG: /root/.kube/config
+  register: _cert_wait
   changed_when: false
+  failed_when: false
+
+- name: Dump certificate status on failure
+  ansible.builtin.command:
+    cmd: kubectl describe certificate garaventaville-wildcard --namespace {{ cert_manager_namespace }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _cert_describe
+  changed_when: false
+  when: _cert_wait.rc != 0
+
+- name: Dump ACME orders on failure
+  ansible.builtin.command:
+    cmd: kubectl describe orders --namespace {{ cert_manager_namespace }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _orders_describe
+  changed_when: false
+  when: _cert_wait.rc != 0
+
+- name: Dump ACME challenges on failure
+  ansible.builtin.command:
+    cmd: kubectl get challenges --namespace {{ cert_manager_namespace }} -o wide
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _challenges_describe
+  changed_when: false
+  failed_when: false
+  when: _cert_wait.rc != 0
+
+- name: Show certificate diagnostics
+  ansible.builtin.debug:
+    msg: "{{ _cert_describe.stdout_lines + ['---'] + _orders_describe.stdout_lines + ['---'] + _challenges_describe.stdout_lines }}"
+  when: _cert_wait.rc != 0
+
+- name: Fail with diagnostic hint
+  ansible.builtin.fail:
+    msg: |
+      Wildcard certificate was not issued within 20 minutes.
+
+      Diagnostic output is in the task above. Common causes:
+
+      1. Cloudflare API token is missing Zone:DNS:Edit permission
+         → Check token at dash.cloudflare.com → My Profile → API Tokens
+         → The token needs Zone:Zone:Read + Zone:DNS:Edit on example.com
+
+      2. TXT record never created — verify in Cloudflare DNS:
+         dig TXT _acme-challenge.{{ ingress_domain }} @8.8.8.8
+
+      3. Let's Encrypt rate limit (5 failures/hour per hostname)
+         → Wait 1 hour and retry, or switch to letsencrypt_staging=true to test
+
+      4. cert-manager controller errors:
+         kubectl logs -n {{ cert_manager_namespace }} deploy/cert-manager | tail -50
+  when: _cert_wait.rc != 0
 

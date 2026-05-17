@@ -9,4 +9,20 @@ traefik_namespace: traefik
 longhorn_namespace: longhorn-system
 headlamp_namespace: headlamp
 argocd_namespace: argocd
+argocd_admin_group: "authentik Admins"
+headlamp_admin_group: "authentik Admins"
 kyverno_namespace: kyverno
+
+# Authentik SSO — set authentik_url before running addons
+# e.g. https://auth.example.com
+k8s_manifests_dir: /root/k8s-manifests
+
+authentik_url: "https://auth.example.com"
+# Internal outpost URL used by Traefik ForwardAuth — communicates directly with
+# the proxy outpost over HTTP on port 9000 (no TLS needed for cluster-internal traffic).
+authentik_outpost_url: "http://{{ authentik_url | regex_replace('^https?://', '') }}:9000"
+# OIDC issuer URLs — set to the application slug configured in Authentik.
+# Client IDs are stored in vault as vault_authentik_argocd_client_id
+# and vault_authentik_headlamp_client_id.
+authentik_argocd_issuer: "{{ authentik_url }}/application/o/argocd/"
+authentik_headlamp_issuer: "{{ authentik_url }}/application/o/headlamp/"
