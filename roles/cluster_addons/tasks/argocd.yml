@@ -46,7 +46,7 @@
           oidc.config: |
             name: Authentik
             issuer: {{ authentik_argocd_issuer }}
-            clientID: {{ authentik_argocd_client_id }}
+            clientID: {{ vault_authentik_argocd_client_id }}
             clientSecret: $oidc.authentik.clientSecret
             requestedScopes:
               - openid

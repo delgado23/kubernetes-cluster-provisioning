@@ -92,7 +92,9 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_longhorn_dashboard_password` | bcrypt htpasswd string for Longhorn dashboard basic auth |
 | `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
 | `vault_duo_secret_key` | DUO Unix integration secret key for SSH 2FA |
+| `vault_authentik_argocd_client_id` | OIDC client ID for the ArgoCD application in Authentik |
 | `vault_authentik_argocd_client_secret` | OIDC client secret for the ArgoCD application in Authentik |
+| `vault_authentik_headlamp_client_id` | OIDC client ID for the Headlamp application in Authentik |
 | `vault_authentik_headlamp_client_secret` | OIDC client secret for the Headlamp application in Authentik |
 | `foreman_user_vault` | Foreman username |
 | `foreman_password_vault` | Foreman password |
