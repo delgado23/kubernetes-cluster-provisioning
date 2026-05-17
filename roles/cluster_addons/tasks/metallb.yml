@@ -32,15 +32,21 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
+- name: Create MetalLB manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/metallb"
+    state: directory
+    mode: '0700'
+
 - name: Render MetalLB IP address pool manifest
   ansible.builtin.template:
     src: metallb-pool.yml.j2
-    dest: /tmp/metallb-pool.yml
+    dest: "{{ k8s_manifests_dir }}/metallb/pool.yml"
     mode: "0600"
 
 - name: Apply MetalLB IP address pool
   ansible.builtin.command:
-    cmd: kubectl apply -f /tmp/metallb-pool.yml
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/metallb/pool.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: metallb_pool_output
@@ -50,7 +56,3 @@
   ansible.builtin.debug:
     var: metallb_pool_output.stdout_lines
 
-- name: Remove rendered MetalLB pool manifest
-  ansible.builtin.file:
-    path: /tmp/metallb-pool.yml
-    state: absent

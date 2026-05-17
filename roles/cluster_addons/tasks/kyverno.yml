@@ -31,15 +31,21 @@
   ansible.builtin.debug:
     var: kyverno_helm_output.stdout_lines
 
+- name: Create Kyverno manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/kyverno"
+    state: directory
+    mode: '0700'
+
 - name: Copy Kyverno policies to control plane
   ansible.builtin.copy:
     src: kyverno-policies.yml
-    dest: /tmp/kyverno-policies.yml
+    dest: "{{ k8s_manifests_dir }}/kyverno/policies.yml"
     mode: "0600"
 
 - name: Apply Kyverno cluster policies
   ansible.builtin.command:
-    cmd: kubectl apply -f /tmp/kyverno-policies.yml
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/kyverno/policies.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: kyverno_policies_output
@@ -49,7 +55,3 @@
   ansible.builtin.debug:
     var: kyverno_policies_output.stdout_lines
 
-- name: Remove Kyverno policies manifest from tmp
-  ansible.builtin.file:
-    path: /tmp/kyverno-policies.yml
-    state: absent
