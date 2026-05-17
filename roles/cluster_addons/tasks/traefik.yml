@@ -113,7 +113,7 @@
         namespace: {{ traefik_namespace }}
       spec:
         forwardAuth:
-          address: "{{ authentik_url }}/outpost.goauthentik.io/auth/traefik"
+          address: "{{ authentik_outpost_url }}/outpost.goauthentik.io/auth/traefik"
           trustForwardHeader: true
           authResponseHeaders:
             - X-authentik-username
