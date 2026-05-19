@@ -7,7 +7,7 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | Component | Details |
 |---|---|
 | Control plane | 1–3 nodes (primary always included, up to 2 secondaries), HA via HAProxy + keepalived |
-| Workers | 1–13 nodes, Longhorn LVM on dedicated data disk |
+| Workers | 1–99 nodes, Longhorn LVM on dedicated data disk |
 | Networking | Flannel VXLAN, MetalLB L2 LoadBalancer |
 | Ingress | Traefik v3 with HTTP→HTTPS redirect |
 | TLS | cert-manager + Let's Encrypt + Cloudflare DNS-01, wildcard cert for `*.ingress_domain` — automatically mirrored to all addon namespaces by reflector and renewed without manual intervention |
