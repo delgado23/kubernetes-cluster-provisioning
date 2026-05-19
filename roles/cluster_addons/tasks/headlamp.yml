@@ -37,6 +37,16 @@
     dest: "{{ k8s_manifests_dir }}/headlamp/values.yml"
     mode: "0600"
     content: |
+      replicaCount: 3
+
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+
       service:
         type: ClusterIP
 
