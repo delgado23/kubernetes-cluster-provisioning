@@ -1,6 +1,6 @@
 # Kubernetes Cluster Provisioning
 
-Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), Longhorn storage, Headlamp, and ArgoCD.
+Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), Longhorn storage, Headlamp, ArgoCD, and Descheduler.
 
 ## Cluster Architecture
 
@@ -19,6 +19,7 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | etcd encryption | AES-CBC encryption at rest for all Secrets, configured at kubeadm init time |
 | Pod Security Standards | Namespace-scoped enforcement — `privileged` for storage/network system namespaces, `baseline`/`restricted` for application namespaces |
 | Policy engine | Kyverno in Audit mode — reports violations for latest image tags, missing resource limits, privileged containers, and host namespace use |
+| Pod rebalancing | Descheduler CronJob (every 6 h) — evicts pods from hot nodes, spreads Deployment replicas, enforces topology spread constraints |
 | Addon versions | Resolved from GitHub releases at runtime — always installs latest |
 
 Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlplane_node_count` and `worker_node_count` (see [AWX Survey Variables](#awx-survey-variables)).
@@ -61,7 +62,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
     ├── worker_storage/        # LVM + XFS setup for Longhorn on worker data disk, iSCSI
     ├── cluster_bootstrap/     # kubeadm init/join, Flannel, kubelet-serving-cert-approver, tooling
     ├── worker_join/           # Join worker nodes to the cluster
-    ├── cluster_addons/        # MetalLB, Traefik, Longhorn, reflector, cert-manager, Headlamp, ArgoCD
+    ├── cluster_addons/        # MetalLB, Traefik, Longhorn, reflector, cert-manager, Headlamp, ArgoCD, Descheduler
     ├── node_maintenance/      # Drain, update, reboot, uncordon
     └── cluster_cleanup/       # Remove hosts from Foreman and FreeIPA
 ```
@@ -174,7 +175,7 @@ ansible-playbook main.yml --tags bootstrap
 # Phase 4: Join workers to the cluster and label them
 ansible-playbook main.yml --tags workers
 
-# Phase 5: Install add-ons (MetalLB, Traefik, Longhorn, reflector, cert-manager, Headlamp, ArgoCD)
+# Phase 5: Install add-ons (MetalLB, Traefik, Longhorn, reflector, cert-manager, Headlamp, ArgoCD, Descheduler)
 ansible-playbook main.yml --tags addons
 
 # Skip VM provisioning for re-runs against existing nodes
@@ -305,6 +306,49 @@ The Traefik and Longhorn IngressRoutes include a dedicated route for `/outpost.g
 4. In Authentik, ensure the user's email is marked as **verified** — kube-apiserver rejects OIDC tokens where `email_verified: false` when `--oidc-username-claim=email` is set
 
 The kube-apiserver is configured with OIDC flags (`--oidc-issuer-url`, `--oidc-client-id`, `--oidc-username-claim=email`, `--oidc-groups-claim=groups`) so that Headlamp can make Kubernetes API calls using the user's OIDC token directly. This configuration is applied automatically during the addons phase via the `patch_apiserver_oidc` task, which patches the static pod manifest on all control plane nodes and waits for the apiserver to restart. The `headlamp_admin_group` default (`"authentik Admins"`) is bound to `cluster-admin` via a ClusterRoleBinding that covers both the Headlamp service account and OIDC group subjects.
+
+## Descheduler
+
+The descheduler runs as a CronJob every 6 hours in the `descheduler` namespace. It watches the cluster for pods that the initial scheduler placed sub-optimally and evicts them so they are rescheduled more evenly. The evicted pods are recreated by their controller (Deployment, DaemonSet, etc.) — no data is lost, and disruption is minimal for workloads with more than one replica.
+
+### Strategies
+
+| Strategy | Thresholds | Effect |
+|---|---|---|
+| `LowNodeUtilization` | Under-utilised: <20% cpu/mem/pods; over-utilised: >50% | Evicts pods from hot nodes so they reschedule onto underloaded ones. Requires metrics-server. |
+| `RemoveDuplicates` | — | Ensures no two replicas of the same Deployment/ReplicaSet sit on the same node. |
+| `RemovePodsViolatingTopologySpreadConstraints` | — | Evicts pods that violate `topologySpreadConstraints` set on their owning resource — useful for pods that were scheduled before nodes existed. |
+
+### What is never evicted
+
+- Pods in `kube-system`, `longhorn-system`, `metallb-system`, or `kyverno` namespaces
+- Pods with PVCs attached (`ignorePvcPods: true`) — protects stateful workloads from unnecessary disruption
+- Pods with a `system-cluster-critical` or `system-node-critical` priority class
+- Pods using local node storage (`evictLocalStoragePods: false`)
+
+### Tuning
+
+Edit `roles/cluster_addons/tasks/descheduler.yml` and adjust the `LowNodeUtilization` thresholds to match your cluster's load profile:
+
+```yaml
+- name: LowNodeUtilization
+  args:
+    thresholds:          # evict FROM nodes above these levels
+      cpu: 50
+      memory: 50
+      pods: 50
+    targetThresholds:    # reschedule ONTO nodes below these levels
+      cpu: 20
+      memory: 20
+      pods: 20
+```
+
+To change the schedule, update the `schedule` field (standard cron syntax). To run the descheduler on demand before the next scheduled fire:
+
+```bash
+kubectl create job --from=cronjob/descheduler descheduler-manual -n descheduler
+kubectl logs -n descheduler -l job-name=descheduler-manual -f
+```
 
 ## Exposed Services
 
