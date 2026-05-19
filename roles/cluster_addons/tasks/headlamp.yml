@@ -168,6 +168,11 @@
             services:
               - name: headlamp
                 port: 80
+                sticky:
+                  cookie:
+                    name: headlamp_sticky
+                    secure: true
+                    httpOnly: true
         tls:
           secretName: {{ wildcard_secret_name }}
 
