@@ -14,6 +14,47 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
+- name: Create Longhorn manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/longhorn"
+    state: directory
+    mode: '0700'
+
+- name: Write Longhorn Helm values
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/longhorn/values.yml"
+    mode: "0600"
+    content: |
+      defaultSettings:
+        defaultDataPath: /var/lib/longhorn
+
+      longhornManager:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+
+      longhornDriver:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+
+      longhornUI:
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+
 - name: Install or upgrade Longhorn via Helm
   ansible.builtin.command:
     cmd: >
@@ -21,7 +62,7 @@
       --namespace {{ longhorn_namespace }}
       --create-namespace
       --version {{ longhorn_version }}
-      --set defaultSettings.defaultDataPath=/var/lib/longhorn
+      --values {{ k8s_manifests_dir }}/longhorn/values.yml
       --wait
       --timeout 10m
   environment:

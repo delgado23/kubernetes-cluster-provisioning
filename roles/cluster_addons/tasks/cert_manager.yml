@@ -27,14 +27,57 @@
     KUBECONFIG: /root/.kube/config
   changed_when: true
 
+- name: Create cert-manager manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/cert-manager"
+    state: directory
+    mode: '0700'
+
+- name: Write cert-manager Helm values
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/cert-manager/values.yml"
+    mode: "0600"
+    content: |
+      crds:
+        enabled: true
+
+      extraArgs:
+        - --dns01-recursive-nameservers-only
+        - --dns01-recursive-nameservers=8.8.8.8:53,1.1.1.1:53
+
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 256Mi
+
+      webhook:
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+
+      cainjector:
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+
 - name: Install or upgrade cert-manager via Helm
   ansible.builtin.command:
     cmd: >
       /usr/local/bin/helm upgrade --install cert-manager jetstack/cert-manager
       --namespace {{ cert_manager_namespace }}
       --version {{ cert_manager_version }}
-      --set crds.enabled=true
-      --set extraArgs={--dns01-recursive-nameservers-only\,--dns01-recursive-nameservers=8.8.8.8:53\,1.1.1.1:53}
+      --values {{ k8s_manifests_dir }}/cert-manager/values.yml
       --wait
       --timeout 5m
   environment:
