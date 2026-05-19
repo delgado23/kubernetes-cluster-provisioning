@@ -55,6 +55,14 @@
   poll: 0
   register: _argocd_job
 
+- name: Fetch descheduler release from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/kubernetes-sigs/descheduler/releases/latest
+    return_content: true
+  async: 60
+  poll: 0
+  register: _descheduler_job
+
 - name: Wait for all GitHub version fetches to complete
   ansible.builtin.async_status:
     jid: "{{ item.ansible_job_id }}"
@@ -70,13 +78,14 @@
     - "{{ _headlamp_job }}"
     - "{{ _reflector_job }}"
     - "{{ _argocd_job }}"
+    - "{{ _descheduler_job }}"
 
 - name: Set resolved addon versions
   ansible.builtin.set_fact:
-    flannel_version:       "{{ _fetch_results.results[0].json.tag_name }}"
-    longhorn_version:      "{{ _fetch_results.results[1].json.tag_name | regex_replace('^v', '') }}"
-    traefik_chart_version: "{{ _fetch_results.results[2].json.tag_name | regex_replace('^v', '') }}"
-    cert_manager_version:  "{{ _fetch_results.results[3].json.tag_name }}"
+    flannel_version:        "{{ _fetch_results.results[0].json.tag_name }}"
+    longhorn_version:       "{{ _fetch_results.results[1].json.tag_name | regex_replace('^v', '') }}"
+    traefik_chart_version:  "{{ _fetch_results.results[2].json.tag_name | regex_replace('^v', '') }}"
+    cert_manager_version:   "{{ _fetch_results.results[3].json.tag_name }}"
     headlamp_version: >-
       {{
         _fetch_results.results[4].json
@@ -85,7 +94,7 @@
         | first
         | regex_replace('^v', '')
       }}
-    reflector_version:     "{{ _fetch_results.results[5].json.tag_name | regex_replace('^v', '') }}"
+    reflector_version:      "{{ _fetch_results.results[5].json.tag_name | regex_replace('^v', '') }}"
     argocd_version: >-
       {{
         _fetch_results.results[6].json
@@ -94,14 +103,16 @@
         | first
         | regex_replace('^argo-cd-', '')
       }}
+    descheduler_version:    "{{ _fetch_results.results[7].json.tag_name | regex_replace('^v', '') }}"
 
 - name: Display resolved addon versions
   ansible.builtin.debug:
     msg:
-      - "Flannel:       {{ flannel_version }}"
-      - "Longhorn:      {{ longhorn_version }}"
-      - "Traefik chart: {{ traefik_chart_version }}"
-      - "cert-manager:  {{ cert_manager_version }}"
-      - "Headlamp:      {{ headlamp_version }}"
-      - "Reflector:     {{ reflector_version }}"
-      - "ArgoCD:        {{ argocd_version }}"
+      - "Flannel:        {{ flannel_version }}"
+      - "Longhorn:       {{ longhorn_version }}"
+      - "Traefik chart:  {{ traefik_chart_version }}"
+      - "cert-manager:   {{ cert_manager_version }}"
+      - "Headlamp:       {{ headlamp_version }}"
+      - "Reflector:      {{ reflector_version }}"
+      - "ArgoCD:         {{ argocd_version }}"
+      - "Descheduler:    {{ descheduler_version }}"
