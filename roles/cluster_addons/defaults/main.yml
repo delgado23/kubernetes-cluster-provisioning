@@ -12,6 +12,7 @@ argocd_namespace: argocd
 argocd_admin_group: "authentik Admins"
 headlamp_admin_group: "authentik Admins"
 kyverno_namespace: kyverno
+descheduler_namespace: descheduler
 
 # Authentik SSO — set authentik_url before running addons
 # e.g. https://auth.example.com

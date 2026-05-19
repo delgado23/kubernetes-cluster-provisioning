@@ -469,6 +469,11 @@
         name: cluster_addons
         tasks_from: metrics_server
 
+    - name: Install descheduler for pod rebalancing
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: descheduler
+
     - name: Install MetalLB and configure IP address pool
       ansible.builtin.include_role:
         name: cluster_addons
