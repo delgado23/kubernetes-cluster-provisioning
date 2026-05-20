@@ -1,6 +1,6 @@
 # Kubernetes Cluster Provisioning
 
-Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), Longhorn storage, Headlamp, ArgoCD, and Descheduler.
+Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), Longhorn storage, Prometheus, Headlamp, ArgoCD, and Descheduler.
 
 ## Cluster Architecture
 
@@ -14,7 +14,8 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | Storage | Longhorn with XFS LVM partition |
 | GitOps | ArgoCD |
 | SSO | Authentik (external) — ForwardAuth for Traefik/Longhorn, native OIDC for ArgoCD/Headlamp |
-| Dashboard | Headlamp (Kubernetes UI) |
+| Monitoring | Prometheus + AlertManager (kube-prometheus-stack), Longhorn-backed PVCs, node-exporter + kube-state-metrics; Grafana replaced by Headlamp plugin |
+| Dashboard | Headlamp (Kubernetes UI) with Prometheus metrics plugin for in-UI charts |
 | Tooling | kubectl, Helm, k9s on all control plane nodes |
 | etcd encryption | AES-CBC encryption at rest for all Secrets, configured at kubeadm init time |
 | Pod Security Standards | Namespace-scoped enforcement — `privileged` for storage/network system namespaces, `baseline`/`restricted` for application namespaces |
@@ -62,7 +63,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
     ├── worker_storage/        # LVM + XFS setup for Longhorn on worker data disk, iSCSI
     ├── cluster_bootstrap/     # kubeadm init/join, Flannel, kubelet-serving-cert-approver, tooling
     ├── worker_join/           # Join worker nodes to the cluster
-    ├── cluster_addons/        # MetalLB, Traefik, Longhorn, reflector, cert-manager, Headlamp, ArgoCD, Descheduler
+    ├── cluster_addons/        # MetalLB, Traefik, Longhorn, reflector, cert-manager, Prometheus, Headlamp, ArgoCD, Descheduler
     ├── node_maintenance/      # Drain, update, reboot, uncordon
     └── cluster_cleanup/       # Remove hosts from Foreman and FreeIPA
 ```
@@ -175,7 +176,7 @@ ansible-playbook main.yml --tags bootstrap
 # Phase 4: Join workers to the cluster and label them
 ansible-playbook main.yml --tags workers
 
-# Phase 5: Install add-ons (MetalLB, Traefik, Longhorn, reflector, cert-manager, Headlamp, ArgoCD, Descheduler)
+# Phase 5: Install add-ons (MetalLB, Traefik, Longhorn, reflector, cert-manager, Prometheus, Headlamp, ArgoCD, Descheduler)
 ansible-playbook main.yml --tags addons
 
 # Skip VM provisioning for re-runs against existing nodes
@@ -307,6 +308,36 @@ The Traefik and Longhorn IngressRoutes include a dedicated route for `/outpost.g
 
 The kube-apiserver is configured with OIDC flags (`--oidc-issuer-url`, `--oidc-client-id`, `--oidc-username-claim=email`, `--oidc-groups-claim=groups`) so that Headlamp can make Kubernetes API calls using the user's OIDC token directly. This configuration is applied automatically during the addons phase via the `patch_apiserver_oidc` task, which patches the static pod manifest on all control plane nodes and waits for the apiserver to restart. The `headlamp_admin_group` default (`"authentik Admins"`) is bound to `cluster-admin` via a ClusterRoleBinding that covers both the Headlamp service account and OIDC group subjects.
 
+## Prometheus Monitoring
+
+Prometheus is deployed via [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) in the `monitoring` namespace. Grafana is disabled — metrics are visualised directly in Headlamp via the `@headlamp-k8s/prometheus-metrics` plugin.
+
+### Components
+
+| Component | Purpose |
+|---|---|
+| Prometheus | Metrics collection and storage (15-day retention, 20 Gi Longhorn PVC) |
+| AlertManager | Alert routing and deduplication (2 Gi Longhorn PVC) |
+| node-exporter | Per-node CPU, memory, disk, and network metrics |
+| kube-state-metrics | Kubernetes object state metrics (pod status, deployment replicas, etc.) |
+
+### Storage
+
+Both Prometheus and AlertManager use `ReadWriteOnce` PersistentVolumeClaims on the `longhorn` StorageClass. Default sizes are set in `roles/cluster_addons/defaults/main.yml`:
+
+```yaml
+prometheus_storage_size: 20Gi
+alertmanager_storage_size: 2Gi
+```
+
+### Headlamp Plugin Setup
+
+The `@headlamp-k8s/prometheus-metrics` plugin is installed automatically at Headlamp pod startup via an init container. After deployment:
+
+1. Open Headlamp and navigate to **Settings → Plugins → Prometheus Metrics**
+2. Set the Prometheus URL to `https://prometheus.{{ ingress_domain }}`
+3. Charts will appear on node and pod detail pages
+
 ## Descheduler
 
 The descheduler runs as a CronJob every 6 hours in the `descheduler` namespace. It watches the cluster for pods that the initial scheduler placed sub-optimally and evicts them so they are rescheduled more evenly. The evicted pods are recreated by their controller (Deployment, DaemonSet, etc.) — no data is lost, and disruption is minimal for workloads with more than one replica.
@@ -358,6 +389,8 @@ After a successful run, all services are accessible via Traefik at the MetalLB L
 |---|---|---|
 | Traefik dashboard | `https://traefik.{{ ingress_domain }}` | Authentik SSO (ForwardAuth) |
 | Longhorn dashboard | `https://longhorn.{{ ingress_domain }}` | Authentik SSO (ForwardAuth) |
+| Prometheus | `https://prometheus.{{ ingress_domain }}` | Authentik SSO (ForwardAuth) |
+| AlertManager | `https://alertmanager.{{ ingress_domain }}` | Authentik SSO (ForwardAuth) |
 | Headlamp dashboard | `https://headlamp.{{ ingress_domain }}` | Authentik SSO (OIDC) |
 | ArgoCD | `https://argocd.{{ ingress_domain }}` | Authentik SSO (OIDC) |
 | Kubernetes API | `https://{{ k8s_api_endpoint }}:6443` | kubeconfig |
