@@ -57,6 +57,26 @@
           clientSecret: "{{ vault_authentik_headlamp_client_secret }}"
           issuerURL: "{{ authentik_headlamp_issuer }}"
           scopes: "openid,profile,email,groups,offline_access"
+
+      pluginsDir: /headlamp/plugins
+
+      initContainers:
+        - name: install-plugins
+          image: node:22-alpine
+          command: ["sh", "-c"]
+          args:
+            - "npx --yes @headlamp-k8s/headlamp-plugin install @headlamp-k8s/prometheus-metrics /plugins"
+          volumeMounts:
+            - name: headlamp-plugins
+              mountPath: /plugins
+
+      extraVolumes:
+        - name: headlamp-plugins
+          emptyDir: {}
+
+      extraVolumeMounts:
+        - name: headlamp-plugins
+          mountPath: /headlamp/plugins
   no_log: true
 
 - name: Install or upgrade Headlamp via Helm
