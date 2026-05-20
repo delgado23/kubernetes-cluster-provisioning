@@ -39,12 +39,6 @@
                   evictFailedBarePods: false
                   evictLocalStoragePods: false
                   ignorePvcPods: true
-                  namespaces:
-                    exclude:
-                      - kube-system
-                      - longhorn-system
-                      - metallb-system
-                      - kyverno
               - name: LowNodeUtilization
                 args:
                   thresholds:
@@ -56,10 +50,11 @@
                     memory: 50
                     pods: 50
               - name: RemoveDuplicates
-                args: {}
               - name: RemovePodsViolatingTopologySpreadConstraints
-                args: {}
             plugins:
+              evictor:
+                enabled:
+                  - DefaultEvictor
               balance:
                 enabled:
                   - LowNodeUtilization
