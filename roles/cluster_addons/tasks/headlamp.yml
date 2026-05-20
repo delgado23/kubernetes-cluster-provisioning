@@ -58,32 +58,6 @@
           issuerURL: "{{ authentik_headlamp_issuer }}"
           scopes: "openid,profile,email,groups,offline_access"
 
-      pluginsDir: /headlamp/plugins
-
-      initContainers:
-        - name: install-plugins
-          image: node:22-alpine
-          command: ["sh", "-c"]
-          args:
-            - |
-              set -e
-              cd /tmp
-              npm pack @headlamp-k8s/prometheus-metrics 2>&1
-              tar -xzf headlamp-k8s-prometheus-metrics-*.tgz package/dist/main.js
-              mkdir -p /plugins/prometheus-metrics
-              cp /tmp/package/dist/main.js /plugins/prometheus-metrics/main.js
-              echo "Installed: $(ls -lh /plugins/prometheus-metrics/main.js)"
-          volumeMounts:
-            - name: headlamp-plugins
-              mountPath: /plugins
-
-      volumes:
-        - name: headlamp-plugins
-          emptyDir: {}
-
-      volumeMounts:
-        - name: headlamp-plugins
-          mountPath: /headlamp/plugins
   no_log: true
 
 - name: Install or upgrade Headlamp via Helm
