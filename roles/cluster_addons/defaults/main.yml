@@ -13,6 +13,9 @@ argocd_admin_group: "authentik Admins"
 headlamp_admin_group: "authentik Admins"
 kyverno_namespace: kyverno
 descheduler_namespace: descheduler
+prometheus_namespace: monitoring
+prometheus_storage_size: 20Gi
+alertmanager_storage_size: 2Gi
 
 # Authentik SSO — set authentik_url before running addons
 # e.g. https://auth.example.com
