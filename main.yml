@@ -499,6 +499,11 @@
         name: cluster_addons
         tasks_from: cert_manager
 
+    - name: Install Prometheus monitoring stack
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: prometheus
+
     - name: Install Headlamp Kubernetes dashboard
       ansible.builtin.include_role:
         name: cluster_addons
