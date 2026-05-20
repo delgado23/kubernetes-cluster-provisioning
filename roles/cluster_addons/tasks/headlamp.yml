@@ -70,11 +70,11 @@
             - name: headlamp-plugins
               mountPath: /plugins
 
-      extraVolumes:
+      volumes:
         - name: headlamp-plugins
           emptyDir: {}
 
-      extraVolumeMounts:
+      volumeMounts:
         - name: headlamp-plugins
           mountPath: /headlamp/plugins
   no_log: true
