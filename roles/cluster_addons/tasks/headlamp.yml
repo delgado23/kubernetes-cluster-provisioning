@@ -62,10 +62,19 @@
 
       initContainers:
         - name: install-plugins
-          image: node:22-alpine
+          image: alpine:3
           command: ["sh", "-c"]
           args:
-            - "npx --yes @headlamp-k8s/headlamp-plugin install @headlamp-k8s/prometheus-metrics /plugins"
+            - |
+              set -e
+              apk add --no-cache curl jq > /dev/null
+              mkdir -p /plugins/prometheus-metrics
+              TAG=$(curl -sf 'https://api.github.com/repos/headlamp-k8s/plugins/releases?per_page=20' \
+                | jq -r '[.[] | select(.tag_name | startswith("prometheus-metrics-"))] | first | .tag_name')
+              echo "Installing Headlamp plugin: ${TAG}"
+              curl -sfL "https://github.com/headlamp-k8s/plugins/releases/download/${TAG}/main.js" \
+                -o /plugins/prometheus-metrics/main.js
+              echo "Installed: $(ls -lh /plugins/prometheus-metrics/main.js)"
           volumeMounts:
             - name: headlamp-plugins
               mountPath: /plugins
