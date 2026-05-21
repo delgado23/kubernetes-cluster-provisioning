@@ -509,6 +509,11 @@
         name: cluster_addons
         tasks_from: headlamp
 
+    - name: Install LibreChat AI chat interface
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: librechat
+
     - name: Install ArgoCD GitOps controller
       ansible.builtin.include_role:
         name: cluster_addons
