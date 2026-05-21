@@ -1,0 +1,236 @@
+---
+- name: Verify vault variables are defined for LibreChat
+  ansible.builtin.assert:
+    that:
+      - vault_authentik_librechat_client_id is defined
+      - vault_authentik_librechat_client_id | length > 0
+      - vault_authentik_librechat_client_secret is defined
+      - vault_authentik_librechat_client_secret | length > 0
+      - vault_librechat_anthropic_api_key is defined
+      - vault_librechat_anthropic_api_key | length > 0
+      - vault_librechat_jwt_secret is defined
+      - vault_librechat_jwt_secret | length > 0
+      - vault_librechat_jwt_refresh_secret is defined
+      - vault_librechat_jwt_refresh_secret | length > 0
+      - vault_librechat_creds_key is defined
+      - vault_librechat_creds_key | length > 0
+      - vault_librechat_creds_iv is defined
+      - vault_librechat_creds_iv | length > 0
+      - vault_librechat_meili_master_key is defined
+      - vault_librechat_meili_master_key | length > 0
+    fail_msg: |
+      Missing vault variables for LibreChat. Add to vars/vault.yml:
+        vault_authentik_librechat_client_id: "<client id from Authentik>"
+        vault_authentik_librechat_client_secret: "<client secret from Authentik>"
+        vault_librechat_anthropic_api_key: "<Anthropic API key>"
+        vault_librechat_jwt_secret: "<openssl rand -hex 32>"
+        vault_librechat_jwt_refresh_secret: "<openssl rand -hex 32>"
+        vault_librechat_creds_key: "<openssl rand -hex 32>"
+        vault_librechat_creds_iv: "<openssl rand -hex 16>"
+        vault_librechat_meili_master_key: "<openssl rand -hex 32>"
+
+- name: Create LibreChat namespace (dry-run)
+  ansible.builtin.command:
+    cmd: kubectl create namespace {{ librechat_namespace }} --dry-run=client -o yaml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _librechat_ns_yaml
+  changed_when: false
+
+- name: Apply LibreChat namespace
+  ansible.builtin.shell:
+    cmd: "echo '{{ _librechat_ns_yaml.stdout }}' | kubectl apply -f -"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Create LibreChat manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/librechat"
+    state: directory
+    mode: '0700'
+
+- name: Write LibreChat credentials secret manifest
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/librechat/secret.yml"
+    mode: "0600"
+    content: |
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: librechat-credentials-env
+        namespace: {{ librechat_namespace }}
+      type: Opaque
+      stringData:
+        CREDS_KEY: "{{ vault_librechat_creds_key }}"
+        CREDS_IV: "{{ vault_librechat_creds_iv }}"
+        JWT_SECRET: "{{ vault_librechat_jwt_secret }}"
+        JWT_REFRESH_SECRET: "{{ vault_librechat_jwt_refresh_secret }}"
+        MEILI_MASTER_KEY: "{{ vault_librechat_meili_master_key }}"
+        ANTHROPIC_API_KEY: "{{ vault_librechat_anthropic_api_key }}"
+        OPENID_CLIENT_ID: "{{ vault_authentik_librechat_client_id }}"
+        OPENID_CLIENT_SECRET: "{{ vault_authentik_librechat_client_secret }}"
+  no_log: true
+
+- name: Apply LibreChat credentials secret
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/librechat/secret.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Write LibreChat Helm values
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/librechat/values.yml"
+    mode: "0600"
+    content: |
+      replicaCount: 1
+
+      global:
+        librechat:
+          existingSecretName: "librechat-credentials-env"
+          existingSecretApiKey: ANTHROPIC_API_KEY
+
+      librechat:
+        existingSecretName: "librechat-credentials-env"
+
+        configEnv:
+          ALLOW_REGISTRATION: "false"
+          ALLOW_EMAIL_LOGIN: "false"
+          ALLOW_SOCIAL_LOGIN: "true"
+          ALLOW_SOCIAL_REGISTRATION: "true"
+          OPENID_CALLBACK_URL: "/oauth/openid/callback"
+          OPENID_SCOPE: "openid profile email"
+          OPENID_BUTTON_LABEL: "Login with Authentik"
+          OPENID_ISSUER: "{{ authentik_librechat_issuer }}"
+          OPENID_GENERATE_NONCE: "true"
+          OPENID_USE_END_SESSION_ENDPOINT: "true"
+
+        configYamlContent: |
+          version: 1.2
+          cache: true
+          registration:
+            socialLogins: ["openid"]
+          endpoints:
+            anthropic:
+              apiKey: "${ANTHROPIC_API_KEY}"
+              models:
+                default:
+                  - claude-opus-4-7
+                  - claude-sonnet-4-6
+                  - claude-haiku-4-5-20251001
+                fetch: false
+
+        imageVolume:
+          enabled: true
+          size: {{ librechat_files_storage_size }}
+          accessModes: ReadWriteOnce
+          storageClassName: longhorn
+
+      mongodb:
+        enabled: true
+        image:
+          repository: bitnamilegacy/mongodb
+        auth:
+          enabled: false
+        persistence:
+          enabled: true
+          storageClass: longhorn
+          size: {{ librechat_mongodb_storage_size }}
+
+      meilisearch:
+        enabled: true
+        persistence:
+          enabled: true
+          storageClass: longhorn
+        auth:
+          existingMasterKeySecret: "librechat-credentials-env"
+
+      service:
+        type: ClusterIP
+        port: 3080
+
+      ingress:
+        enabled: false
+
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+
+- name: Install or upgrade LibreChat via Helm
+  ansible.builtin.command:
+    cmd: >
+      /usr/local/bin/helm upgrade --install librechat
+      oci://registry.librechat.ai/librechat-chart/librechat
+      --namespace {{ librechat_namespace }}
+      --version {{ librechat_version }}
+      --values {{ k8s_manifests_dir }}/librechat/values.yml
+      --wait
+      --timeout 10m
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: librechat_helm_output
+  changed_when: true
+  ignore_errors: true
+
+- name: Print LibreChat Helm output
+  ansible.builtin.debug:
+    var: librechat_helm_output.stdout_lines
+
+- name: Dump LibreChat pod status on install failure
+  ansible.builtin.command:
+    cmd: kubectl get pods -n {{ librechat_namespace }} -o wide
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  when: librechat_helm_output.rc != 0
+  ignore_errors: true
+  register: _librechat_pod_status
+
+- name: Print LibreChat pod status
+  ansible.builtin.debug:
+    var: _librechat_pod_status.stdout_lines
+  when: librechat_helm_output.rc != 0
+
+- name: Fail after LibreChat diagnostics
+  ansible.builtin.fail:
+    msg: "LibreChat Helm install failed — see pod status above"
+  when: librechat_helm_output.rc != 0
+
+- name: Write LibreChat IngressRoute manifest
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/librechat/ingress.yml"
+    mode: "0600"
+    content: |
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: librechat
+        namespace: {{ librechat_namespace }}
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - match: Host(`chat.{{ ingress_domain }}`)
+            kind: Rule
+            services:
+              - name: librechat
+                port: 3080
+        tls:
+          secretName: {{ wildcard_secret_name }}
+
+- name: Apply LibreChat IngressRoute
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/librechat/ingress.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: librechat_ingress_output
+  changed_when: true
+
+- name: Print LibreChat IngressRoute apply output
+  ansible.builtin.debug:
+    var: librechat_ingress_output.stdout_lines
