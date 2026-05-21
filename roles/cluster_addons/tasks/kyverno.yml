@@ -14,12 +14,60 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
+- name: Create Kyverno manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/kyverno"
+    state: directory
+    mode: '0700'
+
+- name: Write Kyverno Helm values
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/kyverno/values.yml"
+    mode: "0600"
+    content: |
+      admissionController:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 384Mi
+
+      backgroundController:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+
+      cleanupController:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+
+      reportsController:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+
 - name: Install or upgrade Kyverno via Helm
   ansible.builtin.command:
     cmd: >
       /usr/local/bin/helm upgrade --install kyverno kyverno/kyverno
       --namespace {{ kyverno_namespace }}
       --create-namespace
+      --values {{ k8s_manifests_dir }}/kyverno/values.yml
       --wait
       --timeout 5m
   environment:
