@@ -1,6 +1,6 @@
 # Kubernetes Cluster Provisioning
 
-Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), Longhorn storage, Prometheus, Headlamp, ArgoCD, and Descheduler.
+Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), Longhorn storage, Prometheus, Headlamp, LibreChat, ArgoCD, and Descheduler.
 
 ## Cluster Architecture
 
@@ -16,6 +16,7 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | SSO | Authentik (external) — ForwardAuth for Traefik/Longhorn, native OIDC for ArgoCD/Headlamp |
 | Monitoring | Prometheus + AlertManager (kube-prometheus-stack), Longhorn-backed PVCs, node-exporter + kube-state-metrics; Grafana replaced by Headlamp plugin |
 | Dashboard | Headlamp (Kubernetes UI) with Prometheus metrics plugin for in-UI charts |
+| AI Chat | LibreChat with Anthropic Claude, Authentik OIDC SSO, MongoDB + Meilisearch on Longhorn |
 | Tooling | kubectl, Helm, k9s on all control plane nodes |
 | etcd encryption | AES-CBC encryption at rest for all Secrets, configured at kubeadm init time |
 | Pod Security Standards | Namespace-scoped enforcement — `privileged` for storage/network system namespaces, `baseline`/`restricted` for application namespaces |
@@ -63,7 +64,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
     ├── worker_storage/        # LVM + XFS setup for Longhorn on worker data disk, iSCSI
     ├── cluster_bootstrap/     # kubeadm init/join, Flannel, kubelet-serving-cert-approver, tooling
     ├── worker_join/           # Join worker nodes to the cluster
-    ├── cluster_addons/        # MetalLB, Traefik, Longhorn, reflector, cert-manager, Prometheus, Headlamp, ArgoCD, Descheduler
+    ├── cluster_addons/        # MetalLB, Traefik, Longhorn, reflector, cert-manager, Prometheus, Headlamp, LibreChat, ArgoCD, Descheduler
     ├── node_maintenance/      # Drain, update, reboot, uncordon
     └── cluster_cleanup/       # Remove hosts from Foreman and FreeIPA
 ```
@@ -96,6 +97,14 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_authentik_argocd_client_secret` | OIDC client secret for the ArgoCD application in Authentik |
 | `vault_authentik_headlamp_client_id` | OIDC client ID for the Headlamp application in Authentik |
 | `vault_authentik_headlamp_client_secret` | OIDC client secret for the Headlamp application in Authentik |
+| `vault_authentik_librechat_client_id` | OIDC client ID for the LibreChat application in Authentik |
+| `vault_authentik_librechat_client_secret` | OIDC client secret for the LibreChat application in Authentik |
+| `vault_librechat_anthropic_api_key` | Anthropic API key for Claude models |
+| `vault_librechat_jwt_secret` | JWT signing secret — generate with `openssl rand -hex 32` |
+| `vault_librechat_jwt_refresh_secret` | JWT refresh signing secret — generate with `openssl rand -hex 32` |
+| `vault_librechat_creds_key` | 32-byte credential encryption key — generate with `openssl rand -hex 32` |
+| `vault_librechat_creds_iv` | 16-byte credential encryption IV — generate with `openssl rand -hex 16` |
+| `vault_librechat_meili_master_key` | Meilisearch master key — generate with `openssl rand -hex 32` |
 | `foreman_user_vault` | Foreman username |
 | `foreman_password_vault` | Foreman password |
 | `ipa_password` | FreeIPA admin password |
@@ -176,7 +185,7 @@ ansible-playbook main.yml --tags bootstrap
 # Phase 4: Join workers to the cluster and label them
 ansible-playbook main.yml --tags workers
 
-# Phase 5: Install add-ons (MetalLB, Traefik, Longhorn, reflector, cert-manager, Prometheus, Headlamp, ArgoCD, Descheduler)
+# Phase 5: Install add-ons (MetalLB, Traefik, Longhorn, reflector, cert-manager, Prometheus, Headlamp, LibreChat, ArgoCD, Descheduler)
 ansible-playbook main.yml --tags addons
 
 # Skip VM provisioning for re-runs against existing nodes
@@ -296,6 +305,25 @@ The Traefik and Longhorn IngressRoutes include a dedicated route for `/outpost.g
 2. Create an **Application** with slug matching `authentik_argocd_client_id` (default: `argocd`)
 3. Note the Client ID and Client Secret — add the secret to vault as `vault_authentik_argocd_client_secret`
 
+### OIDC — LibreChat
+
+1. In Authentik, create an **OAuth2/OIDC Provider**:
+   - Client type: **Confidential**
+   - Redirect URI: `https://chat.{{ ingress_domain }}/oauth/openid/callback`
+   - Scopes: `openid`, `profile`, `email`
+2. Create an **Application** with slug `librechat`
+3. Note the Client ID and Client Secret — add both to vault as `vault_authentik_librechat_client_id` and `vault_authentik_librechat_client_secret`
+4. Generate the remaining secrets before running the addons phase:
+   ```bash
+   openssl rand -hex 32   # vault_librechat_jwt_secret
+   openssl rand -hex 32   # vault_librechat_jwt_refresh_secret
+   openssl rand -hex 32   # vault_librechat_creds_key
+   openssl rand -hex 16   # vault_librechat_creds_iv
+   openssl rand -hex 32   # vault_librechat_meili_master_key
+   ```
+
+Registration via email/password is disabled — login is Authentik-only. Users are created on first SSO login.
+
 ### OIDC — Headlamp
 
 1. In Authentik, create an **OAuth2/OIDC Provider**:
@@ -337,6 +365,39 @@ The `@headlamp-k8s/prometheus-metrics` plugin is installed automatically at Head
 1. Open Headlamp and navigate to **Settings → Plugins → Prometheus Metrics**
 2. Set the Prometheus URL to `https://prometheus.{{ ingress_domain }}`
 3. Charts will appear on node and pod detail pages
+
+## LibreChat
+
+[LibreChat](https://github.com/danny-avila/LibreChat) is deployed in the `librechat` namespace via its official OCI Helm chart. It provides a ChatGPT-style interface supporting multiple AI providers — this deployment is configured for Anthropic Claude exclusively, with all authentication handled by Authentik OIDC.
+
+### Components
+
+| Component | Purpose |
+|---|---|
+| LibreChat | Chat UI and API server |
+| MongoDB | Conversation and user storage (8 Gi Longhorn PVC) |
+| Meilisearch | Full-text search across conversations |
+
+### Configured Models
+
+Models are set in `roles/cluster_addons/tasks/librechat.yml` under `configYamlContent`. Defaults:
+
+- `claude-opus-4-7`
+- `claude-sonnet-4-6`
+- `claude-haiku-4-5-20251001`
+
+To add or remove models, edit the `endpoints.anthropic.models.default` list. Models listed here appear in the LibreChat model selector — they must be available on your Anthropic account.
+
+### Storage
+
+Storage sizes are configured in `roles/cluster_addons/defaults/main.yml`:
+
+```yaml
+librechat_mongodb_storage_size: 8Gi
+librechat_files_storage_size: 5Gi
+```
+
+All PVCs use the `longhorn` StorageClass with `ReadWriteOnce` access mode.
 
 ## Descheduler
 
@@ -392,6 +453,7 @@ After a successful run, all services are accessible via Traefik at the MetalLB L
 | Prometheus | `https://prometheus.{{ ingress_domain }}` | Authentik SSO (ForwardAuth) |
 | AlertManager | `https://alertmanager.{{ ingress_domain }}` | Authentik SSO (ForwardAuth) |
 | Headlamp dashboard | `https://headlamp.{{ ingress_domain }}` | Authentik SSO (OIDC) |
+| LibreChat | `https://chat.{{ ingress_domain }}` | Authentik SSO (OIDC) |
 | ArgoCD | `https://argocd.{{ ingress_domain }}` | Authentik SSO (OIDC) |
 | Kubernetes API | `https://{{ k8s_api_endpoint }}:6443` | kubeconfig |
 
