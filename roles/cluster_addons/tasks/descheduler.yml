@@ -1,0 +1,91 @@
+---
+- name: Add descheduler Helm repo
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo add descheduler https://kubernetes-sigs.github.io/descheduler/
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+- name: Update Helm repos
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo update
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Create descheduler manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/descheduler"
+    state: directory
+    mode: '0700'
+
+- name: Write descheduler Helm values
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/descheduler/values.yml"
+    mode: "0600"
+    content: |
+      kind: CronJob
+      schedule: "0 */6 * * *"
+
+      deschedulerPolicy:
+        profiles:
+          - name: default
+            pluginConfig:
+              - name: DefaultEvictor
+                args:
+                  nodeFit: true
+                  evictSystemCriticalPods: false
+                  evictFailedBarePods: false
+                  evictLocalStoragePods: false
+                  ignorePvcPods: true
+              - name: LowNodeUtilization
+                args:
+                  thresholds:
+                    cpu: 20
+                    memory: 20
+                    pods: 20
+                  targetThresholds:
+                    cpu: 50
+                    memory: 50
+                    pods: 50
+              - name: RemoveDuplicates
+              - name: RemovePodsViolatingTopologySpreadConstraints
+            plugins:
+              evictor:
+                enabled:
+                  - DefaultEvictor
+              balance:
+                enabled:
+                  - LowNodeUtilization
+                  - RemoveDuplicates
+              deschedule:
+                enabled:
+                  - RemovePodsViolatingTopologySpreadConstraints
+
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
+
+- name: Install or upgrade descheduler via Helm
+  ansible.builtin.command:
+    cmd: >
+      /usr/local/bin/helm upgrade --install descheduler descheduler/descheduler
+      --namespace {{ descheduler_namespace }}
+      --create-namespace
+      --version {{ descheduler_version }}
+      --values {{ k8s_manifests_dir }}/descheduler/values.yml
+      --wait
+      --timeout 5m
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: descheduler_helm_output
+  changed_when: true
+
+- name: Print descheduler Helm output
+  ansible.builtin.debug:
+    var: descheduler_helm_output.stdout_lines

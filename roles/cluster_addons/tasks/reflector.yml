@@ -14,12 +14,32 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
+- name: Create reflector manifest directory
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/reflector"
+    state: directory
+    mode: '0700'
+
+- name: Write reflector Helm values
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/reflector/values.yml"
+    mode: "0600"
+    content: |
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
+
 - name: Install or upgrade reflector via Helm
   ansible.builtin.command:
     cmd: >
       /usr/local/bin/helm upgrade --install reflector emberstack/reflector
       --namespace kube-system
       --version {{ reflector_version }}
+      --values {{ k8s_manifests_dir }}/reflector/values.yml
       --wait
       --timeout 3m
   environment:
