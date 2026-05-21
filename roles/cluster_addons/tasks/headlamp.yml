@@ -37,6 +37,16 @@
     dest: "{{ k8s_manifests_dir }}/headlamp/values.yml"
     mode: "0600"
     content: |
+      replicaCount: 3
+
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+
       service:
         type: ClusterIP
 
@@ -47,6 +57,7 @@
           clientSecret: "{{ vault_authentik_headlamp_client_secret }}"
           issuerURL: "{{ authentik_headlamp_issuer }}"
           scopes: "openid,profile,email,groups,offline_access"
+
   no_log: true
 
 - name: Install or upgrade Headlamp via Helm
@@ -84,19 +95,20 @@
     var: _headlamp_pod_status.stdout_lines
   when: headlamp_helm_output.rc != 0
 
-- name: Dump Headlamp pod logs on install failure
+- name: Dump Headlamp init container logs on install failure
   ansible.builtin.shell:
     cmd: >
       kubectl logs -n {{ headlamp_namespace }}
       -l app.kubernetes.io/name=headlamp
-      --tail=50 2>&1 || true
+      -c install-plugins
+      --tail=80 2>&1 || true
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
   when: headlamp_helm_output.rc != 0
   register: _headlamp_pod_logs
 
-- name: Print Headlamp pod logs
+- name: Print Headlamp init container logs
   ansible.builtin.debug:
     var: _headlamp_pod_logs.stdout_lines
   when: headlamp_helm_output.rc != 0
@@ -158,6 +170,11 @@
             services:
               - name: headlamp
                 port: 80
+                sticky:
+                  cookie:
+                    name: headlamp_sticky
+                    secure: true
+                    httpOnly: true
         tls:
           secretName: {{ wildcard_secret_name }}
 
