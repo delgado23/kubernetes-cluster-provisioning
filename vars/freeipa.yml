@@ -7,6 +7,7 @@ iparealm: GARAVENTAVILLE.COM
 ipaclient_ntp_servers:
   - vek-lor.garaventaville.com
   - vek-nilash.garaventaville.com
+  - cthun.garaventaville.com
 ipaclient_mkhomedir: true
 ipaclient_automount_location: default
 ipaclient_force_join: true
