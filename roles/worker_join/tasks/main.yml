@@ -4,10 +4,12 @@
   delegate_to: "{{ groups['foreman_almalinux10_kubernetescontrolplanenode'] | first }}"
   register: kubeadm_join_cmd
   changed_when: true
+  no_log: true
 
 - name: Set join command fact
   ansible.builtin.set_fact:
     kubeadm_join_command: "{{ kubeadm_join_cmd.stdout }}"
+  no_log: true
 
 - name: Verify kubelet service exists
   ansible.builtin.service_facts:
@@ -81,6 +83,7 @@
   when: not kubelet_conf.stat.exists
   register: join_result
   changed_when: join_result.rc == 0
+  no_log: true
 
 - name: Show join output
   ansible.builtin.debug:
