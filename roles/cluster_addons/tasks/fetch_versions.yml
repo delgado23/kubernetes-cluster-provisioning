@@ -71,14 +71,6 @@
   poll: 0
   register: _prometheus_job
 
-- name: Fetch LibreChat release from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/danny-avila/LibreChat/releases/latest
-    return_content: true
-  async: 60
-  poll: 0
-  register: _librechat_job
-
 - name: Wait for all GitHub version fetches to complete
   ansible.builtin.async_status:
     jid: "{{ item.ansible_job_id }}"
@@ -96,7 +88,6 @@
     - "{{ _argocd_job }}"
     - "{{ _descheduler_job }}"
     - "{{ _prometheus_job }}"
-    - "{{ _librechat_job }}"
 
 - name: Set resolved addon versions
   ansible.builtin.set_fact:
@@ -130,7 +121,6 @@
         | first
         | regex_replace('^kube-prometheus-stack-', '')
       }}
-    librechat_version:      "{{ _fetch_results.results[9].json.tag_name | regex_replace('^v', '') }}"
 
 - name: Display resolved addon versions
   ansible.builtin.debug:
@@ -144,4 +134,3 @@
       - "ArgoCD:         {{ argocd_version }}"
       - "Descheduler:    {{ descheduler_version }}"
       - "Prometheus:     {{ prometheus_version }}"
-      - "LibreChat:      {{ librechat_version }}"
