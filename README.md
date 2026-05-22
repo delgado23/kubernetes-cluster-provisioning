@@ -116,6 +116,7 @@ head -c 32 /dev/urandom | base64
 | `wipe_cluster` | Boolean | `false` | When `true`, removes all existing cluster nodes from Foreman and FreeIPA first, then provisions a fresh cluster using the current `controlplane_node_count` and `worker_node_count` values. |
 | `controlplane_node_count` | Integer | 1 | Number of control plane nodes to provision this run. Set to `0` when only adding worker nodes — this skips the bootstrap and cluster add-ons phases entirely. Max 3. |
 | `worker_node_count` | Integer | 1 | Number of worker nodes to add this run. The provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
+| `letsencrypt_staging` | Boolean | `false` | When `true`, uses the Let's Encrypt **staging** ACME endpoint and names the ClusterIssuer `letsencrypt-cloudflare-staging`. Staging certs are not trusted by browsers but have no rate limits — use this when testing cert-manager config. Set to `false` for a production cluster to issue real trusted certificates. |
 
 `wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
 
