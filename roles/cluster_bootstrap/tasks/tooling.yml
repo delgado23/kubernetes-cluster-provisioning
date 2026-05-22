@@ -99,14 +99,14 @@
   block:
     - name: Download k9s checksums
       ansible.builtin.get_url:
-        url: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/checksums.txt"
-        dest: "/tmp/k9s_{{ k9s_version }}_checksums.txt"
+        url: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/checksums.sha256"
+        dest: "/tmp/k9s_{{ k9s_version }}_checksums.sha256"
         mode: "0600"
         force: true
 
     - name: Extract k9s RPM checksum
       ansible.builtin.shell:
-        cmd: "grep 'k9s_linux_amd64.rpm$' /tmp/k9s_{{ k9s_version }}_checksums.txt | awk '{print $1}'"
+        cmd: "grep 'k9s_linux_amd64.rpm$' /tmp/k9s_{{ k9s_version }}_checksums.sha256 | awk '{print $1}'"
       register: _k9s_rpm_checksum
       changed_when: false
 
