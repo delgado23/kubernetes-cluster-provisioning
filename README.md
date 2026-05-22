@@ -401,4 +401,10 @@ After a successful run, all services are accessible via Traefik at the MetalLB L
 
 Headlamp login uses Authentik OIDC — click **Sign in** on the Headlamp page and you will be redirected to Authentik. No service account token is needed.
 
-The ArgoCD initial admin password is printed at the end of the addons run. Change it after first login — ArgoCD deletes the `argocd-initial-admin-secret` once the password is updated, which is expected.
+Retrieve the ArgoCD initial admin password after the addons run completes:
+
+```bash
+kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath='{.data.password}' | base64 -d
+```
+
+Change the password after first login — ArgoCD deletes the `argocd-initial-admin-secret` once the password is updated, which is expected.

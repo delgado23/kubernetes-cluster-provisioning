@@ -236,17 +236,6 @@
   ansible.builtin.debug:
     var: argocd_ingress_output.stdout_lines
 
-- name: Retrieve ArgoCD initial admin password
-  ansible.builtin.command:
-    cmd: >
-      kubectl get secret argocd-initial-admin-secret
-      --namespace {{ argocd_namespace }}
-      -o jsonpath='{.data.password}'
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: argocd_admin_password_b64
-  changed_when: false
-
 - name: Print ArgoCD access summary
   ansible.builtin.debug:
     msg:
@@ -254,7 +243,8 @@
       - "ArgoCD installed."
       - "URL      : https://argocd.{{ ingress_domain }}"
       - "Username : admin"
-      - "Password : {{ argocd_admin_password_b64.stdout | b64decode }}"
+      - "Password : kubectl get secret argocd-initial-admin-secret"
+      - "           -n {{ argocd_namespace }}"
+      - "           -o jsonpath='{.data.password}' | base64 -d"
       - "Change the password after first login."
       - "================================================="
-  no_log: false
