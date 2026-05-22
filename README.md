@@ -98,10 +98,10 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_authentik_argocd_client_secret` | OIDC client secret for the ArgoCD application in Authentik |
 | `vault_authentik_headlamp_client_id` | OIDC client ID for the Headlamp application in Authentik |
 | `vault_authentik_headlamp_client_secret` | OIDC client secret for the Headlamp application in Authentik |
-| `foreman_user_vault` | Foreman username |
-| `foreman_password_vault` | Foreman password |
-| `ipa_password` | FreeIPA admin password |
-| `keepalived_password` | Keepalived VRRP authentication password |
+| `vault_foreman_user` | Foreman username |
+| `vault_foreman_password` | Foreman password |
+| `vault_ipa_password` | FreeIPA admin password |
+| `vault_keepalived_password` | Keepalived VRRP authentication password |
 
 Generate the etcd encryption key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
 
