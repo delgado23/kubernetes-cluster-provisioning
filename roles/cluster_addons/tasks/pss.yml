@@ -19,7 +19,10 @@
     - { ns: "{{ cert_manager_namespace }}", enforce: restricted, warn: restricted }
     - { ns: "{{ headlamp_namespace }}",    enforce: restricted, warn: restricted }
     - { ns: "{{ argocd_namespace }}",      enforce: baseline,   warn: restricted }
-    - { ns: default,                        enforce: baseline,   warn: restricted }
+    - { ns: default,                                enforce: baseline,   warn: restricted }
+    - { ns: "{{ prometheus_namespace }}",           enforce: baseline,   warn: restricted }
+    - { ns: "{{ descheduler_namespace }}",          enforce: baseline,   warn: restricted }
+    - { ns: "{{ kyverno_namespace }}",              enforce: baseline,   warn: restricted }
   changed_when: true
 
 - name: Print Pod Security Standards summary
@@ -33,4 +36,7 @@
       - "headlamp        : restricted enforce/warn/audit"
       - "argocd          : baseline enforce, restricted warn/audit"
       - "default         : baseline enforce, restricted warn/audit"
+      - "monitoring      : baseline enforce, restricted warn/audit"
+      - "descheduler     : baseline enforce, restricted warn/audit"
+      - "kyverno         : baseline enforce, restricted warn/audit"
       - "Check 'kubectl get events -A' for PSS violation warnings."
