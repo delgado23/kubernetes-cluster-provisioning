@@ -16,9 +16,6 @@ descheduler_namespace: descheduler
 prometheus_namespace: monitoring
 prometheus_storage_size: 20Gi
 alertmanager_storage_size: 2Gi
-librechat_namespace: librechat
-librechat_mongodb_storage_size: 8Gi
-librechat_files_storage_size: 5Gi
 
 # Authentik SSO — set authentik_url before running addons
 # e.g. https://auth.garaventaville.com
@@ -29,8 +26,7 @@ authentik_url: "https://auth.garaventaville.com"
 # the proxy outpost over HTTP on port 9000 (no TLS needed for cluster-internal traffic).
 authentik_outpost_url: "http://{{ authentik_url | regex_replace('^https?://', '') }}:9000"
 # OIDC issuer URLs — set to the application slug configured in Authentik.
-# Client IDs are stored in vault as vault_authentik_argocd_client_id,
-# vault_authentik_headlamp_client_id, and vault_authentik_librechat_client_id.
+# Client IDs are stored in vault as vault_authentik_argocd_client_id
+# and vault_authentik_headlamp_client_id.
 authentik_argocd_issuer: "{{ authentik_url }}/application/o/argocd/"
 authentik_headlamp_issuer: "{{ authentik_url }}/application/o/headlamp/"
-authentik_librechat_issuer: "{{ authentik_url }}/application/o/librechat/"
