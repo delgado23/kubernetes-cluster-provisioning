@@ -479,6 +479,11 @@
         name: cluster_addons
         tasks_from: metallb
 
+    - name: Install kube-router for NetworkPolicy enforcement
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: kube_router
+
     - name: Install Traefik ingress controller
       ansible.builtin.include_role:
         name: cluster_addons
