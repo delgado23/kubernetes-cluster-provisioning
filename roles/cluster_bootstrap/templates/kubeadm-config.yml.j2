@@ -43,7 +43,7 @@ apiServer:
     - name: enc
       hostPath: /etc/kubernetes/enc
       mountPath: /etc/kubernetes/enc
-      readOnly: false
+      readOnly: true
       pathType: DirectoryOrCreate
 ---
 apiVersion: kubelet.config.k8s.io/v1beta1
