@@ -85,6 +85,16 @@
           cpu: 500m
           memory: 256Mi
 
+      metrics:
+        prometheus:
+          entryPoint: metrics
+          addRoutersLabels: true
+          addServicesLabels: true
+          service:
+            enabled: true
+          serviceMonitor:
+            enabled: true
+
       persistence:
         enabled: false
 

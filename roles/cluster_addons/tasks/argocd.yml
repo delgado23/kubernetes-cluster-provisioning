@@ -160,6 +160,48 @@
   ansible.builtin.debug:
     var: argocd_helm_output.stdout_lines
 
+- name: Write ArgoCD NetworkPolicy manifest
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/argocd/networkpolicy.yml"
+    mode: "0600"
+    content: |
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: argocd-network-policy
+        namespace: {{ argocd_namespace }}
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+        ingress:
+          # Allow intra-namespace traffic between ArgoCD components
+          - from:
+              - podSelector: {}
+          # Allow Traefik to reach argocd-server on port 80
+          - from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: {{ traefik_namespace }}
+                podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: traefik
+            ports:
+              - port: 80
+                protocol: TCP
+
+- name: Apply ArgoCD NetworkPolicy
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/argocd/networkpolicy.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: argocd_networkpolicy_output
+  changed_when: true
+
+- name: Print ArgoCD NetworkPolicy apply output
+  ansible.builtin.debug:
+    var: argocd_networkpolicy_output.stdout_lines
+
 - name: Write ArgoCD IngressRoute manifest
   ansible.builtin.copy:
     dest: "{{ k8s_manifests_dir }}/argocd/ingress.yml"
@@ -194,17 +236,6 @@
   ansible.builtin.debug:
     var: argocd_ingress_output.stdout_lines
 
-- name: Retrieve ArgoCD initial admin password
-  ansible.builtin.command:
-    cmd: >
-      kubectl get secret argocd-initial-admin-secret
-      --namespace {{ argocd_namespace }}
-      -o jsonpath='{.data.password}'
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: argocd_admin_password_b64
-  changed_when: false
-
 - name: Print ArgoCD access summary
   ansible.builtin.debug:
     msg:
@@ -212,7 +243,8 @@
       - "ArgoCD installed."
       - "URL      : https://argocd.{{ ingress_domain }}"
       - "Username : admin"
-      - "Password : {{ argocd_admin_password_b64.stdout | b64decode }}"
+      - "Password : kubectl get secret argocd-initial-admin-secret"
+      - "           -n {{ argocd_namespace }}"
+      - "           -o jsonpath='{.data.password}' | base64 -d"
       - "Change the password after first login."
       - "================================================="
-  no_log: false

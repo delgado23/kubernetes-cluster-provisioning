@@ -91,15 +91,17 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_proxmox_api_token` | Proxmox API token secret |
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
 | `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
+| `vault_duo_ikey` | DUO Unix integration key (application identifier) |
 | `vault_duo_secret_key` | DUO Unix integration secret key for SSH 2FA |
+| `vault_duo_host` | DUO API hostname (e.g. `api-xxxxxxxx.duosecurity.com`) |
 | `vault_authentik_argocd_client_id` | OIDC client ID for the ArgoCD application in Authentik |
 | `vault_authentik_argocd_client_secret` | OIDC client secret for the ArgoCD application in Authentik |
 | `vault_authentik_headlamp_client_id` | OIDC client ID for the Headlamp application in Authentik |
 | `vault_authentik_headlamp_client_secret` | OIDC client secret for the Headlamp application in Authentik |
-| `foreman_user_vault` | Foreman username |
-| `foreman_password_vault` | Foreman password |
-| `ipa_password` | FreeIPA admin password |
-| `keepalived_password` | Keepalived VRRP authentication password |
+| `vault_foreman_user` | Foreman username |
+| `vault_foreman_password` | Foreman password |
+| `vault_ipa_password` | FreeIPA admin password |
+| `vault_keepalived_password` | Keepalived VRRP authentication password |
 
 Generate the etcd encryption key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
 
@@ -399,4 +401,10 @@ After a successful run, all services are accessible via Traefik at the MetalLB L
 
 Headlamp login uses Authentik OIDC — click **Sign in** on the Headlamp page and you will be redirected to Authentik. No service account token is needed.
 
-The ArgoCD initial admin password is printed at the end of the addons run. Change it after first login — ArgoCD deletes the `argocd-initial-admin-secret` once the password is updated, which is expected.
+Retrieve the ArgoCD initial admin password after the addons run completes:
+
+```bash
+kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath='{.data.password}' | base64 -d
+```
+
+Change the password after first login — ArgoCD deletes the `argocd-initial-admin-secret` once the password is updated, which is expected.
