@@ -92,7 +92,9 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_proxmox_api_token` | Proxmox API token secret |
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
 | `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
+| `vault_duo_ikey` | DUO Unix integration key (application identifier) |
 | `vault_duo_secret_key` | DUO Unix integration secret key for SSH 2FA |
+| `vault_duo_host` | DUO API hostname (e.g. `api-xxxxxxxx.duosecurity.com`) |
 | `vault_authentik_argocd_client_id` | OIDC client ID for the ArgoCD application in Authentik |
 | `vault_authentik_argocd_client_secret` | OIDC client secret for the ArgoCD application in Authentik |
 | `vault_authentik_headlamp_client_id` | OIDC client ID for the Headlamp application in Authentik |
