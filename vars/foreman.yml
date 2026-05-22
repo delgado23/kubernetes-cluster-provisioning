@@ -1,12 +1,12 @@
 ---
 # vars/foreman.yml
 # Foreman connection and resource identifiers.
-# Sensitive values (foreman_user, foreman_password) should be moved
-# to an Ansible Vault file in production.
 
 foreman_url: "https://foreman.example.com"
 foreman_user: "{{ vault_foreman_user }}"
 foreman_password: "{{ vault_foreman_password }}"
+# false because Foreman uses a self-signed cert on the internal homelab network.
+# Set to true if Foreman is fronted by a trusted CA-signed certificate.
 foreman_validate_certs: false
 foreman_domain: "example.com"               # used for host existence check
 
