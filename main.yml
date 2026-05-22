@@ -484,11 +484,6 @@
         name: cluster_addons
         tasks_from: kube_router
 
-    - name: Install Traefik ingress controller
-      ansible.builtin.include_role:
-        name: cluster_addons
-        tasks_from: traefik
-
     - name: Install Longhorn distributed storage
       ansible.builtin.include_role:
         name: cluster_addons
@@ -508,6 +503,16 @@
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: prometheus
+
+    - name: Install Traefik ingress controller
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: traefik
+
+    - name: Apply Prometheus IngressRoutes
+      ansible.builtin.include_role:
+        name: cluster_addons
+        tasks_from: prometheus_ingress
 
     - name: Install Headlamp Kubernetes dashboard
       ansible.builtin.include_role:

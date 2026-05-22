@@ -1,7 +1,7 @@
 ---
 - name: Install metrics-server
   ansible.builtin.command:
-    cmd: kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+    cmd: kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/{{ metrics_server_version }}/components.yaml
   environment:
     KUBECONFIG: /root/.kube/config
   register: metrics_server_output
