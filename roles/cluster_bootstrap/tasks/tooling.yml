@@ -13,7 +13,19 @@
         source <(kubectl completion bash)
       fi
 
-- name: Check if Helm is already installed
+- name: Resolve latest Helm version from GitHub API
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/helm/helm/releases/latest
+    return_content: true
+    headers:
+      Accept: application/vnd.github+json
+  register: _helm_release_info
+
+- name: Set Helm version fact
+  ansible.builtin.set_fact:
+    helm_version: "{{ _helm_release_info.json.tag_name }}"
+
+- name: Check installed Helm version
   ansible.builtin.command: helm version --short
   register: _helm_check
   changed_when: false
@@ -22,28 +34,41 @@
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 - name: Install Helm
-  when: _helm_check.rc != 0
+  when: _helm_check.rc != 0 or helm_version not in _helm_check.stdout
   block:
-    - name: Download Helm install script
+    - name: Download Helm tarball checksum
       ansible.builtin.get_url:
-        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-        dest: /tmp/get-helm-3.sh
-        mode: "0700"
+        url: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz.sha256"
+        dest: "/tmp/helm-{{ helm_version }}.sha256"
+        mode: "0600"
         force: true
 
-    - name: Run Helm install script
-      ansible.builtin.command:
-        cmd: /tmp/get-helm-3.sh
-      environment:
-        HELM_INSTALL_DIR: /usr/local/bin
-        USE_SUDO: "false"
-        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-      register: helm_install_output
-      changed_when: true
+    - name: Read Helm checksum
+      ansible.builtin.slurp:
+        src: "/tmp/helm-{{ helm_version }}.sha256"
+      register: _helm_sha256
 
-    - name: Print Helm install output
+    - name: Download Helm tarball
+      ansible.builtin.get_url:
+        url: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
+        dest: "/tmp/helm-{{ helm_version }}-linux-amd64.tar.gz"
+        mode: "0600"
+        checksum: "sha256:{{ (_helm_sha256.content | b64decode).split()[0] }}"
+        force: true
+
+    - name: Extract Helm binary
+      ansible.builtin.unarchive:
+        src: "/tmp/helm-{{ helm_version }}-linux-amd64.tar.gz"
+        dest: /usr/local/bin
+        remote_src: true
+        extra_opts:
+          - --strip-components=1
+          - linux-amd64/helm
+        mode: "0755"
+
+    - name: Print installed Helm version
       ansible.builtin.debug:
-        var: helm_install_output.stdout_lines
+        msg: "Installed Helm {{ helm_version }}"
 
 - name: Configure Helm bash completion
   ansible.builtin.shell: helm completion bash > /etc/bash_completion.d/helm
@@ -72,11 +97,25 @@
 - name: Install k9s
   when: _k9s_installed.rc != 0 or k9s_version not in _k9s_installed.stdout
   block:
+    - name: Download k9s checksums
+      ansible.builtin.get_url:
+        url: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/checksums.txt"
+        dest: "/tmp/k9s_{{ k9s_version }}_checksums.txt"
+        mode: "0600"
+        force: true
+
+    - name: Extract k9s RPM checksum
+      ansible.builtin.shell:
+        cmd: "grep 'k9s_linux_amd64.rpm$' /tmp/k9s_{{ k9s_version }}_checksums.txt | awk '{print $1}'"
+      register: _k9s_rpm_checksum
+      changed_when: false
+
     - name: Download k9s RPM
       ansible.builtin.get_url:
         url: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/k9s_linux_amd64.rpm"
         dest: "/tmp/k9s_{{ k9s_version }}_linux_amd64.rpm"
         mode: "0644"
+        checksum: "sha256:{{ _k9s_rpm_checksum.stdout }}"
 
     - name: Install k9s RPM
       ansible.builtin.dnf:
