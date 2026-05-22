@@ -1,10 +1,10 @@
 [duo]
 ; Duo integration key
-ikey = REMOVED_DUO_IKEY
+ikey = {{ vault_duo_ikey }}
 ; Duo secret key
 skey = {{ vault_duo_secret_key }}
 ; Duo API host
-host = REMOVED_DUO_HOST
+host = {{ vault_duo_host }}
 ; `failmode = safe` In the event of errors with this configuration file or connection to the Duo service
 ; this mode will allow login without 2FA.
 ; `failmode = secure` This mode will deny access in the above cases. Misconfigurations with this setting
