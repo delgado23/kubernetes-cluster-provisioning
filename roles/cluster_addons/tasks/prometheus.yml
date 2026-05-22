@@ -32,6 +32,9 @@
         prometheusSpec:
           retention: 15d
           retentionSize: "18GB"
+          serviceMonitorSelectorNilUsesHelmValues: false
+          serviceMonitorSelector: {}
+          serviceMonitorNamespaceSelector: {}
           resources:
             requests:
               cpu: 200m

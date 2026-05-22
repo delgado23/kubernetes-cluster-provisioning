@@ -5,8 +5,8 @@
 # to an Ansible Vault file in production.
 
 foreman_url: "https://foreman.example.com"
-foreman_user: "{{ foreman_user_vault }}"
-foreman_password: "{{ foreman_password_vault }}"   # store in vault
+foreman_user: "{{ vault_foreman_user }}"
+foreman_password: "{{ vault_foreman_password }}"
 foreman_validate_certs: false
 foreman_domain: "example.com"               # used for host existence check
 
