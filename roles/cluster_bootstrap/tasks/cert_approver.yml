@@ -1,7 +1,21 @@
 ---
+- name: Resolve latest kubelet-serving-cert-approver version from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/alex1989hu/kubelet-serving-cert-approver/releases/latest
+    return_content: true
+    headers:
+      Accept: application/vnd.github+json
+  register: _cert_approver_release
+  delegate_to: localhost
+  become: false
+
+- name: Set cert-approver version fact
+  ansible.builtin.set_fact:
+    cert_approver_version: "{{ _cert_approver_release.json.tag_name }}"
+
 - name: Install kubelet-serving-cert-approver
   ansible.builtin.command:
-    cmd: kubectl apply -f https://git.example.com/example/kubelet-serving-cert-approver/raw/branch/main/deploy/standalone-install.yaml
+    cmd: kubectl apply -f https://raw.githubusercontent.com/alex1989hu/kubelet-serving-cert-approver/{{ cert_approver_version }}/deploy/standalone-install.yaml
   environment:
     KUBECONFIG: /root/.kube/config
   register: cert_approver_output
