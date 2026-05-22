@@ -79,6 +79,14 @@
   poll: 0
   register: _kube_router_job
 
+- name: Fetch MetalLB release from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/metallb/metallb/releases/latest
+    return_content: true
+  async: 60
+  poll: 0
+  register: _metallb_job
+
 - name: Wait for all GitHub version fetches to complete
   ansible.builtin.async_status:
     jid: "{{ item.ansible_job_id }}"
@@ -97,6 +105,7 @@
     - "{{ _descheduler_job }}"
     - "{{ _prometheus_job }}"
     - "{{ _kube_router_job }}"
+    - "{{ _metallb_job }}"
 
 - name: Set resolved addon versions
   ansible.builtin.set_fact:
@@ -131,6 +140,7 @@
         | regex_replace('^kube-prometheus-stack-', '')
       }}
     kube_router_version:    "{{ _fetch_results.results[9].json.tag_name }}"
+    metallb_version:        "{{ _fetch_results.results[10].json.tag_name }}"
 
 - name: Display resolved addon versions
   ansible.builtin.debug:
@@ -145,3 +155,4 @@
       - "Descheduler:    {{ descheduler_version }}"
       - "Prometheus:     {{ prometheus_version }}"
       - "kube-router:    {{ kube_router_version }}"
+      - "MetalLB:        {{ metallb_version }}"
