@@ -21,6 +21,23 @@
 
 
 # -----------------------------------------------------------------------------
+# SETUP: Ensure Ansible fact cache directory exists on the control node
+# -----------------------------------------------------------------------------
+
+- name: Ensure Ansible fact cache directory exists
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Create fact cache directory
+      ansible.builtin.file:
+        path: /var/cache/ansible/facts
+        state: directory
+        mode: "0700"
+
+
+# -----------------------------------------------------------------------------
 # WIPE (conditional — only runs when wipe_cluster=true)
 # -----------------------------------------------------------------------------
 
@@ -211,7 +228,7 @@
       ansible.builtin.file:
         path: /root/.provisioned
         state: touch
-        mode: "0644"
+        mode: "0600"
 
 - name: Common Kubernetes prerequisites (all nodes)
   hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
