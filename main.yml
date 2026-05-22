@@ -211,7 +211,7 @@
       ansible.builtin.file:
         path: /root/.provisioned
         state: touch
-        mode: "0644"
+        mode: "0600"
 
 - name: Common Kubernetes prerequisites (all nodes)
   hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
