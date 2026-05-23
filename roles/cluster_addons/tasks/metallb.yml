@@ -32,6 +32,13 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
+- name: Wait for MetalLB speaker DaemonSet to be ready
+  ansible.builtin.command:
+    cmd: kubectl rollout status daemonset/speaker --namespace metallb-system --timeout=120s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
 - name: Create MetalLB manifest directory
   ansible.builtin.file:
     path: "{{ k8s_manifests_dir }}/metallb"
@@ -55,4 +62,31 @@
 - name: Print MetalLB pool apply output
   ansible.builtin.debug:
     var: metallb_pool_output.stdout_lines
+
+# MetalLB v0.16.0 Layer2StatusReconciler race condition: when speakers can't
+# form memberlist (e.g. port 7946 was blocked) they each create/delete
+# servicel2status objects in a tight loop, flooding the API server.
+# Deleting all stale objects and restarting speakers resets the reconcilers
+# to a clean state. Harmless on a fresh install.
+- name: Delete stale MetalLB L2 status objects
+  ansible.builtin.command:
+    cmd: kubectl delete servicel2statuses -A --all --ignore-not-found
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+- name: Rolling restart MetalLB speakers to clear stale reconciler cache
+  ansible.builtin.command:
+    cmd: kubectl rollout restart daemonset/speaker -n metallb-system
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Wait for MetalLB speaker rollout after restart
+  ansible.builtin.command:
+    cmd: kubectl rollout status daemonset/speaker --namespace metallb-system --timeout=120s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
 

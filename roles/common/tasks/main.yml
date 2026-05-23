@@ -94,6 +94,20 @@
     state: enabled
     immediate: true
 
+- name: Open MetalLB memberlist port (7946/tcp)
+  ansible.posix.firewalld:
+    port: 7946/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Open MetalLB memberlist port (7946/udp)
+  ansible.posix.firewalld:
+    port: 7946/udp
+    permanent: true
+    state: enabled
+    immediate: true
+
 - name: Trust pod network CIDR
   ansible.posix.firewalld:
     zone: trusted
