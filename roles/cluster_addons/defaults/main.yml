@@ -10,6 +10,10 @@ longhorn_namespace: longhorn-system
 headlamp_namespace: headlamp
 argocd_namespace: argocd
 argocd_admin_group: "authentik Admins"
+# Security: bind cluster-admin to a dedicated Authentik group, not the general
+# "Admins" group. Create a 'k8s-cluster-admins' group in Authentik and add
+# only users who need full cluster access. This limits blast radius if Authentik
+# group membership is misconfigured.
 headlamp_admin_group: "authentik Admins"
 kyverno_namespace: kyverno
 descheduler_namespace: descheduler

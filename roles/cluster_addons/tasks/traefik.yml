@@ -218,3 +218,83 @@
   ansible.builtin.debug:
     var: traefik_ingress_output.stdout_lines
 
+- name: Write Traefik NetworkPolicy manifest
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/traefik/networkpolicy.yml"
+    mode: "0600"
+    content: |
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: default-deny-ingress
+        namespace: {{ traefik_namespace }}
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+      ---
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-intra-namespace
+        namespace: {{ traefik_namespace }}
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+        ingress:
+          - from:
+              - podSelector: {}
+      ---
+      # Traefik is the cluster ingress controller — allow external traffic on 80/443
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-external-web
+        namespace: {{ traefik_namespace }}
+      spec:
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: traefik
+        policyTypes:
+          - Ingress
+        ingress:
+          - ports:
+              - port: 80
+                protocol: TCP
+              - port: 443
+                protocol: TCP
+      ---
+      # Allow Prometheus to scrape Traefik metrics (port 9100)
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-prometheus-scrape
+        namespace: {{ traefik_namespace }}
+      spec:
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: traefik
+        policyTypes:
+          - Ingress
+        ingress:
+          - from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: {{ prometheus_namespace }}
+            ports:
+              - port: 9100
+                protocol: TCP
+
+- name: Apply Traefik NetworkPolicy
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/traefik/networkpolicy.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: traefik_netpol_output
+  changed_when: true
+
+- name: Print Traefik NetworkPolicy apply output
+  ansible.builtin.debug:
+    var: traefik_netpol_output.stdout_lines
+

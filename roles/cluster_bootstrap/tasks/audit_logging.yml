@@ -1,0 +1,99 @@
+---
+- name: Create audit policy directory
+  ansible.builtin.file:
+    path: /etc/kubernetes/audit
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Write kube-apiserver audit policy
+  ansible.builtin.template:
+    src: audit-policy.yaml.j2
+    dest: /etc/kubernetes/audit/policy.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  register: _audit_policy_write
+
+- name: Create audit log directory
+  ansible.builtin.file:
+    path: /var/log/kubernetes
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Ensure python3-pyyaml is installed
+  ansible.builtin.dnf:
+    name: python3-pyyaml
+    state: present
+
+# Patch the static pod manifest directly. kubeadm-config.yml.j2 covers fresh installs;
+# this task ensures existing clusters also get audit logging without a full kubeadm upgrade.
+- name: Patch kube-apiserver manifest with audit flags and host volumes
+  ansible.builtin.shell:
+    cmd: |
+      python3 << 'PYEOF'
+      import yaml, sys
+
+      MANIFEST = '/etc/kubernetes/manifests/kube-apiserver.yaml'
+
+      with open(MANIFEST) as f:
+          m = yaml.safe_load(f)
+
+      c = m['spec']['containers'][0]
+      changed = False
+
+      # Flags
+      audit_flags = [
+          '--audit-policy-file=/etc/kubernetes/audit/policy.yaml',
+          '--audit-log-path=/var/log/kubernetes/audit.log',
+          '--audit-log-maxage=30',
+          '--audit-log-maxbackup=10',
+          '--audit-log-maxsize=100',
+      ]
+      for flag in audit_flags:
+          if flag not in c['command']:
+              c['command'].append(flag)
+              changed = True
+
+      # Volume mounts
+      existing_mounts = {vm['name'] for vm in c.get('volumeMounts', [])}
+      new_mounts = [
+          {'name': 'audit-policy', 'mountPath': '/etc/kubernetes/audit', 'readOnly': True},
+          {'name': 'audit-logs',   'mountPath': '/var/log/kubernetes',   'readOnly': False},
+      ]
+      for vm in new_mounts:
+          if vm['name'] not in existing_mounts:
+              c.setdefault('volumeMounts', []).append(vm)
+              changed = True
+
+      # Host volumes
+      existing_vols = {v['name'] for v in m['spec'].get('volumes', [])}
+      new_vols = [
+          {'name': 'audit-policy', 'hostPath': {'path': '/etc/kubernetes/audit',   'type': 'DirectoryOrCreate'}},
+          {'name': 'audit-logs',   'hostPath': {'path': '/var/log/kubernetes',      'type': 'DirectoryOrCreate'}},
+      ]
+      for v in new_vols:
+          if v['name'] not in existing_vols:
+              m['spec'].setdefault('volumes', []).append(v)
+              changed = True
+
+      if changed:
+          with open(MANIFEST, 'w') as f:
+              yaml.dump(m, f, default_flow_style=False)
+          print('changed')
+      else:
+          print('ok')
+      PYEOF
+  register: _audit_manifest_patch
+  changed_when: "'changed' in _audit_manifest_patch.stdout"
+
+- name: Wait for kube-apiserver to restart with audit logging enabled
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 6443
+    timeout: 120
+    delay: 5
+  when: _audit_manifest_patch.changed or _audit_policy_write.changed
