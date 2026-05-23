@@ -122,3 +122,14 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
+
+- name: Wait for Kyverno admission controller to recover after NetworkPolicy enforcement starts
+  ansible.builtin.command:
+    cmd: >
+      kubectl wait deployment/kyverno-admission-controller
+      -n {{ kyverno_namespace }}
+      --for=condition=Available
+      --timeout=180s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false

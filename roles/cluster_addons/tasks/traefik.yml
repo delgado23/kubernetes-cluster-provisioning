@@ -115,6 +115,9 @@
   environment:
     KUBECONFIG: /root/.kube/config
   register: traefik_helm_output
+  until: traefik_helm_output.rc == 0
+  retries: 3
+  delay: 30
   changed_when: true
 
 - name: Print Traefik Helm output
