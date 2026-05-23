@@ -74,8 +74,43 @@
       nodeExporter:
         enabled: true
 
+      prometheus-node-exporter:
+        resources:
+          requests:
+            cpu: 20m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+
       kubeStateMetrics:
         enabled: true
+
+      kube-state-metrics:
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+
+      prometheusOperator:
+        resources:
+          requests:
+            cpu: 50m
+            memory: 100Mi
+          limits:
+            cpu: 200m
+            memory: 200Mi
+        prometheusConfigReloader:
+          resources:
+            requests:
+              cpu: 10m
+              memory: 25Mi
+            limits:
+              cpu: 100m
+              memory: 50Mi
 
 - name: Install or upgrade kube-prometheus-stack via Helm
   ansible.builtin.command:
