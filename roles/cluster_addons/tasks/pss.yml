@@ -23,6 +23,9 @@
     - { ns: "{{ prometheus_namespace }}",           enforce: privileged, warn: privileged }
     - { ns: "{{ descheduler_namespace }}",          enforce: baseline,   warn: restricted }
     - { ns: "{{ kyverno_namespace }}",              enforce: baseline,   warn: restricted }
+    - { ns: kube-system,                            enforce: privileged, warn: restricted }
+    - { ns: kube-node-lease,                        enforce: privileged, warn: privileged }
+    - { ns: kube-public,                            enforce: privileged, warn: privileged }
   changed_when: true
 
 - name: Print Pod Security Standards summary
@@ -39,4 +42,7 @@
       - "monitoring      : privileged enforce/warn/audit (node-exporter requires hostNetwork/hostPID)"
       - "descheduler     : baseline enforce, restricted warn/audit"
       - "kyverno         : baseline enforce, restricted warn/audit"
+      - "kube-system     : privileged enforce, restricted warn/audit"
+      - "kube-node-lease : privileged enforce/warn/audit"
+      - "kube-public     : privileged enforce/warn/audit"
       - "Check 'kubectl get events -A' for PSS violation warnings."

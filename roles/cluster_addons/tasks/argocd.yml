@@ -174,11 +174,13 @@
         podSelector: {}
         policyTypes:
           - Ingress
+          - Egress
         ingress:
           # Allow intra-namespace traffic between ArgoCD components
           - from:
               - podSelector: {}
-          # Allow Traefik to reach argocd-server on port 80
+          # Allow Traefik to reach argocd-server on container port 8080
+          # (Service maps 80->8080; NetworkPolicy uses pod/container port)
           - from:
               - namespaceSelector:
                   matchLabels:
@@ -187,7 +189,32 @@
                   matchLabels:
                     app.kubernetes.io/name: traefik
             ports:
-              - port: 80
+              - port: 8080
+                protocol: TCP
+        egress:
+          # DNS resolution
+          - ports:
+              - port: 53
+                protocol: UDP
+              - port: 53
+                protocol: TCP
+          # kube-apiserver via in-cluster Service (kubernetes.default.svc)
+          - to:
+              - ipBlock:
+                  cidr: {{ k8s_service_cidr }}
+            ports:
+              - port: 443
+                protocol: TCP
+          # Intra-namespace (ArgoCD components talk to each other)
+          - to:
+              - podSelector: {}
+          # Outbound HTTPS (Git repos, Authentik OIDC, container registries)
+          - ports:
+              - port: 443
+                protocol: TCP
+          # Outbound SSH (Git over SSH)
+          - ports:
+              - port: 22
                 protocol: TCP
 
 - name: Apply ArgoCD NetworkPolicy

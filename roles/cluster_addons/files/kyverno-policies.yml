@@ -8,10 +8,10 @@ metadata:
   name: disallow-latest-tag
   annotations:
     policies.kyverno.io/description: >
-      Warns when container images use the 'latest' tag or have no tag at all,
+      Blocks container images that use the 'latest' tag or have no tag at all,
       making it impossible to track exactly what is running.
 spec:
-  validationFailureAction: Audit
+  validationFailureAction: Enforce
   background: true
   rules:
     - name: require-image-tag

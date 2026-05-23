@@ -345,6 +345,21 @@
         name: cluster_bootstrap
         tasks_from: join_secondary
 
+- name: Configure kube-apiserver audit logging on all control plane nodes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  gather_facts: false
+  tags: [bootstrap]
+  pre_tasks:
+    - name: Skip bootstrap when only adding workers
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
+  tasks:
+    - name: Enable kube-apiserver audit logging
+      ansible.builtin.include_role:
+        name: cluster_bootstrap
+        tasks_from: audit_logging
+
 - name: Install kubelet-serving-cert-approver
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true

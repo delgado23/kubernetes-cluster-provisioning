@@ -1,4 +1,9 @@
 ---
+# kube-router runs alongside kube-proxy intentionally. kube-proxy handles service
+# routing (ClusterIP, NodePort, LoadBalancer). kube-router handles only NetworkPolicy
+# enforcement (--run-firewall=true, --run-service-proxy=false, --run-router=false).
+# Both are needed: removing kube-proxy breaks service routing; removing kube-router
+# leaves NetworkPolicies unenforced.
 - name: Create kube-router manifest directory
   ansible.builtin.file:
     path: "{{ k8s_manifests_dir }}/kube-router"
