@@ -31,6 +31,16 @@ apiServer:
   extraArgs:
     - name: encryption-provider-config
       value: /etc/kubernetes/enc/enc.yaml
+    - name: audit-policy-file
+      value: /etc/kubernetes/audit/policy.yaml
+    - name: audit-log-path
+      value: /var/log/kubernetes/audit.log
+    - name: audit-log-maxage
+      value: "30"
+    - name: audit-log-maxbackup
+      value: "10"
+    - name: audit-log-maxsize
+      value: "100"
     - name: oidc-issuer-url
       value: "{{ authentik_headlamp_issuer }}"
     - name: oidc-client-id
@@ -44,6 +54,16 @@ apiServer:
       hostPath: /etc/kubernetes/enc
       mountPath: /etc/kubernetes/enc
       readOnly: true
+      pathType: DirectoryOrCreate
+    - name: audit-policy
+      hostPath: /etc/kubernetes/audit
+      mountPath: /etc/kubernetes/audit
+      readOnly: true
+      pathType: DirectoryOrCreate
+    - name: audit-logs
+      hostPath: /var/log/kubernetes
+      mountPath: /var/log/kubernetes
+      readOnly: false
       pathType: DirectoryOrCreate
 ---
 apiVersion: kubelet.config.k8s.io/v1beta1
