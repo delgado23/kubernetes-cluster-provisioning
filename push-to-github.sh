@@ -26,10 +26,7 @@ done
 git checkout master
 
 echo "==> Stripping vars/vault.yml from all history ..."
-FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch --force \
-  --index-filter 'git rm --cached --ignore-unmatch vars/vault.yml' \
-  --prune-empty --tag-name-filter cat -- --all 2>&1 \
-  | grep -v '^Rewrite' | grep -v '^$' || true
+git-filter-repo --path vars/vault.yml --invert-paths --force
 
 echo "==> Verifying vault.yml is absent from master and production ..."
 for branch in master production; do
@@ -40,9 +37,7 @@ for branch in master production; do
 done
 echo "    OK — vault.yml not found in any branch tree."
 
-echo "==> Cleaning up filter-branch backup refs ..."
-git for-each-ref --format="delete %(refname)" refs/original/ \
-  | git update-ref --stdin 2>/dev/null || true
+echo "==> Cleaning up loose objects ..."
 git reflog expire --expire=now --all
 git gc --prune=now --quiet
 
