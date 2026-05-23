@@ -29,6 +29,33 @@
   changed_when: false
   when: not kubelet_conf.stat.exists
 
+- name: Create audit policy directory
+  ansible.builtin.file:
+    path: /etc/kubernetes/audit
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: not kubelet_conf.stat.exists
+
+- name: Write kube-apiserver audit policy
+  ansible.builtin.template:
+    src: audit-policy.yaml.j2
+    dest: /etc/kubernetes/audit/policy.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  when: not kubelet_conf.stat.exists
+
+- name: Create audit log directory
+  ansible.builtin.file:
+    path: /var/log/kubernetes
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: not kubelet_conf.stat.exists
+
 - name: Run kubeadm init
   ansible.builtin.command:
     cmd: kubeadm init --config /etc/kubernetes/kubeadm-config.yml --upload-certs
