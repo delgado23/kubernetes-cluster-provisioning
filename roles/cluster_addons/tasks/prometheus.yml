@@ -125,6 +125,9 @@
   environment:
     KUBECONFIG: /root/.kube/config
   register: prometheus_helm_output
+  until: prometheus_helm_output.rc == 0
+  retries: 3
+  delay: 30
   changed_when: true
 
 - name: Print kube-prometheus-stack Helm output

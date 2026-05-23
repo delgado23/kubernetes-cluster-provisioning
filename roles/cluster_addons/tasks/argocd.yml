@@ -154,6 +154,9 @@
   environment:
     KUBECONFIG: /root/.kube/config
   register: argocd_helm_output
+  until: argocd_helm_output.rc == 0
+  retries: 3
+  delay: 30
   changed_when: true
 
 - name: Print ArgoCD Helm output
