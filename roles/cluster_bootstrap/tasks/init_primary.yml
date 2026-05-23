@@ -1,6 +1,17 @@
 ---
+- name: Check if primary is already initialized
+  ansible.builtin.stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf
+
+- name: Skip init if primary is already initialized
+  ansible.builtin.debug:
+    msg: "Node {{ inventory_hostname }} already has kubelet.conf — skipping kubeadm init."
+  when: kubelet_conf.stat.exists
+
 - name: Write etcd encryption config
   ansible.builtin.include_tasks: etcd_encryption.yml
+  when: not kubelet_conf.stat.exists
 
 - name: Deploy kubeadm config
   ansible.builtin.template:
@@ -16,16 +27,19 @@
   retries: 5
   delay: 30
   changed_when: false
+  when: not kubelet_conf.stat.exists
 
 - name: Run kubeadm init
   ansible.builtin.command:
     cmd: kubeadm init --config /etc/kubernetes/kubeadm-config.yml --upload-certs
   register: kubeadm_init_output
   changed_when: true
+  when: not kubelet_conf.stat.exists
 
 - name: Print kubeadm init output
   ansible.builtin.debug:
     var: kubeadm_init_output.stdout_lines
+  when: not kubelet_conf.stat.exists
 
 - name: Set up kubeconfig for root
   ansible.builtin.shell: |
@@ -34,6 +48,7 @@
     chown root:root /root/.kube/config
     chmod 0600 /root/.kube/config
   changed_when: true
+  when: not kubelet_conf.stat.exists
 
 - name: Fetch latest Flannel release from GitHub
   ansible.builtin.uri:
