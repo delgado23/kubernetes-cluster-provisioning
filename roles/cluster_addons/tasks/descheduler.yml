@@ -32,13 +32,6 @@
         profiles:
           - name: default
             pluginConfig:
-              - name: DefaultEvictor
-                args:
-                  nodeFit: true
-                  evictSystemCriticalPods: false
-                  evictFailedBarePods: false
-                  evictLocalStoragePods: false
-                  ignorePvcPods: true
               - name: LowNodeUtilization
                 args:
                   thresholds:
@@ -50,7 +43,7 @@
                     memory: 50
                     pods: 50
               - name: RemoveDuplicates
-              - name: RemovePodsViolatingTopologySpreadConstraints
+              - name: RemovePodsViolatingTopologySpreadConstraint
                 args:
                   constraints:
                     - DoNotSchedule
@@ -64,7 +57,7 @@
                   - RemoveDuplicates
               deschedule:
                 enabled:
-                  - RemovePodsViolatingTopologySpreadConstraints
+                  - RemovePodsViolatingTopologySpreadConstraint
 
       resources:
         requests:
