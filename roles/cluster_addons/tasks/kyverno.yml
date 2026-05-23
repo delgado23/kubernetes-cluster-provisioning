@@ -162,3 +162,16 @@
   ansible.builtin.debug:
     var: kyverno_netpol_output.stdout_lines
 
+- name: Wait for Kyverno admission webhook endpoint to be ready
+  ansible.builtin.shell:
+    cmd: |
+      kubectl -n {{ kyverno_namespace }} get endpoints kyverno-svc \
+        -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _kyverno_ep_ready
+  until: _kyverno_ep_ready.rc == 0
+  retries: 36
+  delay: 5
+  changed_when: false
+
