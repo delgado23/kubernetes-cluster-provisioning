@@ -187,3 +187,66 @@
   ansible.builtin.debug:
     var: headlamp_ingress_output.stdout_lines
 
+- name: Write Headlamp NetworkPolicy manifest
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/headlamp/networkpolicy.yml"
+    mode: "0600"
+    content: |
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: default-deny-ingress
+        namespace: {{ headlamp_namespace }}
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+      ---
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-intra-namespace
+        namespace: {{ headlamp_namespace }}
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+        ingress:
+          - from:
+              - podSelector: {}
+      ---
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-traefik-ingress
+        namespace: {{ headlamp_namespace }}
+      spec:
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: headlamp
+        policyTypes:
+          - Ingress
+        ingress:
+          - from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: {{ traefik_namespace }}
+                podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: traefik
+            ports:
+              - port: 4466
+                protocol: TCP
+
+- name: Apply Headlamp NetworkPolicy
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/headlamp/networkpolicy.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: headlamp_netpol_output
+  changed_when: true
+
+- name: Print Headlamp NetworkPolicy apply output
+  ansible.builtin.debug:
+    var: headlamp_netpol_output.stdout_lines
+
