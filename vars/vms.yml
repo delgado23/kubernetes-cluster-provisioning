@@ -11,10 +11,17 @@
 # ------------------------------------------------------------------
 # Cluster-wide network settings
 # ------------------------------------------------------------------
-keepalived_vip:      "172.16.0.29"   # VIP shared by all control plane nodes
+keepalived_vip:      "{{ k8s_api_endpoint_ip }}"   # VIP shared by all control plane nodes
 k8s_pod_cidr:        "10.244.0.0/16" # Flannel pod network
 k8s_service_cidr:    "10.96.0.0/12"  # Kubernetes service network
 haproxy_port:        7443             # HAProxy frontend port for kube-apiserver
+
+# ------------------------------------------------------------------
+# Survey vars — overridable at runtime (e.g. AWX job template survey)
+# ------------------------------------------------------------------
+k8s_api_endpoint:    "k8s-api.example.com"
+k8s_api_endpoint_ip: "172.16.0.29"
+metallb_pool:        "172.16.0.50-172.16.0.60"
 
 # ------------------------------------------------------------------
 # Naming and hostgroup strings
@@ -35,9 +42,9 @@ controlplane_configs:
       - { name: k8s_role,            value: primary                    }
       - { name: keepalived_state,    value: MASTER                     }
       - { name: keepalived_priority, value: 101                        }
-      - { name: k8s_api_endpoint,    value: k8s-api.example.com }
-      - { name: k8s_api_endpoint_ip, value: 172.16.0.29                }
-      - { name: metallb_pool,        value: 172.16.0.50-172.16.0.60    }
+      - { name: k8s_api_endpoint,    value: "{{ k8s_api_endpoint }}"    }
+      - { name: k8s_api_endpoint_ip, value: "{{ k8s_api_endpoint_ip }}" }
+      - { name: metallb_pool,        value: "{{ metallb_pool }}"        }
 
   # Secondary — provisioned when controlplane_node_count >= 2
   - host_parameters:
