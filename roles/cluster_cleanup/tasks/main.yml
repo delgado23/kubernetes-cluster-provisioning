@@ -1,4 +1,15 @@
 ---
+- name: Remove k8s-api A record from FreeIPA
+  community.general.ipa_dnsrecord:
+    ipa_user: admin
+    ipa_pass: "{{ ipaadmin_password }}"
+    ipa_host: "{{ ipa_server }}"
+    zone_name: "{{ ipadomain }}"
+    record_name: "{{ k8s_api_endpoint | regex_replace('\\.' + ipadomain + '$', '') }}"
+    record_type: A
+    record_value: "{{ k8s_api_endpoint_ip }}"
+    state: absent
+
 - name: Remove host from Foreman
   theforeman.foreman.host:
     username: "{{ foreman_user }}"
