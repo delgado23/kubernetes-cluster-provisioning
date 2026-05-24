@@ -1,5 +1,5 @@
 ---
-proxmox_host: "pve-01.example.com:8006"
+proxmox_host: "{{ vault_proxmox_host }}"
 proxmox_user: "user@Authentik"
 proxmox_token_id: "foreman"
 proxmox_node: "pve-01"

@@ -2,26 +2,26 @@
 # vars/foreman.yml
 # Foreman connection and resource identifiers.
 
-foreman_url: "https://foreman.example.com"
+foreman_url: "{{ vault_foreman_url }}"
 foreman_user: "{{ vault_foreman_user }}"
 foreman_password: "{{ vault_foreman_password }}"
 # false because Foreman uses a self-signed cert on the internal homelab network.
 # Set to true if Foreman is fronted by a trusted CA-signed certificate.
 foreman_validate_certs: false
-foreman_domain: "example.com"               # used for host existence check
+foreman_domain: "{{ vault_domain }}"
 
 # Location and Organization — required by Foreman on every host
-# Find with: curl -sk -u admin:pass https://foreman.example.com/api/locations | python3 -m json.tool
-# Find with: curl -sk -u admin:pass https://foreman.example.com/api/organizations | python3 -m json.tool
+# Find with: curl -sk -u admin:pass <foreman_url>/api/locations | python3 -m json.tool
+# Find with: curl -sk -u admin:pass <foreman_url>/api/organizations | python3 -m json.tool
 foreman_location_id: 3
 foreman_organization_id: 4
 
 # Proxmox compute resource registered in Foreman
-# Find with: curl -sk -u admin:pass https://foreman.example.com/api/compute_resources | python3 -m json.tool
+# Find with: curl -sk -u admin:pass <foreman_url>/api/compute_resources | python3 -m json.tool
 foreman_compute_resource_id: 1
 
 # Compute profile (maps to a Proxmox VM sizing template)
-# Find with: curl -sk -u admin:pass https://foreman.example.com/api/compute_profiles | python3 -m json.tool
+# Find with: curl -sk -u admin:pass <foreman_url>/api/compute_profiles | python3 -m json.tool
 #foreman_compute_profile_id: 6
 foreman_compute_profile_controlplane: 8   # Kubernetes Controlplane Node
 foreman_compute_profile_worker: 6         # Kubernetes Worker Node
