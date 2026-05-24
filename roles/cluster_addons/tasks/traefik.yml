@@ -249,7 +249,8 @@
           - from:
               - podSelector: {}
       ---
-      # Traefik is the cluster ingress controller — allow external traffic on 80/443
+      # Traefik is the cluster ingress controller — allow external traffic on pod ports 8000/8443
+      # (kube-proxy DNATs service ports 80/443 to these pod ports; NetworkPolicy matches pod ports)
       apiVersion: networking.k8s.io/v1
       kind: NetworkPolicy
       metadata:
@@ -263,9 +264,9 @@
           - Ingress
         ingress:
           - ports:
-              - port: 80
+              - port: 8000
                 protocol: TCP
-              - port: 443
+              - port: 8443
                 protocol: TCP
       ---
       # Allow Prometheus to scrape Traefik metrics (port 9100)
