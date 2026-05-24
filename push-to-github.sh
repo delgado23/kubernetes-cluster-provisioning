@@ -26,7 +26,13 @@ done
 git checkout master
 
 echo "==> Stripping vars/vault.yml from all history ..."
-git-filter-repo --path vars/vault.yml --invert-paths --force
+PYTHON="${PYTHON:-/c/Users/danie/AppData/Local/Programs/Python/Python312/python.exe}"
+FILTER_REPO="${FILTER_REPO:-/tmp/git-filter-repo}"
+if [ ! -f "$FILTER_REPO" ]; then
+  curl -fsSL https://raw.githubusercontent.com/newren/git-filter-repo/main/git-filter-repo > "$FILTER_REPO"
+  chmod +x "$FILTER_REPO"
+fi
+"$PYTHON" "$FILTER_REPO" --path vars/vault.yml --invert-paths --force
 
 echo "==> Verifying vault.yml is absent from master and production ..."
 for branch in master production; do
