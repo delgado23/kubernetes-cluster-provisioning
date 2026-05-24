@@ -104,19 +104,6 @@
     state: restarted
   when: firewalld_backend_result.changed
 
-- name: Open HTTP port (80/tcp)
-  ansible.posix.firewalld:
-    port: 80/tcp
-    permanent: true
-    state: enabled
-    immediate: true
-
-- name: Open HTTPS port (443/tcp)
-  ansible.posix.firewalld:
-    port: 443/tcp
-    permanent: true
-    state: enabled
-    immediate: true
 
 - name: Open Flannel VXLAN port
   ansible.posix.firewalld:
