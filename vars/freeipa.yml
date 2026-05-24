@@ -1,7 +1,11 @@
+vault_ipa_server: vek-lor.example.com
+vault_ipadomain: example.com
+# vault_ipaadmin_password is defined in vars/vault.yml
+
+# Aliases required by the freeipa.ansible_freeipa.ipaclient role
 ipaadmin_principal: admin
-ipaadmin_password: "{{ vault_ipa_password }}"
-ipa_server: vek-lor.example.com
-ipadomain: example.com
+ipaadmin_password: "{{ vault_ipaadmin_password }}"
+ipadomain: "{{ vault_ipadomain }}"
 iparealm: GARAVENTAVILLE.COM
 
 ipaclient_ntp_servers:
