@@ -87,6 +87,37 @@
     enabled: true
     state: started
 
+# kube-proxy uses iptables for service routing (DNAT in PREROUTING). On AlmaLinux 10,
+# firewalld defaults to nftables which runs in parallel and can drop forwarded/DNAT'd
+# traffic before kube-proxy rules fire. Setting iptables backend makes both use the same
+# ruleset so kube-proxy DNAT and firewalld rules are evaluated together.
+- name: Configure firewalld to use iptables backend
+  ansible.builtin.lineinfile:
+    path: /etc/firewalld/firewalld.conf
+    regexp: '^FirewallBackend='
+    line: 'FirewallBackend=iptables'
+  register: firewalld_backend_result
+
+- name: Restart firewalld to apply iptables backend
+  ansible.builtin.systemd:
+    name: firewalld
+    state: restarted
+  when: firewalld_backend_result.changed
+
+- name: Open HTTP port (80/tcp)
+  ansible.posix.firewalld:
+    port: 80/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Open HTTPS port (443/tcp)
+  ansible.posix.firewalld:
+    port: 443/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
 - name: Open Flannel VXLAN port
   ansible.posix.firewalld:
     port: 8472/udp
