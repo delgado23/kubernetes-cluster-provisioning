@@ -50,7 +50,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 │   └── 00-duo.conf.j2    # sshd_config.d snippet enabling ForceCommand login_duo
 ├── vars/
 │   ├── foreman.yml       # Foreman connection settings and compute profile IDs
-│   ├── freeipa.yml       # FreeIPA connection settings and ipaclient vars
+│   ├── freeipa.yml       # FreeIPA ipaclient vars (sensitive values sourced from vault)
 │   ├── vault.yml         # Ansible Vault: API tokens and passwords
 │   ├── vms.yml           # VM definitions (names, hostgroups, Foreman parameters)
 │   └── vm_defaults.yml   # Default VM hardware specs
@@ -100,7 +100,9 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_authentik_headlamp_client_secret` | OIDC client secret for the Headlamp application in Authentik |
 | `vault_foreman_user` | Foreman username |
 | `vault_foreman_password` | Foreman password |
-| `vault_ipa_password` | FreeIPA admin password |
+| `vault_ipaadmin_password` | FreeIPA admin password |
+| `vault_ipa_server` | FreeIPA server hostname (e.g. `ipa.example.com`) |
+| `vault_ipadomain` | FreeIPA domain (e.g. `example.com`) |
 | `vault_keepalived_password` | Keepalived VRRP authentication password |
 
 Generate the etcd encryption key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
@@ -117,6 +119,9 @@ head -c 32 /dev/urandom | base64
 | `controlplane_node_count` | Integer | 1 | Number of control plane nodes to provision this run. Set to `0` when only adding worker nodes — this skips the bootstrap and cluster add-ons phases entirely. Max 3. |
 | `worker_node_count` | Integer | 1 | Number of worker nodes to add this run. The provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
 | `letsencrypt_staging` | Boolean | `false` | When `true`, uses the Let's Encrypt **staging** ACME endpoint and names the ClusterIssuer `letsencrypt-cloudflare-staging`. Staging certs are not trusted by browsers but have no rate limits — use this when testing cert-manager config. Set to `false` for a production cluster to issue real trusted certificates. |
+| `k8s_api_endpoint` | String | `k8s-api.example.com` | DNS name for the Kubernetes API endpoint (the keepalived VIP hostname). An A record pointing to `k8s_api_endpoint_ip` is created in FreeIPA during the provision phase and removed on wipe. |
+| `k8s_api_endpoint_ip` | String | `172.16.0.29` | IP address of the keepalived VIP. Also used as `keepalived_vip` — only set this here, do not update them separately. |
+| `metallb_pool` | String | `172.16.0.50-172.16.0.60` | MetalLB L2 address pool range for LoadBalancer services. |
 
 `wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
 
