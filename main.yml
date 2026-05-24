@@ -126,10 +126,10 @@
     - name: Create / update A record for {{ k8s_api_endpoint }}
       community.general.ipa_dnsrecord:
         ipa_user: admin
-        ipa_pass: "{{ ipaadmin_password }}"
-        ipa_host: "{{ ipa_server }}"
-        zone_name: "{{ ipadomain }}"
-        record_name: "{{ k8s_api_endpoint | regex_replace('\\.' + ipadomain + '$', '') }}"
+        ipa_pass: "{{ vault_ipaadmin_password }}"
+        ipa_host: "{{ vault_ipa_server }}"
+        zone_name: "{{ vault_ipadomain }}"
+        record_name: "{{ k8s_api_endpoint | regex_replace('\\.' + vault_ipadomain + '$', '') }}"
         record_type: A
         record_value: "{{ k8s_api_endpoint_ip }}"
         state: present

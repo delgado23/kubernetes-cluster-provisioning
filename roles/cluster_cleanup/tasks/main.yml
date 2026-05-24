@@ -2,10 +2,10 @@
 - name: Remove k8s-api A record from FreeIPA
   community.general.ipa_dnsrecord:
     ipa_user: admin
-    ipa_pass: "{{ ipaadmin_password }}"
-    ipa_host: "{{ ipa_server }}"
-    zone_name: "{{ ipadomain }}"
-    record_name: "{{ k8s_api_endpoint | regex_replace('\\.' + ipadomain + '$', '') }}"
+    ipa_pass: "{{ vault_ipaadmin_password }}"
+    ipa_host: "{{ vault_ipa_server }}"
+    zone_name: "{{ vault_ipadomain }}"
+    record_name: "{{ k8s_api_endpoint | regex_replace('\\.' + vault_ipadomain + '$', '') }}"
     record_type: A
     record_value: "{{ k8s_api_endpoint_ip }}"
     state: absent
@@ -25,8 +25,8 @@
 - name: Remove host from FreeIPA
   community.general.ipa_host:
     ipa_user: admin
-    ipa_pass: "{{ ipaadmin_password }}"
-    ipa_host: "{{ ipa_server }}"
+    ipa_pass: "{{ vault_ipaadmin_password }}"
+    ipa_host: "{{ vault_ipa_server }}"
     name: "{{ item.name }}.{{ foreman_domain }}"
     state: absent
     update_dns: true
