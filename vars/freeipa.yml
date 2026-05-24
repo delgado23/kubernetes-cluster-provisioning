@@ -6,10 +6,7 @@ ipaadmin_password: "{{ vault_ipaadmin_password }}"
 ipadomain: "{{ vault_ipadomain }}"
 iparealm: "{{ vault_ipadomain | upper }}"
 
-ipaclient_ntp_servers:
-  - "vek-lor.{{ vault_ipadomain }}"
-  - "vek-nilash.{{ vault_ipadomain }}"
-  - "cthun.{{ vault_ipadomain }}"
+ipaclient_ntp_servers: "{{ vault_ntp_servers }}"
 ipaclient_mkhomedir: true
 ipaclient_automount_location: default
 ipaclient_force_join: true
