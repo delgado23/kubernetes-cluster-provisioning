@@ -210,9 +210,9 @@
         secretTemplate:
           annotations:
             reflector.v1.k8s.emberstack.com/reflection-allowed: "true"
-            reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces: "{{ traefik_namespace }},{{ longhorn_namespace }},{{ headlamp_namespace }},{{ argocd_namespace }}"
+            reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces: "{{ traefik_namespace }},{{ longhorn_namespace }},{{ headlamp_namespace }},{{ argocd_namespace }},{{ prometheus_namespace }}"
             reflector.v1.k8s.emberstack.com/reflection-auto-enabled: "true"
-            reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: "{{ traefik_namespace }},{{ longhorn_namespace }},{{ headlamp_namespace }},{{ argocd_namespace }}"
+            reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: "{{ traefik_namespace }},{{ longhorn_namespace }},{{ headlamp_namespace }},{{ argocd_namespace }},{{ prometheus_namespace }}"
         issuerRef:
           name: {{ _issuer_name }}
           kind: ClusterIssuer
@@ -260,7 +260,7 @@
           - from:
               - podSelector: {}
       ---
-      # kube-apiserver calls cert-manager webhook on port 9443 (host network -> node IP)
+      # kube-apiserver calls cert-manager webhook on port 10250
       apiVersion: networking.k8s.io/v1
       kind: NetworkPolicy
       metadata:
@@ -274,7 +274,7 @@
           - Ingress
         ingress:
           - ports:
-              - port: 9443
+              - port: 10250
                 protocol: TCP
 
 - name: Apply cert-manager NetworkPolicy
