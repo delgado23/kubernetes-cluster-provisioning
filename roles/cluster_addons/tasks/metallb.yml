@@ -90,3 +90,48 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
+- name: Write MetalLB NetworkPolicy manifest
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/metallb/networkpolicy.yml"
+    mode: "0600"
+    content: |
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: default-deny-ingress
+        namespace: metallb-system
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+      ---
+      # kube-apiserver calls the MetalLB admission webhook on port 9443.
+      # Speakers use hostNetwork so NetworkPolicy does not apply to them.
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-apiserver-webhook
+        namespace: metallb-system
+      spec:
+        podSelector:
+          matchLabels:
+            component: controller
+        policyTypes:
+          - Ingress
+        ingress:
+          - ports:
+              - port: 9443
+                protocol: TCP
+
+- name: Apply MetalLB NetworkPolicy
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/metallb/networkpolicy.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: metallb_netpol_output
+  changed_when: true
+
+- name: Print MetalLB NetworkPolicy apply output
+  ansible.builtin.debug:
+    var: metallb_netpol_output.stdout_lines
+
