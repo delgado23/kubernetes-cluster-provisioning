@@ -89,7 +89,12 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | Variable | Description |
 |---|---|
 | `vault_proxmox_api_token` | Proxmox API token secret |
+| `vault_proxmox_host` | Proxmox host and port (e.g. `pve-01.example.com:8006`) |
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
+| `vault_cloudflare_email` | Cloudflare account email |
+| `vault_domain` | Base domain (e.g. `example.com`) — drives `ingress_domain`, `foreman_domain`, `wildcard_secret_name`, and FreeIPA realm |
+| `vault_authentik_url` | Authentik base URL (e.g. `https://auth.example.com`) |
+| `vault_foreman_url` | Foreman base URL (e.g. `https://foreman.example.com`) |
 | `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
 | `vault_duo_ikey` | DUO Unix integration key (application identifier) |
 | `vault_duo_secret_key` | DUO Unix integration secret key for SSH 2FA |

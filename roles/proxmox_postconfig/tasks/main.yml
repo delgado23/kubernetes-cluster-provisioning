@@ -101,9 +101,9 @@
 
 - name: Compute cleaned VM name
   ansible.builtin.set_fact:
-    vm_new_name: "{{ vm_current_name | regex_replace('\\.garaventaville\\.com$', '') }}"
+    vm_new_name: "{{ vm_current_name | regex_replace('\\.' + vault_domain + '$', '') }}"
 
-- name: Rename VM (strip .example.com suffix)
+- name: Rename VM (strip domain suffix)
   ansible.builtin.uri:
     url: "{{ _base }}/qemu/{{ vmid }}/config"
     method: PUT
@@ -119,7 +119,7 @@
 
 - name: Skip rename notice (name already clean)
   ansible.builtin.debug:
-    msg: "VM name '{{ vm_current_name }}' has no .example.com suffix — skipping."
+    msg: "VM name '{{ vm_current_name }}' has no domain suffix — skipping."
   when: vm_new_name == vm_current_name
 
 - name: Resolve tags for control plane nodes

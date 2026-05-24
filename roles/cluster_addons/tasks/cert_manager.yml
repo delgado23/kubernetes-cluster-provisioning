@@ -352,7 +352,7 @@
 
       1. Cloudflare API token is missing Zone:DNS:Edit permission
          → Check token at dash.cloudflare.com → My Profile → API Tokens
-         → The token needs Zone:Zone:Read + Zone:DNS:Edit on example.com
+         → The token needs Zone:Zone:Read + Zone:DNS:Edit on your domain
 
       2. TXT record never created — verify in Cloudflare DNS:
          dig TXT _acme-challenge.{{ ingress_domain }} @8.8.8.8
