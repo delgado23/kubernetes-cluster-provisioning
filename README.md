@@ -90,6 +90,8 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 |---|---|
 | `vault_proxmox_api_token` | Proxmox API token secret |
 | `vault_proxmox_host` | Proxmox host and port (e.g. `pve-01.example.com:8006`) |
+| `vault_proxmox_user` | Proxmox user for API auth (e.g. `user@Authentik`) |
+| `vault_proxmox_node` | Proxmox node name (e.g. `pve-01`) |
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
 | `vault_cloudflare_email` | Cloudflare account email |
 | `vault_domain` | Base domain (e.g. `example.com`) — drives `ingress_domain`, `foreman_domain`, `wildcard_secret_name`, and FreeIPA realm |
@@ -108,6 +110,7 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_ipaadmin_password` | FreeIPA admin password |
 | `vault_ipa_server` | FreeIPA server hostname (e.g. `ipa.example.com`) |
 | `vault_ipadomain` | FreeIPA domain (e.g. `example.com`) |
+| `vault_ntp_servers` | List of NTP server FQDNs for FreeIPA client enrollment |
 | `vault_keepalived_password` | Keepalived VRRP authentication password |
 
 Generate the etcd encryption key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
