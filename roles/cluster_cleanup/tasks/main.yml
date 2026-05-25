@@ -1,23 +1,56 @@
 ---
+- name: Authenticate to FreeIPA API
+  ansible.builtin.uri:
+    url: "https://{{ vault_ipa_server }}/ipa/session/login_password"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      user: admin
+      password: "{{ vault_ipaadmin_password }}"
+    validate_certs: true
+    status_code: 200
+  register: _ipa_login
+  no_log: true
+
 - name: Remove k8s-api A record from FreeIPA
-  community.general.ipa_dnsrecord:
-    ipa_user: admin
-    ipa_pass: "{{ vault_ipaadmin_password }}"
-    ipa_host: "{{ vault_ipa_server }}"
-    zone_name: "{{ vault_ipadomain }}"
-    record_name: "{{ k8s_api_endpoint | regex_replace('\\.' + vault_ipadomain + '$', '') }}"
-    record_type: A
-    state: absent
+  ansible.builtin.uri:
+    url: "https://{{ vault_ipa_server }}/ipa/session/json"
+    method: POST
+    headers:
+      Cookie: "ipa_session={{ _ipa_login.cookies.ipa_session }}"
+      Referer: "https://{{ vault_ipa_server }}/ipa"
+    body_format: json
+    body:
+      id: 0
+      method: dnsrecord_del
+      params:
+        - - "{{ vault_ipadomain }}"
+          - "{{ k8s_api_endpoint | regex_replace('\\.' + vault_ipadomain + '$', '') }}"
+        - del_all: true
+    validate_certs: true
+    status_code: 200
+  register: _del_k8s_api
+  failed_when: _del_k8s_api.json.error is not none and _del_k8s_api.json.error.code | default(0) != 4001
 
 - name: Remove *.k8s wildcard A record from FreeIPA
-  community.general.ipa_dnsrecord:
-    ipa_user: admin
-    ipa_pass: "{{ vault_ipaadmin_password }}"
-    ipa_host: "{{ vault_ipa_server }}"
-    zone_name: "{{ vault_ipadomain }}"
-    record_name: "*.k8s"
-    record_type: A
-    state: absent
+  ansible.builtin.uri:
+    url: "https://{{ vault_ipa_server }}/ipa/session/json"
+    method: POST
+    headers:
+      Cookie: "ipa_session={{ _ipa_login.cookies.ipa_session }}"
+      Referer: "https://{{ vault_ipa_server }}/ipa"
+    body_format: json
+    body:
+      id: 0
+      method: dnsrecord_del
+      params:
+        - - "{{ vault_ipadomain }}"
+          - "*.k8s"
+        - del_all: true
+    validate_certs: true
+    status_code: 200
+  register: _del_wildcard
+  failed_when: _del_wildcard.json.error is not none and _del_wildcard.json.error.code | default(0) != 4001
 
 - name: Remove host from Foreman
   theforeman.foreman.host:
