@@ -34,22 +34,22 @@
     mode: '0700'
 
 - name: Find first free IP in MetalLB pool for Traefik
-  ansible.builtin.shell: |
-    kubectl get svc --all-namespaces \
-      -o jsonpath='{range .items[*]}{.status.loadBalancer.ingress[*].ip}{"\n"}{end}' \
-      2>/dev/null | \
-    python3 -c "
-import struct, socket, sys
-def to_int(ip): return struct.unpack('!I', socket.inet_aton(ip))[0]
-def to_ip(n): return socket.inet_ntoa(struct.pack('!I', n))
-used = {line.strip() for line in sys.stdin if line.strip()}
-for n in range(to_int('{{ metallb_pool.split('-')[0] }}'), to_int('{{ metallb_pool.split('-')[1] }}') + 1):
-    ip = to_ip(n)
-    if ip not in used:
-        print(ip)
-        sys.exit(0)
-sys.exit(1)
-"
+  ansible.builtin.shell:
+    cmd: |
+      ip_to_int() { IFS=. read -r a b c d <<< "$1"; echo $(( (a<<24)+(b<<16)+(c<<8)+d )); }
+      int_to_ip() { local n=$1; echo "$((n>>24&255)).$((n>>16&255)).$((n>>8&255)).$((n&255))"; }
+      USED=$(kubectl get svc --all-namespaces \
+        -o jsonpath='{range .items[*]}{.status.loadBalancer.ingress[*].ip}{"\n"}{end}' \
+        2>/dev/null)
+      for i in $(seq "$(ip_to_int '{{ metallb_pool.split("-")[0] }}')" \
+                     "$(ip_to_int '{{ metallb_pool.split("-")[1] }}')"); do
+        IP=$(int_to_ip "$i")
+        if ! printf '%s\n' $USED | grep -qxF "$IP"; then
+          echo "$IP"; exit 0
+        fi
+      done
+      exit 1
+    executable: /bin/bash
   environment:
     KUBECONFIG: /root/.kube/config
   register: _ingress_ip
