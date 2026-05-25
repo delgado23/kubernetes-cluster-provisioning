@@ -132,6 +132,8 @@ head -c 32 /dev/urandom | base64
 | `k8s_api_endpoint` | String | `k8s-api.example.com` | DNS name for the Kubernetes API endpoint (the keepalived VIP hostname). An A record pointing to `k8s_api_endpoint_ip` is created in FreeIPA during the provision phase and removed on wipe. |
 | `k8s_api_endpoint_ip` | String | `172.16.0.29` | IP address of the keepalived VIP. Also used as `keepalived_vip` — only set this here, do not update them separately. |
 | `metallb_pool` | String | `172.16.0.50-172.16.0.60` | MetalLB L2 address pool range for LoadBalancer services. Traefik automatically claims the first free IP from this pool. |
+| `k8s_pod_cidr` | String | `10.244.0.0/16` | Pod network CIDR passed to kubeadm and used in firewall rules. Must not overlap with your node or service networks. Change only if the default conflicts with your infrastructure. |
+| `k8s_service_cidr` | String | `10.96.0.0/12` | Kubernetes service network CIDR passed to kubeadm and used in firewall rules and NetworkPolicies. Must not overlap with your node or pod networks. Change only if the default conflicts with your infrastructure. |
 
 `wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
 
@@ -255,9 +257,9 @@ worker_name_prefix: "my-cluster-worker"       # → my-cluster-worker-01, my-clu
 
 controlplane_configs:
   # Index 0 — primary, always provisioned
-  # k8s_api_endpoint, k8s_api_endpoint_ip, and metallb_pool are AWX survey
-  # vars injected at runtime — set them in your job template survey rather
-  # than hardcoding them here.
+  # k8s_api_endpoint, k8s_api_endpoint_ip, metallb_pool, k8s_pod_cidr, and
+  # k8s_service_cidr are AWX survey vars injected at runtime — set them in
+  # your job template survey rather than hardcoding them here.
   - host_parameters:
       - { name: k8s_role,            value: primary }
       - { name: keepalived_state,    value: MASTER }
