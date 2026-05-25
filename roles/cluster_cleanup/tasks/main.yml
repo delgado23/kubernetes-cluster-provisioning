@@ -7,7 +7,6 @@
     zone_name: "{{ vault_ipadomain }}"
     record_name: "{{ k8s_api_endpoint | regex_replace('\\.' + vault_ipadomain + '$', '') }}"
     record_type: A
-    record_value: "{{ k8s_api_endpoint_ip }}"
     state: absent
 
 - name: Remove *.k8s wildcard A record from FreeIPA
@@ -18,7 +17,6 @@
     zone_name: "{{ vault_ipadomain }}"
     record_name: "*.k8s"
     record_type: A
-    record_value: "{{ ingress_ip }}"
     state: absent
 
 - name: Remove host from Foreman
