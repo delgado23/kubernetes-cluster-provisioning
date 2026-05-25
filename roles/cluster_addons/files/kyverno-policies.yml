@@ -8,10 +8,10 @@ metadata:
   name: disallow-latest-tag
   annotations:
     policies.kyverno.io/description: >
-      Warns when container images use the 'latest' tag or have no tag at all,
+      Blocks container images that use the 'latest' tag or have no tag at all,
       making it impossible to track exactly what is running.
 spec:
-  validationFailureAction: Audit
+  validationFailureAction: Enforce
   background: true
   rules:
     - name: require-image-tag
@@ -68,6 +68,8 @@ spec:
                 - kube-system
                 - longhorn-system
                 - metallb-system
+                - kube-flannel
+                - kyverno
       validate:
         message: "CPU and memory limits are required on all containers."
         pattern:
@@ -139,6 +141,12 @@ spec:
               namespaces:
                 - kube-system
                 - metallb-system
+                - kube-flannel
+          - resources:
+              namespaces:
+                - monitoring
+              names:
+                - "kube-prometheus-stack-prometheus-node-exporter*"
       validate:
         message: "Use of hostNetwork, hostPID, or hostIPC is not allowed."
         pattern:

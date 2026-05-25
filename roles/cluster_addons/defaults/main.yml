@@ -1,15 +1,20 @@
 ---
 letsencrypt_staging: false
+ingress_ip: "172.16.0.50"
 cert_manager_namespace: cert-manager
-cloudflare_email: "daniel@example.com"
-domain: "example.com"
-ingress_domain: "k8s.example.com"
-wildcard_secret_name: "example-com-wildcard-tls"
+cloudflare_email: "{{ vault_cloudflare_email }}"
+domain: "{{ vault_domain }}"
+ingress_domain: "k8s.{{ vault_domain }}"
+wildcard_secret_name: "{{ vault_domain | replace('.', '-') }}-wildcard-tls"
 traefik_namespace: traefik
 longhorn_namespace: longhorn-system
 headlamp_namespace: headlamp
 argocd_namespace: argocd
 argocd_admin_group: "authentik Admins"
+# Security: bind cluster-admin to a dedicated Authentik group, not the general
+# "Admins" group. Create a 'k8s-cluster-admins' group in Authentik and add
+# only users who need full cluster access. This limits blast radius if Authentik
+# group membership is misconfigured.
 headlamp_admin_group: "authentik Admins"
 kyverno_namespace: kyverno
 descheduler_namespace: descheduler
@@ -17,11 +22,10 @@ prometheus_namespace: monitoring
 prometheus_storage_size: 20Gi
 alertmanager_storage_size: 2Gi
 
-# Authentik SSO — set authentik_url before running addons
-# e.g. https://auth.example.com
+# Authentik SSO — set vault_authentik_url in vault before running addons
 k8s_manifests_dir: /root/k8s-manifests
 
-authentik_url: "https://auth.example.com"
+authentik_url: "{{ vault_authentik_url }}"
 # Internal outpost URL used by Traefik ForwardAuth — communicates directly with
 # the proxy outpost over HTTP on port 9000 (no TLS needed for cluster-internal traffic).
 authentik_outpost_url: "http://{{ authentik_url | regex_replace('^https?://', '') }}:9000"
@@ -30,3 +34,8 @@ authentik_outpost_url: "http://{{ authentik_url | regex_replace('^https?://', ''
 # and vault_authentik_headlamp_client_id.
 authentik_argocd_issuer: "{{ authentik_url }}/application/o/argocd/"
 authentik_headlamp_issuer: "{{ authentik_url }}/application/o/headlamp/"
+
+# Kubernetes service CIDR — used in ArgoCD egress NetworkPolicy to allow
+# traffic to kube-apiserver via the kubernetes.default.svc ClusterIP.
+# Must match --service-cluster-ip-range (default kubeadm: 10.96.0.0/12).
+k8s_service_cidr: "10.96.0.0/12"

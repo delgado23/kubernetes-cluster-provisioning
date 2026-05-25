@@ -34,3 +34,20 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
+
+- name: Apply kubelet-serving-cert-approver default-deny NetworkPolicy
+  ansible.builtin.command:
+    cmd: kubectl apply -f -
+    stdin: |
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: default-deny-ingress
+        namespace: kubelet-serving-cert-approver
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true

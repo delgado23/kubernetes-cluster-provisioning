@@ -260,8 +260,8 @@
     - name: Remove hosts from FreeIPA
       community.general.ipa_host:
         ipa_user: admin
-        ipa_pass: "{{ ipaadmin_password }}"
-        ipa_host: "{{ ipa_server }}"
+        ipa_pass: "{{ vault_ipaadmin_password }}"
+        ipa_host: "{{ vault_ipa_server }}"
         name: "{{ item }}.{{ foreman_domain }}"
         state: absent
         update_dns: true

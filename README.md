@@ -1,5 +1,7 @@
 # Kubernetes Cluster Provisioning
 
+> **This was written entirely with Claude just to mess around building Kubernetes clusters in my homelab. Sharing it in case it's useful to anyone.**
+
 Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), Longhorn storage, Prometheus, Headlamp, ArgoCD, and Descheduler.
 
 ## Cluster Architecture
@@ -50,7 +52,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 │   └── 00-duo.conf.j2    # sshd_config.d snippet enabling ForceCommand login_duo
 ├── vars/
 │   ├── foreman.yml       # Foreman connection settings and compute profile IDs
-│   ├── freeipa.yml       # FreeIPA connection settings and ipaclient vars
+│   ├── freeipa.yml       # FreeIPA ipaclient vars (sensitive values sourced from vault)
 │   ├── vault.yml         # Ansible Vault: API tokens and passwords
 │   ├── vms.yml           # VM definitions (names, hostgroups, Foreman parameters)
 │   └── vm_defaults.yml   # Default VM hardware specs
@@ -89,7 +91,14 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | Variable | Description |
 |---|---|
 | `vault_proxmox_api_token` | Proxmox API token secret |
+| `vault_proxmox_host` | Proxmox host and port (e.g. `pve-01.example.com:8006`) |
+| `vault_proxmox_user` | Proxmox user for API auth (e.g. `user@Authentik`) |
+| `vault_proxmox_node` | Proxmox node name (e.g. `pve-01`) |
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
+| `vault_cloudflare_email` | Cloudflare account email |
+| `vault_domain` | Base domain (e.g. `example.com`) — drives `ingress_domain`, `foreman_domain`, `wildcard_secret_name`, and FreeIPA realm |
+| `vault_authentik_url` | Authentik base URL (e.g. `https://auth.example.com`) |
+| `vault_foreman_url` | Foreman base URL (e.g. `https://foreman.example.com`) |
 | `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
 | `vault_duo_ikey` | DUO Unix integration key (application identifier) |
 | `vault_duo_secret_key` | DUO Unix integration secret key for SSH 2FA |
@@ -100,7 +109,10 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_authentik_headlamp_client_secret` | OIDC client secret for the Headlamp application in Authentik |
 | `vault_foreman_user` | Foreman username |
 | `vault_foreman_password` | Foreman password |
-| `vault_ipa_password` | FreeIPA admin password |
+| `vault_ipaadmin_password` | FreeIPA admin password |
+| `vault_ipa_server` | FreeIPA server hostname (e.g. `ipa.example.com`) |
+| `vault_ipadomain` | FreeIPA domain (e.g. `example.com`) |
+| `vault_ntp_servers` | List of NTP server FQDNs for FreeIPA client enrollment |
 | `vault_keepalived_password` | Keepalived VRRP authentication password |
 
 Generate the etcd encryption key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
@@ -117,6 +129,10 @@ head -c 32 /dev/urandom | base64
 | `controlplane_node_count` | Integer | 1 | Number of control plane nodes to provision this run. Set to `0` when only adding worker nodes — this skips the bootstrap and cluster add-ons phases entirely. Max 3. |
 | `worker_node_count` | Integer | 1 | Number of worker nodes to add this run. The provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
 | `letsencrypt_staging` | Boolean | `false` | When `true`, uses the Let's Encrypt **staging** ACME endpoint and names the ClusterIssuer `letsencrypt-cloudflare-staging`. Staging certs are not trusted by browsers but have no rate limits — use this when testing cert-manager config. Set to `false` for a production cluster to issue real trusted certificates. |
+| `k8s_api_endpoint` | String | `k8s-api.example.com` | DNS name for the Kubernetes API endpoint (the keepalived VIP hostname). An A record pointing to `k8s_api_endpoint_ip` is created in FreeIPA during the provision phase and removed on wipe. |
+| `k8s_api_endpoint_ip` | String | `172.16.0.29` | IP address of the keepalived VIP. Also used as `keepalived_vip` — only set this here, do not update them separately. |
+| `metallb_pool` | String | `172.16.0.50-172.16.0.60` | MetalLB L2 address pool range for LoadBalancer services. |
+| `ingress_ip` | String | `172.16.0.50` | IP address assigned to the Traefik LoadBalancer service by MetalLB. Used as `loadBalancerIP` in the Traefik Helm values and as the target for the `*.k8s` wildcard A record created in FreeIPA during the addons phase. Removed from FreeIPA on wipe. |
 
 `wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
 
@@ -399,6 +415,8 @@ After a successful run, all services are accessible via Traefik at the MetalLB L
 | Kubernetes API | `https://{{ k8s_api_endpoint }}:6443` | kubeconfig |
 
 `ingress_domain` defaults to `k8s.<domain>` and is configured in `roles/cluster_addons/defaults/main.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}`, is issued by Let's Encrypt via Cloudflare DNS-01, and is automatically mirrored to all addon namespaces by [reflector](https://github.com/emberstack/kubernetes-reflector). When cert-manager renews the cert, reflector pushes the updated secret to every namespace without any manual intervention.
+
+The `*.k8s` wildcard A record in FreeIPA is created automatically at the end of the addons phase (pointing to `ingress_ip`) and removed automatically when `wipe_cluster=true`. No manual DNS configuration is needed for internal cluster access.
 
 Headlamp login uses Authentik OIDC — click **Sign in** on the Headlamp page and you will be redirected to Authentik. No service account token is needed.
 

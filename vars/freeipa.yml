@@ -1,13 +1,12 @@
-ipaadmin_principal: admin
-ipaadmin_password: "{{ vault_ipa_password }}"
-ipa_server: vek-lor.example.com
-ipadomain: example.com
-iparealm: GARAVENTAVILLE.COM
+# vault_ipa_server, vault_ipadomain, vault_ipaadmin_password are in vars/vault.yml
 
-ipaclient_ntp_servers:
-  - vek-lor.example.com
-  - vek-nilash.example.com
-  - cthun.example.com
+# Aliases required by the freeipa.ansible_freeipa.ipaclient role
+ipaadmin_principal: admin
+ipaadmin_password: "{{ vault_ipaadmin_password }}"
+ipadomain: "{{ vault_ipadomain }}"
+iparealm: "{{ vault_ipadomain | upper }}"
+
+ipaclient_ntp_servers: "{{ vault_ntp_servers }}"
 ipaclient_mkhomedir: true
 ipaclient_automount_location: default
 ipaclient_force_join: true
