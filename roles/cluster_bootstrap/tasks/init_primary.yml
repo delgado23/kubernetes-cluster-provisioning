@@ -18,6 +18,7 @@
     src: kubeadm-config.yml.j2
     dest: /etc/kubernetes/kubeadm-config.yml
     mode: "0600"
+  when: not kubelet_conf.stat.exists
 
 - name: Pre-pull kubeadm images (retry on registry rate limits)
   ansible.builtin.command:
@@ -96,10 +97,12 @@
     KUBECONFIG: /root/.kube/config
   register: flannel_output
   changed_when: true
+  when: not kubelet_conf.stat.exists
 
 - name: Print Flannel install output
   ansible.builtin.debug:
     var: flannel_output.stdout_lines
+  when: not kubelet_conf.stat.exists
 
 - name: Wait for control plane to be ready
   ansible.builtin.command:
@@ -107,3 +110,4 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
+  when: not kubelet_conf.stat.exists
