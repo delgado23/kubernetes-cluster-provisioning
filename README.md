@@ -290,7 +290,7 @@ Create the token once in Proxmox before running the playbooks:
 
 ## Authentik SSO Setup
 
-Authentik runs externally (not in the cluster). Set `authentik_url` in `roles/cluster_addons/defaults/main.yml` before running the addons phase.
+Authentik runs externally (not in the cluster). Set `vault_authentik_url` in `vars/vault.yml` before running the addons phase.
 
 ### Proxy outpost — ForwardAuth (Traefik dashboard + Longhorn)
 
@@ -404,7 +404,7 @@ kubectl logs -n descheduler -l job-name=descheduler-manual -f
 
 ## Exposed Services
 
-After a successful run, all services are accessible via Traefik at the MetalLB LoadBalancer IP. Point `*.{{ ingress_domain }}` at that IP in Cloudflare DNS.
+After a successful run, all services are accessible via Traefik at the MetalLB LoadBalancer IP. The `*.k8s` FreeIPA DNS record is created automatically during the addons phase — no manual DNS configuration needed for internal access.
 
 | Service | URL | Auth |
 |---|---|---|
