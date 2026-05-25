@@ -3,6 +3,8 @@
   ansible.builtin.uri:
     url: "https://{{ vault_ipa_server }}/ipa/session/login_password"
     method: POST
+    headers:
+      Referer: "https://{{ vault_ipa_server }}/ipa"
     body_format: form-urlencoded
     body:
       user: admin
