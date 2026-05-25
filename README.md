@@ -238,10 +238,14 @@ ansible-playbook maintenance.yml -e "drain_timeout=600"
 
 ### Wipe Cluster
 
-Queries Foreman for all hosts matching the configured CP and worker prefixes and removes them from Foreman and FreeIPA. Finds everything regardless of how many scale-out runs were done. Does not touch the Proxmox VMs themselves.
+Queries Foreman for all hosts matching the CP and worker name prefixes for the selected `cluster_env` and removes them from Foreman and FreeIPA, along with the keepalived VIP and wildcard DNS records for that environment. Finds everything regardless of how many scale-out runs were done. Does not touch the Proxmox VMs themselves.
 
 ```bash
+# Wipe the prod cluster
 ansible-playbook wipe.yml --ask-vault-pass
+
+# Wipe the test cluster (leaves prod untouched)
+ansible-playbook wipe.yml --ask-vault-pass -e "cluster_env=test"
 ```
 
 ## VM Definitions
@@ -413,7 +417,7 @@ kubectl logs -n descheduler -l job-name=descheduler-manual -f
 
 ## Exposed Services
 
-After a successful run, all services are accessible via Traefik at the MetalLB LoadBalancer IP. The `*.k8s` FreeIPA DNS record is created automatically during the addons phase — no manual DNS configuration needed for internal access.
+After a successful run, all services are accessible via Traefik at the MetalLB LoadBalancer IP. The wildcard FreeIPA DNS record (`*.k8s` for `cluster_env=prod`, `*.k8s-test` for `cluster_env=test`) is created automatically during the addons phase — no manual DNS configuration needed for internal access.
 
 | Service | URL | Auth |
 |---|---|---|
@@ -425,9 +429,9 @@ After a successful run, all services are accessible via Traefik at the MetalLB L
 | ArgoCD | `https://argocd.{{ ingress_domain }}` | Authentik SSO (OIDC) |
 | Kubernetes API | `https://{{ k8s_api_endpoint }}:6443` | kubeconfig |
 
-`ingress_domain` defaults to `k8s.<domain>` and is configured in `roles/cluster_addons/defaults/main.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}`, is issued by Let's Encrypt via Cloudflare DNS-01, and is automatically mirrored to all addon namespaces by [reflector](https://github.com/emberstack/kubernetes-reflector). When cert-manager renews the cert, reflector pushes the updated secret to every namespace without any manual intervention.
+`ingress_domain` is derived from `cluster_env` (`k8s.<vault_domain>` for prod, `k8s-test.<vault_domain>` for test) via `ingress_subdomain` in `vars/vms.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}`, is issued by Let's Encrypt via Cloudflare DNS-01, and is automatically mirrored to all addon namespaces by [reflector](https://github.com/emberstack/kubernetes-reflector). When cert-manager renews the cert, reflector pushes the updated secret to every namespace without any manual intervention.
 
-The `*.k8s` wildcard A record in FreeIPA is created automatically at the end of the addons phase. Traefik claims the first free IP from the MetalLB pool at deploy time; the actual assigned IP is read back from the service and used for the DNS record — no manual IP configuration needed. The record is removed automatically when `wipe_cluster=true`.
+The wildcard A record in FreeIPA (`*.k8s` for prod, `*.k8s-test` for test) is created automatically at the end of the addons phase. Traefik claims the first free IP from the MetalLB pool at deploy time; the actual assigned IP is read back from the service and used for the DNS record — no manual IP configuration needed. The record is removed automatically when `wipe_cluster=true`, scoped to the cluster being wiped.
 
 Headlamp login uses Authentik OIDC — click **Sign in** on the Headlamp page and you will be redirected to Authentik. No service account token is needed.
 
