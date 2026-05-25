@@ -17,20 +17,25 @@ haproxy_port:        7443             # HAProxy frontend port for kube-apiserver
 # ------------------------------------------------------------------
 # Survey vars — overridable at runtime (e.g. AWX job template survey)
 # ------------------------------------------------------------------
+cluster_env:         "prod"              # prod | test
 k8s_api_endpoint:    "k8s-api.example.com"
 k8s_api_endpoint_ip: "172.16.0.29"
 metallb_pool:        "172.16.0.50-172.16.0.60"
-k8s_pod_cidr:        "10.244.0.0/16" # Flannel pod network
-k8s_service_cidr:    "10.96.0.0/12"  # Kubernetes service network
+k8s_pod_cidr:        "10.244.0.0/16"    # Flannel pod network
+k8s_service_cidr:    "10.96.0.0/12"     # Kubernetes service network
+
+# ------------------------------------------------------------------
+# Derived from cluster_env — override via extra_vars only if needed
+# ------------------------------------------------------------------
+letsencrypt_staging:      "{{ cluster_env == 'test' }}"
+controlplane_name_prefix: "{{ 'k8s-test-cp' if cluster_env == 'test' else 'k8s-cp' }}"
+worker_name_prefix:       "{{ 'k8s-test-worker' if cluster_env == 'test' else 'k8s-worker' }}"
 
 # ------------------------------------------------------------------
 # Naming and hostgroup strings
 # ------------------------------------------------------------------
 controlplane_hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
-controlplane_name_prefix: "k8s-cp"
-
-worker_hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-worker_name_prefix: "k8s-worker"
+worker_hostgroup:       "AlmaLinux 10/Kubernetes Worker Node"
 
 # ------------------------------------------------------------------
 # Control plane node configs — host_parameters only, names are generated

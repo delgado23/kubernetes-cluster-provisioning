@@ -128,7 +128,8 @@ head -c 32 /dev/urandom | base64
 | `wipe_cluster` | Boolean | `false` | When `true`, removes all existing cluster nodes from Foreman and FreeIPA first, then provisions a fresh cluster using the current `controlplane_node_count` and `worker_node_count` values. |
 | `controlplane_node_count` | Integer | 1 | Number of control plane nodes to provision this run. Set to `0` when only adding worker nodes — this skips the bootstrap and cluster add-ons phases entirely. Max 3. |
 | `worker_node_count` | Integer | 1 | Number of worker nodes to add this run. The provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
-| `letsencrypt_staging` | Boolean | `false` | When `true`, uses the Let's Encrypt **staging** ACME endpoint and names the ClusterIssuer `letsencrypt-cloudflare-staging`. Staging certs are not trusted by browsers but have no rate limits — use this when testing cert-manager config. Set to `false` for a production cluster to issue real trusted certificates. |
+| `cluster_env` | String | `prod` | `prod` or `test`. Controls node naming prefixes (`k8s-cp` / `k8s-worker` for prod; `k8s-test-cp` / `k8s-test-worker` for test) and automatically selects the ACME endpoint (`prod` → Let's Encrypt production; `test` → Let's Encrypt staging). |
+| `letsencrypt_staging` | Boolean | derived | Auto-derived from `cluster_env` (`true` when `test`, `false` when `prod`). When `true`, uses the Let's Encrypt **staging** ACME endpoint — certs are not browser-trusted but have no rate limits. Only set this directly if you need to decouple it from `cluster_env`. |
 | `k8s_api_endpoint` | String | `k8s-api.example.com` | DNS name for the Kubernetes API endpoint (the keepalived VIP hostname). An A record pointing to `k8s_api_endpoint_ip` is created in FreeIPA during the provision phase and removed on wipe. |
 | `k8s_api_endpoint_ip` | String | `172.16.0.29` | IP address of the keepalived VIP. Also used as `keepalived_vip` — only set this here, do not update them separately. |
 | `metallb_pool` | String | `172.16.0.50-172.16.0.60` | MetalLB L2 address pool range for LoadBalancer services. Traefik automatically claims the first free IP from this pool. |
@@ -137,7 +138,7 @@ head -c 32 /dev/urandom | base64
 
 `wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
 
-Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. Name prefixes and Foreman hostgroup strings are configured in `vars/vms.yml`.
+Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. The prefix is derived from `cluster_env`: `prod` produces `k8s-cp` / `k8s-worker`; `test` produces `k8s-test-cp` / `k8s-test-worker`. Foreman hostgroup strings are configured in `vars/vms.yml`.
 
 ## Usage
 
@@ -243,17 +244,21 @@ ansible-playbook wipe.yml --ask-vault-pass
 
 ## VM Definitions
 
-Edit `vars/vms.yml` to configure nodes. There are no hardcoded hostnames — both control plane and worker names are generated at runtime from a prefix and a counter (e.g. `k8s-cp-01`, `k8s-worker-03`).
+Edit `vars/vms.yml` to configure nodes. There are no hardcoded hostnames — both control plane and worker names are generated at runtime from a prefix and a counter. The prefix is derived from the `cluster_env` survey var:
+
+- `cluster_env=prod` → `k8s-cp-01`, `k8s-worker-01`, …
+- `cluster_env=test` → `k8s-test-cp-01`, `k8s-test-worker-01`, …
 
 Control plane configs are ordered: index 0 is always the primary. Only the first `controlplane_node_count` entries are provisioned.
 
 ```yaml
-# Naming — adjust prefixes and hostgroups to match your Foreman setup
+# Hostgroups — must match your Foreman setup
 controlplane_hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
-controlplane_name_prefix: "my-cluster-cp"     # → my-cluster-cp-01, my-cluster-cp-02, …
+worker_hostgroup:       "AlmaLinux 10/Kubernetes Worker Node"
 
-worker_hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-worker_name_prefix: "my-cluster-worker"       # → my-cluster-worker-01, my-cluster-worker-02, …
+# Name prefixes are derived from cluster_env (set in AWX survey):
+#   prod → k8s-cp / k8s-worker
+#   test → k8s-test-cp / k8s-test-worker
 
 controlplane_configs:
   # Index 0 — primary, always provisioned
