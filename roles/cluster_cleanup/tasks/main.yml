@@ -14,7 +14,7 @@
   register: _ipa_login
   no_log: true
 
-- name: Remove k8s-api A record from FreeIPA
+- name: Look up current k8s-api A record in FreeIPA
   ansible.builtin.uri:
     url: "https://{{ vault_ipa_server }}/ipa/session/json"
     method: POST
@@ -24,17 +24,31 @@
     body_format: json
     body:
       id: 0
-      method: dnsrecord_del
+      method: dnsrecord_show
       params:
         - - "{{ vault_ipadomain }}"
           - "{{ k8s_api_endpoint | regex_replace('\\.' + vault_ipadomain + '$', '') }}"
-        - del_all: true
+        - {}
     validate_certs: true
     status_code: 200
-  register: _del_k8s_api
-  failed_when: _del_k8s_api.json.error is not none and _del_k8s_api.json.error.code | default(0) != 4001
+  register: _k8s_api_record
+  failed_when: false
 
-- name: Remove *.k8s wildcard A record from FreeIPA
+- name: Remove k8s-api A record from FreeIPA
+  community.general.ipa_dnsrecord:
+    ipa_user: admin
+    ipa_pass: "{{ vault_ipaadmin_password }}"
+    ipa_host: "{{ vault_ipa_server }}"
+    zone_name: "{{ vault_ipadomain }}"
+    record_name: "{{ k8s_api_endpoint | regex_replace('\\.' + vault_ipadomain + '$', '') }}"
+    record_type: A
+    record_value: "{{ _k8s_api_record.json.result.result.arecord[0] }}"
+    state: absent
+  when:
+    - _k8s_api_record.json.error is none
+    - (_k8s_api_record.json.result.result.arecord | default([])) | length > 0
+
+- name: Look up current *.k8s A record in FreeIPA
   ansible.builtin.uri:
     url: "https://{{ vault_ipa_server }}/ipa/session/json"
     method: POST
@@ -44,15 +58,29 @@
     body_format: json
     body:
       id: 0
-      method: dnsrecord_del
+      method: dnsrecord_show
       params:
         - - "{{ vault_ipadomain }}"
           - "*.k8s"
-        - del_all: true
+        - {}
     validate_certs: true
     status_code: 200
-  register: _del_wildcard
-  failed_when: _del_wildcard.json.error is not none and _del_wildcard.json.error.code | default(0) != 4001
+  register: _wildcard_record
+  failed_when: false
+
+- name: Remove *.k8s wildcard A record from FreeIPA
+  community.general.ipa_dnsrecord:
+    ipa_user: admin
+    ipa_pass: "{{ vault_ipaadmin_password }}"
+    ipa_host: "{{ vault_ipa_server }}"
+    zone_name: "{{ vault_ipadomain }}"
+    record_name: "*.k8s"
+    record_type: A
+    record_value: "{{ _wildcard_record.json.result.result.arecord[0] }}"
+    state: absent
+  when:
+    - _wildcard_record.json.error is none
+    - (_wildcard_record.json.result.result.arecord | default([])) | length > 0
 
 - name: Remove host from Foreman
   theforeman.foreman.host:
