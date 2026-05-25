@@ -46,7 +46,7 @@
       method: dnsrecord_del
       params:
         - - "{{ vault_ipadomain }}"
-          - "{{ item.idnsname[0]['__dns_name__'] }}"
+          - "{{ item.idnsname[0] }}"
         - arecord:
             - "{{ k8s_api_endpoint_ip }}"
     validate_certs: true
