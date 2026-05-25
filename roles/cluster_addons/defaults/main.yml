@@ -2,7 +2,7 @@
 cert_manager_namespace: cert-manager
 cloudflare_email: "{{ vault_cloudflare_email }}"
 domain: "{{ vault_domain }}"
-ingress_domain: "k8s.{{ vault_domain }}"
+ingress_domain: "{{ ingress_subdomain }}.{{ vault_domain }}"
 wildcard_secret_name: "{{ vault_domain | replace('.', '-') }}-wildcard-tls"
 traefik_namespace: traefik
 longhorn_namespace: longhorn-system
