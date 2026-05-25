@@ -34,7 +34,3 @@ authentik_outpost_url: "http://{{ authentik_url | regex_replace('^https?://', ''
 authentik_argocd_issuer: "{{ authentik_url }}/application/o/argocd/"
 authentik_headlamp_issuer: "{{ authentik_url }}/application/o/headlamp/"
 
-# Kubernetes service CIDR — used in ArgoCD egress NetworkPolicy to allow
-# traffic to kube-apiserver via the kubernetes.default.svc ClusterIP.
-# Must match --service-cluster-ip-range (default kubeadm: 10.96.0.0/12).
-k8s_service_cidr: "10.96.0.0/12"

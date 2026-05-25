@@ -12,8 +12,6 @@
 # Cluster-wide network settings
 # ------------------------------------------------------------------
 keepalived_vip:      "{{ k8s_api_endpoint_ip }}"   # VIP shared by all control plane nodes
-k8s_pod_cidr:        "10.244.0.0/16" # Flannel pod network
-k8s_service_cidr:    "10.96.0.0/12"  # Kubernetes service network
 haproxy_port:        7443             # HAProxy frontend port for kube-apiserver
 
 # ------------------------------------------------------------------
@@ -22,6 +20,8 @@ haproxy_port:        7443             # HAProxy frontend port for kube-apiserver
 k8s_api_endpoint:    "k8s-api.example.com"
 k8s_api_endpoint_ip: "172.16.0.29"
 metallb_pool:        "172.16.0.50-172.16.0.60"
+k8s_pod_cidr:        "10.244.0.0/16" # Flannel pod network
+k8s_service_cidr:    "10.96.0.0/12"  # Kubernetes service network
 
 # ------------------------------------------------------------------
 # Naming and hostgroup strings
