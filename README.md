@@ -1,5 +1,7 @@
 # Kubernetes Cluster Provisioning
 
+> **This was written entirely with Claude just to mess around building Kubernetes clusters in my homelab. Sharing it in case it's useful to anyone.**
+
 Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), Longhorn storage, Prometheus, Headlamp, ArgoCD, and Descheduler.
 
 ## Cluster Architecture
