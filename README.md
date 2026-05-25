@@ -255,14 +255,17 @@ worker_name_prefix: "my-cluster-worker"       # → my-cluster-worker-01, my-clu
 
 controlplane_configs:
   # Index 0 — primary, always provisioned
+  # k8s_api_endpoint, k8s_api_endpoint_ip, and metallb_pool are AWX survey
+  # vars injected at runtime — set them in your job template survey rather
+  # than hardcoding them here.
   - host_parameters:
       - { name: k8s_role,            value: primary }
       - { name: keepalived_state,    value: MASTER }
       - { name: keepalived_priority, value: 101 }
       - { name: cluster_name,        value: my-cluster }
-      - { name: k8s_api_endpoint,    value: k8s-api.example.com }
-      - { name: k8s_api_endpoint_ip, value: 172.16.0.29 }
-      - { name: metallb_pool,        value: 172.16.0.50-172.16.0.60 }
+      - { name: k8s_api_endpoint,    value: "{{ k8s_api_endpoint }}" }
+      - { name: k8s_api_endpoint_ip, value: "{{ k8s_api_endpoint_ip }}" }
+      - { name: metallb_pool,        value: "{{ metallb_pool }}" }
 
   # Index 1 — secondary, provisioned when controlplane_node_count >= 2
   - host_parameters:
