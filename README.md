@@ -131,8 +131,7 @@ head -c 32 /dev/urandom | base64
 | `letsencrypt_staging` | Boolean | `false` | When `true`, uses the Let's Encrypt **staging** ACME endpoint and names the ClusterIssuer `letsencrypt-cloudflare-staging`. Staging certs are not trusted by browsers but have no rate limits — use this when testing cert-manager config. Set to `false` for a production cluster to issue real trusted certificates. |
 | `k8s_api_endpoint` | String | `k8s-api.example.com` | DNS name for the Kubernetes API endpoint (the keepalived VIP hostname). An A record pointing to `k8s_api_endpoint_ip` is created in FreeIPA during the provision phase and removed on wipe. |
 | `k8s_api_endpoint_ip` | String | `172.16.0.29` | IP address of the keepalived VIP. Also used as `keepalived_vip` — only set this here, do not update them separately. |
-| `metallb_pool` | String | `172.16.0.50-172.16.0.60` | MetalLB L2 address pool range for LoadBalancer services. |
-| `ingress_ip` | String | `172.16.0.50` | IP address assigned to the Traefik LoadBalancer service by MetalLB. Used as `loadBalancerIP` in the Traefik Helm values and as the target for the `*.k8s` wildcard A record created in FreeIPA during the addons phase. Removed from FreeIPA on wipe. |
+| `metallb_pool` | String | `172.16.0.50-172.16.0.60` | MetalLB L2 address pool range for LoadBalancer services. Traefik automatically claims the first free IP from this pool. |
 
 `wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
 
@@ -416,7 +415,7 @@ After a successful run, all services are accessible via Traefik at the MetalLB L
 
 `ingress_domain` defaults to `k8s.<domain>` and is configured in `roles/cluster_addons/defaults/main.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}`, is issued by Let's Encrypt via Cloudflare DNS-01, and is automatically mirrored to all addon namespaces by [reflector](https://github.com/emberstack/kubernetes-reflector). When cert-manager renews the cert, reflector pushes the updated secret to every namespace without any manual intervention.
 
-The `*.k8s` wildcard A record in FreeIPA is created automatically at the end of the addons phase (pointing to `ingress_ip`) and removed automatically when `wipe_cluster=true`. No manual DNS configuration is needed for internal cluster access.
+The `*.k8s` wildcard A record in FreeIPA is created automatically at the end of the addons phase. Traefik claims the first free IP from the MetalLB pool at deploy time; the actual assigned IP is read back from the service and used for the DNS record — no manual IP configuration needed. The record is removed automatically when `wipe_cluster=true`.
 
 Headlamp login uses Authentik OIDC — click **Sign in** on the Headlamp page and you will be redirected to Authentik. No service account token is needed.
 
