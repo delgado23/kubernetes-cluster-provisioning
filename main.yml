@@ -477,6 +477,7 @@
       when: foreman_params.k8s_role != 'primary'
   vars_files:
     - vars/vault.yml
+    - vars/vms.yml
   environment:
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   tasks:
@@ -569,6 +570,27 @@
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: longhorn_ui
+
+- name: Manage wildcard ingress DNS record in FreeIPA
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [addons]
+  vars_files:
+    - vars/vault.yml
+    - vars/vms.yml
+    - vars/freeipa.yml
+  tasks:
+    - name: Create / update *.k8s A record for ingress
+      community.general.ipa_dnsrecord:
+        ipa_user: admin
+        ipa_pass: "{{ vault_ipaadmin_password }}"
+        ipa_host: "{{ vault_ipa_server }}"
+        zone_name: "{{ vault_ipadomain }}"
+        record_name: "*.k8s"
+        record_type: A
+        record_value: "{{ ingress_ip }}"
+        state: present
 
 # -----------------------------------------------------------------------------
 # DEBUG: Ingress diagnostics (ansible-playbook main.yml --tags debug)

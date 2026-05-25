@@ -10,6 +10,17 @@
     record_value: "{{ k8s_api_endpoint_ip }}"
     state: absent
 
+- name: Remove *.k8s wildcard A record from FreeIPA
+  community.general.ipa_dnsrecord:
+    ipa_user: admin
+    ipa_pass: "{{ vault_ipaadmin_password }}"
+    ipa_host: "{{ vault_ipa_server }}"
+    zone_name: "{{ vault_ipadomain }}"
+    record_name: "*.k8s"
+    record_type: A
+    record_value: "{{ ingress_ip }}"
+    state: absent
+
 - name: Remove host from Foreman
   theforeman.foreman.host:
     username: "{{ foreman_user }}"
