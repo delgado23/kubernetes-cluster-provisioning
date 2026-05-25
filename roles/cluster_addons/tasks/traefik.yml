@@ -33,6 +33,29 @@
     state: directory
     mode: '0700'
 
+- name: Find first free IP in MetalLB pool for Traefik
+  ansible.builtin.shell:
+    cmd: |
+      ip_to_int() { IFS=. read -r a b c d <<< "$1"; echo $(( (a<<24)+(b<<16)+(c<<8)+d )); }
+      int_to_ip() { local n=$1; echo "$((n>>24&255)).$((n>>16&255)).$((n>>8&255)).$((n&255))"; }
+      USED=$(kubectl get svc --all-namespaces \
+        -o jsonpath='{range .items[*]}{.status.loadBalancer.ingress[*].ip}{"\n"}{end}' \
+        2>/dev/null)
+      for i in $(seq "$(ip_to_int '{{ metallb_pool.split("-")[0] }}')" \
+                     "$(ip_to_int '{{ metallb_pool.split("-")[1] }}')"); do
+        IP=$(int_to_ip "$i")
+        if ! printf '%s\n' $USED | grep -qxF "$IP"; then
+          echo "$IP"; exit 0
+        fi
+      done
+      exit 1
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _ingress_ip
+  changed_when: false
+  failed_when: _ingress_ip.rc != 0
+
 - name: Write Traefik Helm values
   ansible.builtin.copy:
     dest: "{{ k8s_manifests_dir }}/traefik/values.yml"
@@ -43,7 +66,7 @@
 
       service:
         type: LoadBalancer
-        loadBalancerIP: "{{ ingress_ip }}"
+        loadBalancerIP: "{{ _ingress_ip.stdout | trim }}"
 
       ingressClass:
         enabled: true
