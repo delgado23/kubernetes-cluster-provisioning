@@ -31,6 +31,8 @@ k8s_api_endpoint:         "{{ 'k8s-test-api' if cluster_env == 'test' else 'k8s-
 letsencrypt_staging:      "{{ cluster_env == 'test' }}"
 controlplane_name_prefix: "{{ 'k8s-test-cp' if cluster_env == 'test' else 'k8s-cp' }}"
 worker_name_prefix:       "{{ 'k8s-test-worker' if cluster_env == 'test' else 'k8s-worker' }}"
+controlplane_tags:        "k8s;controlplane;{{ cluster_env }}"
+worker_tags:              "k8s;worker;{{ cluster_env }}"
 
 # ------------------------------------------------------------------
 # Naming and hostgroup strings

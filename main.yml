@@ -108,6 +108,7 @@
   tags: [provision]
   vars_files:
     - vars/vault.yml
+    - vars/vms.yml
   vars:
     proxmox_api_token: "{{ vault_proxmox_api_token }}"
   roles:
