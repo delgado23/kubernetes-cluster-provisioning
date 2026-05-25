@@ -57,12 +57,14 @@ controlplane_configs:
 
   # Secondary — provisioned when controlplane_node_count >= 2
   - host_parameters:
-      - { name: k8s_role,            value: secondary }
-      - { name: keepalived_state,    value: BACKUP    }
-      - { name: keepalived_priority, value: 100       }
+      - { name: k8s_role,            value: secondary              }
+      - { name: keepalived_state,    value: BACKUP                 }
+      - { name: keepalived_priority, value: 100                    }
+      - { name: cluster_env,         value: "{{ cluster_env }}"   }
 
   # Secondary — provisioned when controlplane_node_count >= 3
   - host_parameters:
-      - { name: k8s_role,            value: secondary }
-      - { name: keepalived_state,    value: BACKUP    }
-      - { name: keepalived_priority, value: 99        }
+      - { name: k8s_role,            value: secondary              }
+      - { name: keepalived_state,    value: BACKUP                 }
+      - { name: keepalived_priority, value: 99                     }
+      - { name: cluster_env,         value: "{{ cluster_env }}"   }

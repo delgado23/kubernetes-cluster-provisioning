@@ -1,7 +1,15 @@
 ---
 - name: Generate join command from a control plane node
   ansible.builtin.command: kubeadm token create --print-join-command
-  delegate_to: "{{ groups['foreman_almalinux10_kubernetescontrolplanenode'] | first }}"
+  delegate_to: >-
+    {{
+      groups['foreman_almalinux10_kubernetescontrolplanenode']
+      | map('extract', hostvars)
+      | selectattr('foreman_params.k8s_role', 'equalto', 'primary')
+      | selectattr('foreman_params.cluster_env', 'equalto', foreman_params.cluster_env)
+      | map(attribute='inventory_hostname')
+      | first
+    }}
   register: kubeadm_join_cmd
   changed_when: true
   no_log: true
