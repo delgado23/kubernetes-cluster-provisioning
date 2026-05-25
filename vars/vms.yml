@@ -50,6 +50,7 @@ controlplane_configs:
       - { name: k8s_role,            value: primary                    }
       - { name: keepalived_state,    value: MASTER                     }
       - { name: keepalived_priority, value: 101                        }
+      - { name: cluster_env,         value: "{{ cluster_env }}"          }
       - { name: k8s_api_endpoint,    value: "{{ k8s_api_endpoint }}"    }
       - { name: k8s_api_endpoint_ip, value: "{{ k8s_api_endpoint_ip }}" }
       - { name: metallb_pool,        value: "{{ metallb_pool }}"        }
