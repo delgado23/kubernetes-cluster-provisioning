@@ -585,6 +585,7 @@
       when: foreman_params.k8s_role != 'primary'
   vars_files:
     - vars/vault.yml
+    - vars/vms.yml
   environment:
     KUBECONFIG: /root/.kube/config
   tasks:
@@ -597,13 +598,13 @@
       retries: 12
       delay: 10
 
-    - name: Create / update *.k8s A record for ingress
+    - name: Create / update *.{{ ingress_subdomain }} A record for ingress
       community.general.ipa_dnsrecord:
         ipa_user: admin
         ipa_pass: "{{ vault_ipaadmin_password }}"
         ipa_host: "{{ vault_ipa_server }}"
         zone_name: "{{ vault_ipadomain }}"
-        record_name: "*.k8s"
+        record_name: "*.{{ ingress_subdomain }}"
         record_type: A
         record_value: "{{ _traefik_ip.stdout }}"
         state: present

@@ -27,6 +27,7 @@ k8s_service_cidr:    "10.96.0.0/12"     # Kubernetes service network
 # ------------------------------------------------------------------
 # Derived from cluster_env — override via extra_vars only if needed
 # ------------------------------------------------------------------
+ingress_subdomain:        "{{ 'k8s-test' if cluster_env == 'test' else 'k8s' }}"
 letsencrypt_staging:      "{{ cluster_env == 'test' }}"
 controlplane_name_prefix: "{{ 'k8s-test-cp' if cluster_env == 'test' else 'k8s-cp' }}"
 worker_name_prefix:       "{{ 'k8s-test-worker' if cluster_env == 'test' else 'k8s-worker' }}"

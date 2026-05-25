@@ -128,7 +128,7 @@ head -c 32 /dev/urandom | base64
 | `wipe_cluster` | Boolean | `false` | When `true`, removes all existing cluster nodes from Foreman and FreeIPA first, then provisions a fresh cluster using the current `controlplane_node_count` and `worker_node_count` values. |
 | `controlplane_node_count` | Integer | 1 | Number of control plane nodes to provision this run. Set to `0` when only adding worker nodes — this skips the bootstrap and cluster add-ons phases entirely. Max 3. |
 | `worker_node_count` | Integer | 1 | Number of worker nodes to add this run. The provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
-| `cluster_env` | String | `prod` | `prod` or `test`. Controls node naming prefixes (`k8s-cp` / `k8s-worker` for prod; `k8s-test-cp` / `k8s-test-worker` for test) and automatically selects the ACME endpoint (`prod` → Let's Encrypt production; `test` → Let's Encrypt staging). |
+| `cluster_env` | String | `prod` | `prod` or `test`. Controls node naming prefixes, ingress domain, FreeIPA wildcard DNS record, and ACME endpoint. `prod` → `k8s-cp` / `k8s-worker`, `k8s.yourdomain.com`, Let's Encrypt production. `test` → `k8s-test-cp` / `k8s-test-worker`, `k8s-test.yourdomain.com`, Let's Encrypt staging. Both clusters can run side-by-side — they use separate DNS records and name prefixes. |
 | `letsencrypt_staging` | Boolean | derived | Auto-derived from `cluster_env` (`true` when `test`, `false` when `prod`). When `true`, uses the Let's Encrypt **staging** ACME endpoint — certs are not browser-trusted but have no rate limits. Only set this directly if you need to decouple it from `cluster_env`. |
 | `k8s_api_endpoint` | String | `k8s-api.example.com` | DNS name for the Kubernetes API endpoint (the keepalived VIP hostname). An A record pointing to `k8s_api_endpoint_ip` is created in FreeIPA during the provision phase and removed on wipe. |
 | `k8s_api_endpoint_ip` | String | `172.16.0.29` | IP address of the keepalived VIP. Also used as `keepalived_vip` — only set this here, do not update them separately. |
@@ -139,6 +139,8 @@ head -c 32 /dev/urandom | base64
 `wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
 
 Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. The prefix is derived from `cluster_env`: `prod` produces `k8s-cp` / `k8s-worker`; `test` produces `k8s-test-cp` / `k8s-test-worker`. Foreman hostgroup strings are configured in `vars/vms.yml`.
+
+Prod and test clusters can run side-by-side. Each has its own FreeIPA DNS wildcard (`*.k8s` vs `*.k8s-test`), so wiping one does not affect the other's ingress. You must set non-overlapping values for `k8s_api_endpoint_ip` and `metallb_pool` in each cluster's AWX survey — those IP ranges cannot be shared.
 
 ## Usage
 
