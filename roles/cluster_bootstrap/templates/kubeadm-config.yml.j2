@@ -14,6 +14,7 @@ nodeRegistration:
 ---
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
+clusterName: "k8s-{{ foreman_params.cluster_env }}"
 controlPlaneEndpoint: "{{ foreman_params.k8s_api_endpoint }}:6443"
 networking:
   podSubnet: "{{ k8s_pod_cidr }}"
