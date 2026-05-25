@@ -22,7 +22,6 @@ haproxy_port:        7443             # HAProxy frontend port for kube-apiserver
 k8s_api_endpoint:    "k8s-api.example.com"
 k8s_api_endpoint_ip: "172.16.0.29"
 metallb_pool:        "172.16.0.50-172.16.0.60"
-ingress_ip:          "172.16.0.50"
 
 # ------------------------------------------------------------------
 # Naming and hostgroup strings

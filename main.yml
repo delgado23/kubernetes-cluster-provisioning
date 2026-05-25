@@ -572,15 +572,31 @@
         tasks_from: longhorn_ui
 
 - name: Manage wildcard ingress DNS record in FreeIPA
-  hosts: localhost
-  connection: local
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
   gather_facts: false
   tags: [addons]
+  pre_tasks:
+    - name: Skip when only adding worker nodes
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
+    - name: Run on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
   vars_files:
     - vars/vault.yml
-    - vars/vms.yml
-    - vars/freeipa.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
   tasks:
+    - name: Wait for Traefik LoadBalancer IP to be assigned
+      ansible.builtin.command:
+        cmd: kubectl get svc traefik -n traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+      register: _traefik_ip
+      changed_when: false
+      until: _traefik_ip.stdout | length > 0
+      retries: 12
+      delay: 10
+
     - name: Create / update *.k8s A record for ingress
       community.general.ipa_dnsrecord:
         ipa_user: admin
@@ -589,7 +605,7 @@
         zone_name: "{{ vault_ipadomain }}"
         record_name: "*.k8s"
         record_type: A
-        record_value: "{{ ingress_ip }}"
+        record_value: "{{ _traefik_ip.stdout }}"
         state: present
 
 # -----------------------------------------------------------------------------
