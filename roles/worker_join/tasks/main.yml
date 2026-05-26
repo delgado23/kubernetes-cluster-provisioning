@@ -108,3 +108,8 @@
   delay: 5
   changed_when: false
   when: not kubelet_conf.stat.exists
+
+- name: Set kubelet config file permissions (CIS 4.1.9)
+  ansible.builtin.file:
+    path: /var/lib/kubelet/config.yaml
+    mode: "0600"
