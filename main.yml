@@ -665,6 +665,11 @@
   tags: [debug]
   vars_files:
     - vars/vault.yml
+    - vars/vms.yml
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   environment:
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   tasks:
