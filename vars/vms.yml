@@ -17,20 +17,28 @@ haproxy_port:        7443             # HAProxy frontend port for kube-apiserver
 # ------------------------------------------------------------------
 # Survey vars — overridable at runtime (e.g. AWX job template survey)
 # ------------------------------------------------------------------
-k8s_api_endpoint:    "k8s-api.example.com"
+cluster_env:         "prod"              # prod | test
+letsencrypt_staging: false               # true = LE staging (untrusted cert), false = LE prod
 k8s_api_endpoint_ip: "172.16.0.29"
 metallb_pool:        "172.16.0.50-172.16.0.60"
-k8s_pod_cidr:        "10.244.0.0/16" # Flannel pod network
-k8s_service_cidr:    "10.96.0.0/12"  # Kubernetes service network
+k8s_pod_cidr:        "10.244.0.0/16"    # Flannel pod network
+k8s_service_cidr:    "10.96.0.0/12"     # Kubernetes service network
+
+# ------------------------------------------------------------------
+# Derived from cluster_env — override via extra_vars only if needed
+# ------------------------------------------------------------------
+ingress_subdomain:        "{{ 'k8s-test' if cluster_env == 'test' else 'k8s' }}"
+k8s_api_endpoint:         "{{ 'k8s-test-api' if cluster_env == 'test' else 'k8s-api' }}.{{ vault_domain }}"
+controlplane_name_prefix: "{{ 'k8s-test-cp' if cluster_env == 'test' else 'k8s-cp' }}"
+worker_name_prefix:       "{{ 'k8s-test-worker' if cluster_env == 'test' else 'k8s-worker' }}"
+controlplane_tags:        "k8s;controlplane;{{ cluster_env }}"
+worker_tags:              "k8s;worker;{{ cluster_env }}"
 
 # ------------------------------------------------------------------
 # Naming and hostgroup strings
 # ------------------------------------------------------------------
 controlplane_hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
-controlplane_name_prefix: "k8s-cp"
-
-worker_hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-worker_name_prefix: "k8s-worker"
+worker_hostgroup:       "AlmaLinux 10/Kubernetes Worker Node"
 
 # ------------------------------------------------------------------
 # Control plane node configs — host_parameters only, names are generated
@@ -42,18 +50,21 @@ controlplane_configs:
       - { name: k8s_role,            value: primary                    }
       - { name: keepalived_state,    value: MASTER                     }
       - { name: keepalived_priority, value: 101                        }
+      - { name: cluster_env,         value: "{{ cluster_env }}"          }
       - { name: k8s_api_endpoint,    value: "{{ k8s_api_endpoint }}"    }
       - { name: k8s_api_endpoint_ip, value: "{{ k8s_api_endpoint_ip }}" }
       - { name: metallb_pool,        value: "{{ metallb_pool }}"        }
 
   # Secondary — provisioned when controlplane_node_count >= 2
   - host_parameters:
-      - { name: k8s_role,            value: secondary }
-      - { name: keepalived_state,    value: BACKUP    }
-      - { name: keepalived_priority, value: 100       }
+      - { name: k8s_role,            value: secondary              }
+      - { name: keepalived_state,    value: BACKUP                 }
+      - { name: keepalived_priority, value: 100                    }
+      - { name: cluster_env,         value: "{{ cluster_env }}"   }
 
   # Secondary — provisioned when controlplane_node_count >= 3
   - host_parameters:
-      - { name: k8s_role,            value: secondary }
-      - { name: keepalived_state,    value: BACKUP    }
-      - { name: keepalived_priority, value: 99        }
+      - { name: k8s_role,            value: secondary              }
+      - { name: keepalived_state,    value: BACKUP                 }
+      - { name: keepalived_priority, value: 99                     }
+      - { name: cluster_env,         value: "{{ cluster_env }}"   }
