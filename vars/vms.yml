@@ -18,6 +18,7 @@ haproxy_port:        7443             # HAProxy frontend port for kube-apiserver
 # Survey vars — overridable at runtime (e.g. AWX job template survey)
 # ------------------------------------------------------------------
 cluster_env:         "prod"              # prod | test
+letsencrypt_staging: false               # true only when testing cert-manager against LE rate limits
 k8s_api_endpoint_ip: "172.16.0.29"
 metallb_pool:        "172.16.0.50-172.16.0.60"
 k8s_pod_cidr:        "10.244.0.0/16"    # Flannel pod network
@@ -28,7 +29,6 @@ k8s_service_cidr:    "10.96.0.0/12"     # Kubernetes service network
 # ------------------------------------------------------------------
 ingress_subdomain:        "{{ 'k8s-test' if cluster_env == 'test' else 'k8s' }}"
 k8s_api_endpoint:         "{{ 'k8s-test-api' if cluster_env == 'test' else 'k8s-api' }}.{{ vault_domain }}"
-letsencrypt_staging:      "{{ cluster_env == 'test' }}"
 controlplane_name_prefix: "{{ 'k8s-test-cp' if cluster_env == 'test' else 'k8s-cp' }}"
 worker_name_prefix:       "{{ 'k8s-test-worker' if cluster_env == 'test' else 'k8s-worker' }}"
 controlplane_tags:        "k8s;controlplane;{{ cluster_env }}"
