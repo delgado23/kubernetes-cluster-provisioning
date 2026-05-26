@@ -340,6 +340,9 @@
     - name: Run on primary control plane only
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'primary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Bootstrap primary control plane
       ansible.builtin.include_role:
@@ -354,6 +357,7 @@
   tags: [bootstrap]
   vars_files:
     - vars/vault.yml
+    - vars/vms.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
@@ -361,6 +365,9 @@
     - name: Skip non-secondary nodes
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'secondary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Join secondary control plane node
       ansible.builtin.include_role:
@@ -372,10 +379,15 @@
   become: true
   gather_facts: false
   tags: [bootstrap]
+  vars_files:
+    - vars/vms.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
       when: controlplane_node_count | int == 0
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Enable kube-apiserver audit logging
       ansible.builtin.include_role:
@@ -387,6 +399,8 @@
   become: true
   gather_facts: false
   tags: [bootstrap]
+  vars_files:
+    - vars/vms.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
@@ -394,6 +408,9 @@
     - name: Run on primary control plane only
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'primary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Install kubelet-serving-cert-approver
       ansible.builtin.include_role:
@@ -405,10 +422,15 @@
   become: true
   gather_facts: false
   tags: [bootstrap]
+  vars_files:
+    - vars/vms.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
       when: controlplane_node_count | int == 0
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Install controlplane tooling
       ansible.builtin.include_role:
@@ -426,6 +448,12 @@
   gather_facts: true
   strategy: free
   tags: [workers]
+  vars_files:
+    - vars/vms.yml
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   roles:
     - role: worker_join
 
@@ -434,12 +462,17 @@
   become: true
   gather_facts: false
   tags: [workers]
+  vars_files:
+    - vars/vms.yml
   environment:
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   pre_tasks:
     - name: Run on primary control plane only
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'primary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Label worker nodes
       ansible.builtin.include_role:
@@ -458,6 +491,11 @@
   tags: [addons]
   vars_files:
     - vars/vault.yml
+    - vars/vms.yml
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Patch kube-apiserver OIDC configuration
       ansible.builtin.include_role:
@@ -476,6 +514,9 @@
     - name: Run add-ons on primary control plane only
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'primary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   vars_files:
     - vars/vault.yml
     - vars/vms.yml
@@ -584,6 +625,9 @@
     - name: Run on primary control plane only
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'primary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   vars_files:
     - vars/vault.yml
     - vars/vms.yml
