@@ -96,7 +96,7 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_proxmox_node` | Proxmox node name (e.g. `pve-01`) |
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
 | `vault_cloudflare_email` | Cloudflare account email |
-| `vault_domain` | Base domain (e.g. `example.com`) — drives `ingress_domain`, `foreman_domain`, `wildcard_secret_name`, and FreeIPA realm |
+| `vault_domain` | Base domain (e.g. `example.com`) — drives `k8s_api_endpoint`, `ingress_domain`, `foreman_domain`, `wildcard_secret_name`, and FreeIPA realm |
 | `vault_authentik_url` | Authentik base URL (e.g. `https://auth.example.com`) |
 | `vault_foreman_url` | Foreman base URL (e.g. `https://foreman.example.com`) |
 | `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
@@ -128,8 +128,9 @@ head -c 32 /dev/urandom | base64
 | `wipe_cluster` | Boolean | `false` | When `true`, removes all existing cluster nodes from Foreman and FreeIPA first, then provisions a fresh cluster using the current `controlplane_node_count` and `worker_node_count` values. |
 | `controlplane_node_count` | Integer | 1 | Number of control plane nodes to provision this run. Set to `0` when only adding worker nodes — this skips the bootstrap and cluster add-ons phases entirely. Max 3. |
 | `worker_node_count` | Integer | 1 | Number of worker nodes to add this run. The provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
-| `letsencrypt_staging` | Boolean | `false` | When `true`, uses the Let's Encrypt **staging** ACME endpoint and names the ClusterIssuer `letsencrypt-cloudflare-staging`. Staging certs are not trusted by browsers but have no rate limits — use this when testing cert-manager config. Set to `false` for a production cluster to issue real trusted certificates. |
-| `k8s_api_endpoint` | String | `k8s-api.example.com` | DNS name for the Kubernetes API endpoint (the keepalived VIP hostname). An A record pointing to `k8s_api_endpoint_ip` is created in FreeIPA during the provision phase and removed on wipe. |
+| `cluster_env` | String | `prod` | `prod` or `test`. Controls node naming prefixes, API endpoint hostname, ingress domain, FreeIPA wildcard DNS record, and ACME endpoint. `prod` → `k8s-cp` / `k8s-worker`, `k8s-api.<domain>`, `k8s.<domain>`, Let's Encrypt production. `test` → `k8s-test-cp` / `k8s-test-worker`, `k8s-test-api.<domain>`, `k8s-test.<domain>`, Let's Encrypt staging. Both clusters can run side-by-side — they use separate DNS records and name prefixes. |
+| `letsencrypt_staging` | Boolean | derived | Auto-derived from `cluster_env` (`true` when `test`, `false` when `prod`). When `true`, uses the Let's Encrypt **staging** ACME endpoint — certs are not browser-trusted but have no rate limits. Only set this directly if you need to decouple it from `cluster_env`. |
+| `k8s_api_endpoint` | String | derived | Auto-derived from `cluster_env` — `k8s-api.<vault_domain>` for prod, `k8s-test-api.<vault_domain>` for test. An A record pointing to `k8s_api_endpoint_ip` is created in FreeIPA during provision and removed on wipe. |
 | `k8s_api_endpoint_ip` | String | `172.16.0.29` | IP address of the keepalived VIP. Also used as `keepalived_vip` — only set this here, do not update them separately. |
 | `metallb_pool` | String | `172.16.0.50-172.16.0.60` | MetalLB L2 address pool range for LoadBalancer services. Traefik automatically claims the first free IP from this pool. |
 | `k8s_pod_cidr` | String | `10.244.0.0/16` | Pod network CIDR passed to kubeadm and used in firewall rules. Must not overlap with your node or service networks. Change only if the default conflicts with your infrastructure. |
@@ -137,7 +138,9 @@ head -c 32 /dev/urandom | base64
 
 `wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
 
-Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. Name prefixes and Foreman hostgroup strings are configured in `vars/vms.yml`.
+Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. The prefix is derived from `cluster_env`: `prod` produces `k8s-cp` / `k8s-worker`; `test` produces `k8s-test-cp` / `k8s-test-worker`. Foreman hostgroup strings are configured in `vars/vms.yml`.
+
+Prod and test clusters can run side-by-side. Each has its own FreeIPA DNS wildcard (`*.k8s` vs `*.k8s-test`), so wiping one does not affect the other's ingress. You must set non-overlapping values for `k8s_api_endpoint_ip` and `metallb_pool` in each cluster's AWX survey — those IP ranges cannot be shared.
 
 ## Usage
 
@@ -235,25 +238,33 @@ ansible-playbook maintenance.yml -e "drain_timeout=600"
 
 ### Wipe Cluster
 
-Queries Foreman for all hosts matching the configured CP and worker prefixes and removes them from Foreman and FreeIPA. Finds everything regardless of how many scale-out runs were done. Does not touch the Proxmox VMs themselves.
+Queries Foreman for all hosts matching the CP and worker name prefixes for the selected `cluster_env` and removes them from Foreman and FreeIPA, along with the keepalived VIP and wildcard DNS records for that environment. Finds everything regardless of how many scale-out runs were done. Does not touch the Proxmox VMs themselves.
 
 ```bash
+# Wipe the prod cluster
 ansible-playbook wipe.yml --ask-vault-pass
+
+# Wipe the test cluster (leaves prod untouched)
+ansible-playbook wipe.yml --ask-vault-pass -e "cluster_env=test"
 ```
 
 ## VM Definitions
 
-Edit `vars/vms.yml` to configure nodes. There are no hardcoded hostnames — both control plane and worker names are generated at runtime from a prefix and a counter (e.g. `k8s-cp-01`, `k8s-worker-03`).
+Edit `vars/vms.yml` to configure nodes. There are no hardcoded hostnames — both control plane and worker names are generated at runtime from a prefix and a counter. The prefix is derived from the `cluster_env` survey var:
+
+- `cluster_env=prod` → `k8s-cp-01`, `k8s-worker-01`, …
+- `cluster_env=test` → `k8s-test-cp-01`, `k8s-test-worker-01`, …
 
 Control plane configs are ordered: index 0 is always the primary. Only the first `controlplane_node_count` entries are provisioned.
 
 ```yaml
-# Naming — adjust prefixes and hostgroups to match your Foreman setup
+# Hostgroups — must match your Foreman setup
 controlplane_hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
-controlplane_name_prefix: "my-cluster-cp"     # → my-cluster-cp-01, my-cluster-cp-02, …
+worker_hostgroup:       "AlmaLinux 10/Kubernetes Worker Node"
 
-worker_hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-worker_name_prefix: "my-cluster-worker"       # → my-cluster-worker-01, my-cluster-worker-02, …
+# Name prefixes are derived from cluster_env (set in AWX survey):
+#   prod → k8s-cp / k8s-worker
+#   test → k8s-test-cp / k8s-test-worker
 
 controlplane_configs:
   # Index 0 — primary, always provisioned
@@ -406,7 +417,7 @@ kubectl logs -n descheduler -l job-name=descheduler-manual -f
 
 ## Exposed Services
 
-After a successful run, all services are accessible via Traefik at the MetalLB LoadBalancer IP. The `*.k8s` FreeIPA DNS record is created automatically during the addons phase — no manual DNS configuration needed for internal access.
+After a successful run, all services are accessible via Traefik at the MetalLB LoadBalancer IP. The wildcard FreeIPA DNS record (`*.k8s` for `cluster_env=prod`, `*.k8s-test` for `cluster_env=test`) is created automatically during the addons phase — no manual DNS configuration needed for internal access.
 
 | Service | URL | Auth |
 |---|---|---|
@@ -418,9 +429,9 @@ After a successful run, all services are accessible via Traefik at the MetalLB L
 | ArgoCD | `https://argocd.{{ ingress_domain }}` | Authentik SSO (OIDC) |
 | Kubernetes API | `https://{{ k8s_api_endpoint }}:6443` | kubeconfig |
 
-`ingress_domain` defaults to `k8s.<domain>` and is configured in `roles/cluster_addons/defaults/main.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}`, is issued by Let's Encrypt via Cloudflare DNS-01, and is automatically mirrored to all addon namespaces by [reflector](https://github.com/emberstack/kubernetes-reflector). When cert-manager renews the cert, reflector pushes the updated secret to every namespace without any manual intervention.
+`ingress_domain` is derived from `cluster_env` (`k8s.<vault_domain>` for prod, `k8s-test.<vault_domain>` for test) via `ingress_subdomain` in `vars/vms.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}`, is issued by Let's Encrypt via Cloudflare DNS-01, and is automatically mirrored to all addon namespaces by [reflector](https://github.com/emberstack/kubernetes-reflector). When cert-manager renews the cert, reflector pushes the updated secret to every namespace without any manual intervention.
 
-The `*.k8s` wildcard A record in FreeIPA is created automatically at the end of the addons phase. Traefik claims the first free IP from the MetalLB pool at deploy time; the actual assigned IP is read back from the service and used for the DNS record — no manual IP configuration needed. The record is removed automatically when `wipe_cluster=true`.
+The wildcard A record in FreeIPA (`*.k8s` for prod, `*.k8s-test` for test) is created automatically at the end of the addons phase. Traefik claims the first free IP from the MetalLB pool at deploy time; the actual assigned IP is read back from the service and used for the DNS record — no manual IP configuration needed. The record is removed automatically when `wipe_cluster=true`, scoped to the cluster being wiped.
 
 Headlamp login uses Authentik OIDC — click **Sign in** on the Headlamp page and you will be redirected to Authentik. No service account token is needed.
 
