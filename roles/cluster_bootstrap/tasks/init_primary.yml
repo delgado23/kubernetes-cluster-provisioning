@@ -111,3 +111,31 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
   when: not kubelet_conf.stat.exists
+
+- name: Create etcd system group (CIS 1.1.12)
+  ansible.builtin.group:
+    name: etcd
+    system: true
+    state: present
+
+- name: Create etcd system user (CIS 1.1.12)
+  ansible.builtin.user:
+    name: etcd
+    group: etcd
+    system: true
+    shell: /sbin/nologin
+    home: /var/lib/etcd
+    create_home: false
+    state: present
+
+- name: Set etcd data directory ownership (CIS 1.1.12)
+  ansible.builtin.file:
+    path: /var/lib/etcd
+    owner: etcd
+    group: etcd
+    recurse: true
+
+- name: Set kubelet config file permissions (CIS 4.1.9)
+  ansible.builtin.file:
+    path: /var/lib/kubelet/config.yaml
+    mode: "0600"

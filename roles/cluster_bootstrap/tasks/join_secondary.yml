@@ -41,8 +41,11 @@
   when: not kubelet_conf.stat.exists
 
 - name: Upload control plane certificates and capture fresh key
-  ansible.builtin.command:
-    cmd: kubeadm init phase upload-certs --upload-certs --config /etc/kubernetes/kubeadm-config.yml
+  ansible.builtin.shell: |
+    TMPKUBE=$(mktemp)
+    sed "s|https://[^:]*:6443|https://127.0.0.1:6443|" /etc/kubernetes/admin.conf > "$TMPKUBE"
+    KUBECONFIG="$TMPKUBE" kubeadm init phase upload-certs --upload-certs --config /etc/kubernetes/kubeadm-config.yml
+    rm -f "$TMPKUBE"
   delegate_to: >-
     {{
       groups['foreman_almalinux10_kubernetescontrolplanenode']
@@ -52,8 +55,6 @@
       | map(attribute='inventory_hostname')
       | first
     }}
-  environment:
-    KUBECONFIG: /etc/kubernetes/admin.conf
   register: upload_certs_output
   changed_when: true
   no_log: true
@@ -66,8 +67,13 @@
   when: not kubelet_conf.stat.exists
 
 - name: Generate fresh join command from primary control plane
-  ansible.builtin.command:
-    cmd: kubeadm token create --print-join-command
+  ansible.builtin.shell: |
+    VIP=$(awk '/virtual_ipaddress/{getline; print $1}' /etc/keepalived/keepalived.conf | tr -d ' ')
+    TMPKUBE=$(mktemp)
+    sed "s|https://[^:]*:6443|https://127.0.0.1:6443|" /etc/kubernetes/admin.conf > "$TMPKUBE"
+    OUTPUT=$(kubeadm token create --print-join-command --kubeconfig "$TMPKUBE")
+    rm -f "$TMPKUBE"
+    echo "$OUTPUT" | sed "s|[a-zA-Z0-9._-]*:6443|${VIP}:6443|"
   delegate_to: >-
     {{
       groups['foreman_almalinux10_kubernetescontrolplanenode']
@@ -77,8 +83,6 @@
       | map(attribute='inventory_hostname')
       | first
     }}
-  environment:
-    KUBECONFIG: /etc/kubernetes/admin.conf
   register: join_cmd_raw
   changed_when: true
   no_log: true
@@ -120,3 +124,31 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
   when: not kubelet_conf.stat.exists
+
+- name: Create etcd system group (CIS 1.1.12)
+  ansible.builtin.group:
+    name: etcd
+    system: true
+    state: present
+
+- name: Create etcd system user (CIS 1.1.12)
+  ansible.builtin.user:
+    name: etcd
+    group: etcd
+    system: true
+    shell: /sbin/nologin
+    home: /var/lib/etcd
+    create_home: false
+    state: present
+
+- name: Set etcd data directory ownership (CIS 1.1.12)
+  ansible.builtin.file:
+    path: /var/lib/etcd
+    owner: etcd
+    group: etcd
+    recurse: true
+
+- name: Set kubelet config file permissions (CIS 4.1.9)
+  ansible.builtin.file:
+    path: /var/lib/kubelet/config.yaml
+    mode: "0600"
