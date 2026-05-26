@@ -1,6 +1,12 @@
 ---
 - name: Generate join command from a control plane node
-  ansible.builtin.command: kubeadm token create --print-join-command
+  ansible.builtin.shell: |
+    VIP=$(awk '/virtual_ipaddress/{getline; print $1}' /etc/keepalived/keepalived.conf | tr -d ' ')
+    TMPKUBE=$(mktemp)
+    sed "s|https://[^:]*:6443|https://127.0.0.1:6443|" /etc/kubernetes/admin.conf > "$TMPKUBE"
+    OUTPUT=$(kubeadm token create --print-join-command --kubeconfig "$TMPKUBE")
+    rm -f "$TMPKUBE"
+    echo "$OUTPUT" | sed "s|[a-zA-Z0-9._-]*:6443|${VIP}:6443|"
   delegate_to: >-
     {{
       groups['foreman_almalinux10_kubernetescontrolplanenode']
