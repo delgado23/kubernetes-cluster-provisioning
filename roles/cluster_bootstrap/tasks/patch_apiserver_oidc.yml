@@ -10,7 +10,17 @@
     - { name: "oidc-client-id", value: "{{ vault_authentik_headlamp_client_id }}" }
     - { name: "oidc-username-claim", value: "email" }
     - { name: "oidc-groups-claim", value: "groups" }
-  register: _apiserver_patch
+  register: _apiserver_oidc_patch
+
+- name: Patch kube-apiserver manifest with security hardening flags (CIS C-02)
+  ansible.builtin.lineinfile:
+    path: /etc/kubernetes/manifests/kube-apiserver.yaml
+    regexp: "^    - --{{ item.name }}="
+    line: "    - --{{ item.name }}={{ item.value }}"
+    insertafter: "^    - --encryption-provider-config="
+  loop:
+    - { name: "anonymous-auth", value: "false" }
+  register: _apiserver_security_patch
 
 - name: Wait for kube-apiserver to restart and become ready
   ansible.builtin.wait_for:
@@ -18,4 +28,4 @@
     port: 6443
     timeout: 120
     delay: 5
-  when: _apiserver_patch.changed
+  when: _apiserver_oidc_patch.changed or _apiserver_security_patch.changed
