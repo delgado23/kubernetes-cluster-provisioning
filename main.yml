@@ -122,21 +122,8 @@
   vars_files:
     - vars/vault.yml
     - vars/vms.yml
-    - vars/foreman.yml
     - vars/freeipa.yml
   tasks:
-    - name: Query Foreman for existing control plane nodes
-      ansible.builtin.uri:
-        url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (controlplane_name_prefix + '-') | urlencode }}%22&per_page=250"
-        method: GET
-        user: "{{ foreman_user }}"
-        password: "{{ foreman_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ foreman_validate_certs }}"
-        headers:
-          Accept: application/json
-      register: _dns_existing_cps
-
     - name: Create / update A record for {{ k8s_api_endpoint }}
       community.general.ipa_dnsrecord:
         ipa_user: admin
@@ -147,7 +134,7 @@
         record_type: A
         record_value: "{{ k8s_api_endpoint_ip }}"
         state: present
-      when: _dns_existing_cps.json.total | int == 0
+      when: not (hostvars['_provision_state']['cps_pre_existed'] | default(false) | bool)
 
 
 # -----------------------------------------------------------------------------
