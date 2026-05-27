@@ -134,6 +134,7 @@
         record_type: A
         record_value: "{{ k8s_api_endpoint_ip }}"
         state: present
+      when: not (hostvars['_provision_state']['cps_pre_existed'] | default(false) | bool)
 
 
 # -----------------------------------------------------------------------------

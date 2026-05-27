@@ -87,6 +87,11 @@
     enabled: true
     state: started
 
+- name: Set kubelet service file permissions (CIS 4.1.1)
+  ansible.builtin.file:
+    path: /lib/systemd/system/kubelet.service
+    mode: "0600"
+
 # kube-proxy uses iptables for service routing (DNAT in PREROUTING). On AlmaLinux 10,
 # firewalld defaults to nftables which runs in parallel and can drop forwarded/DNAT'd
 # traffic before kube-proxy rules fire. Setting iptables backend makes both use the same
