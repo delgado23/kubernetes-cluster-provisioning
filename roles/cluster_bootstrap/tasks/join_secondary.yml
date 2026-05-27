@@ -9,6 +9,11 @@
     msg: "Node {{ inventory_hostname }} already has kubelet.conf — skipping join."
   when: kubelet_conf.stat.exists
 
+- name: Reset any previous kubeadm state before joining
+  ansible.builtin.command: kubeadm reset --force
+  when: not kubelet_conf.stat.exists
+  changed_when: true
+
 - name: Write etcd encryption config
   ansible.builtin.include_tasks: etcd_encryption.yml
   when: not kubelet_conf.stat.exists
@@ -93,6 +98,14 @@
     kubeadm_cp_join_command: >-
       {{ join_cmd_raw.stdout | trim }} --control-plane --certificate-key {{ cp_certificate_key }}
   no_log: "{{ 'debug' not in ansible_run_tags }}"
+  when: not kubelet_conf.stat.exists
+
+- name: Wait for kube-apiserver to be reachable before joining
+  ansible.builtin.wait_for:
+    host: "{{ foreman_params.k8s_api_endpoint_ip }}"
+    port: 6443
+    timeout: 120
+    delay: 5
   when: not kubelet_conf.stat.exists
 
 - name: Join cluster as control plane
