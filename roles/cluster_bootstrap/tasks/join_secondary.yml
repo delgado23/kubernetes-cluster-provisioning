@@ -57,13 +57,13 @@
     }}
   register: upload_certs_output
   changed_when: true
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
 - name: Extract certificate key from upload output
   ansible.builtin.set_fact:
     cp_certificate_key: "{{ upload_certs_output.stdout_lines | last | trim }}"
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
 - name: Generate fresh join command from primary control plane
@@ -85,14 +85,14 @@
     }}
   register: join_cmd_raw
   changed_when: true
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
 - name: Build control plane join command
   ansible.builtin.set_fact:
     kubeadm_cp_join_command: >-
       {{ join_cmd_raw.stdout | trim }} --control-plane --certificate-key {{ cp_certificate_key }}
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
 - name: Join cluster as control plane
@@ -100,7 +100,7 @@
     cmd: "{{ kubeadm_cp_join_command }}"
   register: join_output
   changed_when: true
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
 - name: Print join output

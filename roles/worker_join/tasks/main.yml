@@ -18,12 +18,12 @@
     }}
   register: kubeadm_join_cmd
   changed_when: true
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Set join command fact
   ansible.builtin.set_fact:
     kubeadm_join_command: "{{ kubeadm_join_cmd.stdout }}"
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Verify kubelet service exists
   ansible.builtin.service_facts:
@@ -97,7 +97,7 @@
   when: not kubelet_conf.stat.exists
   register: join_result
   changed_when: join_result.rc == 0
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Show join output
   ansible.builtin.debug:
