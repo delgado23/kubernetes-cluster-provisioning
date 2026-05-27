@@ -12,7 +12,7 @@
     validate_certs: true
     status_code: 200
   register: _ipa_login
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Look up {{ k8s_api_endpoint.split('.')[0] }} A record in FreeIPA
   ansible.builtin.uri:
