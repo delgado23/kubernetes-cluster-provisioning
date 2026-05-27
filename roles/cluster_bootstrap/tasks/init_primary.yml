@@ -78,6 +78,12 @@
   changed_when: true
   when: not kubelet_conf.stat.exists
 
+- name: Patch kubeconfig server to use VIP IP (bypass DNS)
+  ansible.builtin.shell: |
+    VIP=$(awk '/virtual_ipaddress/{getline; print $1}' /etc/keepalived/keepalived.conf | tr -d ' ' | cut -d/ -f1)
+    sed -i "s|https://[^:]*:6443|https://${VIP}:6443|" /root/.kube/config
+  changed_when: true
+
 - name: Fetch latest Flannel release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/flannel-io/flannel/releases/latest
