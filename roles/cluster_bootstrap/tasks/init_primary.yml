@@ -87,7 +87,7 @@
 
 - name: Run kubeadm init
   ansible.builtin.command:
-    cmd: kubeadm init --config /etc/kubernetes/kubeadm-config.yml --upload-certs --patches /etc/kubernetes/kubeadm-patches
+    cmd: kubeadm init --config /etc/kubernetes/kubeadm-config.yml --upload-certs
   register: kubeadm_init_output
   changed_when: true
   when: not kubelet_conf.stat.exists

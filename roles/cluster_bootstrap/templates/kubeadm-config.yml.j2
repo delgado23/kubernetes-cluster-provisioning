@@ -11,6 +11,8 @@ nodeRegistration:
   kubeletExtraArgs:
     - name: rotate-server-certificates
       value: "true"
+patches:
+  directory: /etc/kubernetes/kubeadm-patches
 ---
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
