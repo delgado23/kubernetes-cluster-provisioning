@@ -106,49 +106,18 @@
   changed_when: true
   when: not kubelet_conf.stat.exists
 
-- name: Allow bootstrap tokens to read cluster-info (required when anonymous-auth=false)
-  ansible.builtin.shell: |
-    kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f - <<'EOF'
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: ClusterRoleBinding
-    metadata:
-      name: kubeadm:bootstrap-signer-clusterinfo
-    subjects:
-    - kind: Group
-      name: system:bootstrappers:kubeadm:default-node-token
-      apiGroup: rbac.authorization.k8s.io
-    roleRef:
-      kind: ClusterRole
-      name: system:public-info-viewer
-      apiGroup: rbac.authorization.k8s.io
-    EOF
-  changed_when: true
-  when: not kubelet_conf.stat.exists
-
-- name: Create discovery kubeconfig for secondary CP joins (bypasses anonymous-auth restriction)
-  ansible.builtin.shell: |
-    CA_DATA=$(base64 -w0 /etc/kubernetes/pki/ca.crt)
-    cat > /etc/kubernetes/kubeadm-discovery.yaml <<EOF
-    apiVersion: v1
-    kind: Config
-    clusters:
-    - cluster:
-        certificate-authority-data: ${CA_DATA}
-        server: https://{{ k8s_api_endpoint_ip }}:6443
-      name: kubernetes
-    contexts:
-    - context:
-        cluster: kubernetes
-        user: kubeadm-discovery
-      name: kubernetes
-    current-context: kubernetes
-    preferences: {}
-    users:
-    - name: kubeadm-discovery
-      user: {}
-    EOF
-    chmod 0600 /etc/kubernetes/kubeadm-discovery.yaml
-  changed_when: true
+- name: Stage admin kubeconfig as discovery file for secondary CP joins
+  # Required when anonymous-auth=false: kubeadm join's preflight fetches
+  # cluster-info from kube-public, which is anonymous by default.  Using
+  # admin.conf here means the fetch is authenticated with cluster-admin
+  # credentials and bypasses the anonymous-auth gate entirely.
+  ansible.builtin.copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /etc/kubernetes/kubeadm-discovery.yaml
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0600'
   when: not kubelet_conf.stat.exists
 
 - name: Fetch latest Flannel release from GitHub
