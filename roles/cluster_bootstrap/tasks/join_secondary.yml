@@ -270,6 +270,12 @@
   changed_when: true
   when: not kubelet_conf.stat.exists
 
+- name: Remove discovery kubeconfig after successful join (held cluster-admin creds)
+  ansible.builtin.file:
+    path: /etc/kubernetes/kubeadm-discovery.yaml
+    state: absent
+  when: not kubelet_conf.stat.exists
+
 - name: Wait for secondary control plane to be ready
   ansible.builtin.command:
     cmd: "kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=120s"
