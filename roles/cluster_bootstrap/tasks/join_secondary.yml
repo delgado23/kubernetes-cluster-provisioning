@@ -102,7 +102,7 @@
 
 - name: Wait for kube-apiserver to be reachable before joining
   ansible.builtin.wait_for:
-    host: "{{ foreman_params.k8s_api_endpoint_ip }}"
+    host: "{{ k8s_api_endpoint_ip }}"
     port: 6443
     timeout: 120
     delay: 5
