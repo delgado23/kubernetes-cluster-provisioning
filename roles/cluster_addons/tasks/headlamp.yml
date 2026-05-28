@@ -60,20 +60,31 @@
 
   no_log: "{{ 'debug' not in ansible_run_tags }}"
 
-- name: Install or upgrade Headlamp via Helm
-  ansible.builtin.command:
-    cmd: >
-      /usr/local/bin/helm upgrade --install headlamp headlamp/headlamp
-      --namespace {{ headlamp_namespace }}
-      --create-namespace
-      --version {{ headlamp_version }}
-      --values {{ k8s_manifests_dir }}/headlamp/values.yml
-      --wait
+- name: Install or upgrade Headlamp via Helm (retry on transient RBAC errors)
+  # Headlamp's install is occasionally hit by a transient RBAC denial during
+  # the helm --wait watch phase, even though kubernetes-admin has cluster-admin.
+  # This appears to coincide with kube-prometheus-stack's admission-webhook
+  # ClusterRoleBinding churn finishing.  If a previous attempt left the release
+  # in a pending-install state, uninstall it before retrying.
+  ansible.builtin.shell: |
+    set -e
+    if /usr/local/bin/helm status headlamp -n {{ headlamp_namespace }} 2>/dev/null | grep -qE 'STATUS:\s+pending-'; then
+      /usr/local/bin/helm uninstall headlamp -n {{ headlamp_namespace }} --wait || true
+    fi
+    /usr/local/bin/helm upgrade --install headlamp headlamp/headlamp \
+      --namespace {{ headlamp_namespace }} \
+      --create-namespace \
+      --version {{ headlamp_version }} \
+      --values {{ k8s_manifests_dir }}/headlamp/values.yml \
+      --wait \
       --timeout 10m
   environment:
     KUBECONFIG: /root/.kube/config
   register: headlamp_helm_output
   changed_when: true
+  retries: 3
+  delay: 30
+  until: headlamp_helm_output.rc == 0
   ignore_errors: true
 
 - name: Print Headlamp Helm output
