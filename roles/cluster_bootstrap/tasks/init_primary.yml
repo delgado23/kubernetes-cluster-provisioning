@@ -106,6 +106,25 @@
   changed_when: true
   when: not kubelet_conf.stat.exists
 
+- name: Allow bootstrap tokens to read cluster-info (required when anonymous-auth=false)
+  ansible.builtin.shell: |
+    kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f - <<'EOF'
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: kubeadm:bootstrap-signer-clusterinfo
+    subjects:
+    - kind: Group
+      name: system:bootstrappers:kubeadm:default-node-token
+      apiGroup: rbac.authorization.k8s.io
+    roleRef:
+      kind: ClusterRole
+      name: system:public-info-viewer
+      apiGroup: rbac.authorization.k8s.io
+    EOF
+  changed_when: true
+  when: not kubelet_conf.stat.exists
+
 - name: Fetch latest Flannel release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/flannel-io/flannel/releases/latest
