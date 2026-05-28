@@ -136,8 +136,11 @@
         certificate-authority-data: ${CA_DATA}
         server: https://{{ k8s_api_endpoint_ip }}:6443
       name: kubernetes
-    contexts: []
-    current-context: ""
+    contexts:
+    - context:
+        cluster: kubernetes
+      name: kubernetes
+    current-context: kubernetes
     preferences: {}
     users: []
     EOF
