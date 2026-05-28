@@ -125,6 +125,26 @@
   changed_when: true
   when: not kubelet_conf.stat.exists
 
+- name: Create discovery kubeconfig for secondary CP joins (bypasses anonymous-auth restriction)
+  ansible.builtin.shell: |
+    CA_DATA=$(base64 -w0 /etc/kubernetes/pki/ca.crt)
+    cat > /etc/kubernetes/kubeadm-discovery.yaml <<EOF
+    apiVersion: v1
+    kind: Config
+    clusters:
+    - cluster:
+        certificate-authority-data: ${CA_DATA}
+        server: https://{{ k8s_api_endpoint_ip }}:6443
+      name: kubernetes
+    contexts: []
+    current-context: ""
+    preferences: {}
+    users: []
+    EOF
+    chmod 0600 /etc/kubernetes/kubeadm-discovery.yaml
+  changed_when: true
+  when: not kubelet_conf.stat.exists
+
 - name: Fetch latest Flannel release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/flannel-io/flannel/releases/latest

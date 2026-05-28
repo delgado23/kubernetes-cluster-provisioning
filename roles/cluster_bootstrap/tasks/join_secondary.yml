@@ -93,10 +93,45 @@
   no_log: false
   when: not kubelet_conf.stat.exists
 
-- name: Build control plane join command
+- name: Extract token from join command
+  ansible.builtin.set_fact:
+    _bootstrap_token: "{{ join_cmd_raw.stdout | regex_search('--token\\s+(\\S+)', '\\1') | first }}"
+  no_log: false
+  when: not kubelet_conf.stat.exists
+
+- name: Fetch discovery kubeconfig from primary control plane
+  ansible.builtin.fetch:
+    src: /etc/kubernetes/kubeadm-discovery.yaml
+    dest: /tmp/kubeadm-discovery-{{ cluster_env }}.yaml
+    flat: true
+  delegate_to: >-
+    {{
+      groups['foreman_almalinux10_kubernetescontrolplanenode']
+      | map('extract', hostvars)
+      | selectattr('foreman_params.k8s_role', 'equalto', 'primary')
+      | selectattr('foreman_params.cluster_env', 'equalto', foreman_params.cluster_env)
+      | map(attribute='inventory_hostname')
+      | first
+    }}
+  when: not kubelet_conf.stat.exists
+
+- name: Copy discovery kubeconfig to secondary CP
+  ansible.builtin.copy:
+    src: /tmp/kubeadm-discovery-{{ cluster_env }}.yaml
+    dest: /etc/kubernetes/kubeadm-discovery.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  when: not kubelet_conf.stat.exists
+
+- name: Build control plane join command (file-based discovery bypasses anonymous-auth restriction)
   ansible.builtin.set_fact:
     kubeadm_cp_join_command: >-
-      {{ join_cmd_raw.stdout | trim }} --control-plane --certificate-key {{ cp_certificate_key }}
+      kubeadm join
+      --discovery-file /etc/kubernetes/kubeadm-discovery.yaml
+      --token {{ _bootstrap_token }}
+      --control-plane
+      --certificate-key {{ cp_certificate_key }}
   no_log: false
   when: not kubelet_conf.stat.exists
 
@@ -212,7 +247,11 @@
     - name: Build retry join command
       ansible.builtin.set_fact:
         kubeadm_cp_join_command: >-
-          {{ _retry_join_cmd_raw.stdout | trim }} --control-plane --certificate-key {{ cp_certificate_key }}
+          kubeadm join
+          --discovery-file /etc/kubernetes/kubeadm-discovery.yaml
+          --token {{ _retry_join_cmd_raw.stdout | regex_search('--token\s+(\S+)', '\1') | first }}
+          --control-plane
+          --certificate-key {{ cp_certificate_key }}
       no_log: false
 
     - name: Retry join cluster as control plane
