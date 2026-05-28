@@ -57,9 +57,37 @@
     mode: '0700'
   when: not kubelet_conf.stat.exists
 
+- name: Create kubeadm patches directory
+  ansible.builtin.file:
+    path: /etc/kubernetes/kubeadm-patches
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: not kubelet_conf.stat.exists
+
+- name: Write apiserver liveness probe patch
+  ansible.builtin.copy:
+    dest: /etc/kubernetes/kubeadm-patches/kube-apiserver+strategic.yaml
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: kube-apiserver
+        namespace: kube-system
+      spec:
+        containers:
+        - name: kube-apiserver
+          livenessProbe:
+            failureThreshold: 40
+  when: not kubelet_conf.stat.exists
+
 - name: Run kubeadm init
   ansible.builtin.command:
-    cmd: kubeadm init --config /etc/kubernetes/kubeadm-config.yml --upload-certs
+    cmd: kubeadm init --config /etc/kubernetes/kubeadm-config.yml --upload-certs --patches /etc/kubernetes/kubeadm-patches
   register: kubeadm_init_output
   changed_when: true
   when: not kubelet_conf.stat.exists

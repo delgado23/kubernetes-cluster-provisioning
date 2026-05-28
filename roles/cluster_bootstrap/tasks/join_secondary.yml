@@ -100,6 +100,34 @@
   no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
+- name: Create kubeadm patches directory
+  ansible.builtin.file:
+    path: /etc/kubernetes/kubeadm-patches
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: not kubelet_conf.stat.exists
+
+- name: Write apiserver liveness probe patch
+  ansible.builtin.copy:
+    dest: /etc/kubernetes/kubeadm-patches/kube-apiserver+strategic.yaml
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: kube-apiserver
+        namespace: kube-system
+      spec:
+        containers:
+        - name: kube-apiserver
+          livenessProbe:
+            failureThreshold: 40
+  when: not kubelet_conf.stat.exists
+
 - name: Wait for kube-apiserver to be reachable before joining
   ansible.builtin.wait_for:
     host: "{{ k8s_api_endpoint_ip }}"
@@ -113,7 +141,7 @@
   block:
     - name: Join cluster as control plane
       ansible.builtin.command:
-        cmd: "{{ kubeadm_cp_join_command }}"
+        cmd: "{{ kubeadm_cp_join_command }} --patches /etc/kubernetes/kubeadm-patches"
       register: join_output
       changed_when: true
       no_log: "{{ 'debug' not in ansible_run_tags }}"
@@ -189,7 +217,7 @@
 
     - name: Retry join cluster as control plane
       ansible.builtin.command:
-        cmd: "{{ kubeadm_cp_join_command }}"
+        cmd: "{{ kubeadm_cp_join_command }} --patches /etc/kubernetes/kubeadm-patches"
       register: join_output
       changed_when: true
       no_log: "{{ 'debug' not in ansible_run_tags }}"
