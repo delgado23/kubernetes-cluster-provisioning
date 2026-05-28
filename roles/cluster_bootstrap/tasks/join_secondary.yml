@@ -108,18 +108,91 @@
     delay: 5
   when: not kubelet_conf.stat.exists
 
-- name: Join cluster as control plane
-  ansible.builtin.command:
-    cmd: "{{ kubeadm_cp_join_command }}"
-  register: join_output
-  changed_when: true
-  no_log: "{{ 'debug' not in ansible_run_tags }}"
+- name: Join cluster as control plane (with one retry on apiserver disruption)
   when: not kubelet_conf.stat.exists
+  block:
+    - name: Join cluster as control plane
+      ansible.builtin.command:
+        cmd: "{{ kubeadm_cp_join_command }}"
+      register: join_output
+      changed_when: true
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
 
-- name: Print join output
-  ansible.builtin.debug:
-    var: join_output.stdout_lines
-  when: not kubelet_conf.stat.exists
+    - name: Print join output
+      ansible.builtin.debug:
+        var: join_output.stdout_lines
+  rescue:
+    # The primary apiserver briefly restarts during etcd leader election when
+    # this node adds itself as a new etcd member.  Reset, wait for recovery,
+    # refresh credentials, and retry once.
+    - name: Reset kubeadm state after failed join
+      ansible.builtin.command: kubeadm reset --force
+      changed_when: true
+
+    - name: Wait for primary apiserver to recover
+      ansible.builtin.wait_for:
+        host: "{{ k8s_api_endpoint_ip }}"
+        port: 6443
+        timeout: 300
+        delay: 30
+
+    - name: Re-upload control plane certificates for retry
+      ansible.builtin.shell: |
+        TMPKUBE=$(mktemp)
+        sed "s|https://[^:]*:6443|https://127.0.0.1:6443|" /etc/kubernetes/admin.conf > "$TMPKUBE"
+        KUBECONFIG="$TMPKUBE" kubeadm init phase upload-certs --upload-certs --config /etc/kubernetes/kubeadm-config.yml
+        rm -f "$TMPKUBE"
+      delegate_to: >-
+        {{
+          groups['foreman_almalinux10_kubernetescontrolplanenode']
+          | map('extract', hostvars)
+          | selectattr('foreman_params.k8s_role', 'equalto', 'primary')
+          | selectattr('foreman_params.cluster_env', 'equalto', foreman_params.cluster_env)
+          | map(attribute='inventory_hostname')
+          | first
+        }}
+      register: _retry_upload_certs_output
+      changed_when: true
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Extract retry certificate key
+      ansible.builtin.set_fact:
+        cp_certificate_key: "{{ _retry_upload_certs_output.stdout_lines | last | trim }}"
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Generate fresh join command for retry
+      ansible.builtin.shell: |
+        VIP=$(awk '/virtual_ipaddress/{getline; print $1}' /etc/keepalived/keepalived.conf | tr -d ' ')
+        TMPKUBE=$(mktemp)
+        sed "s|https://[^:]*:6443|https://127.0.0.1:6443|" /etc/kubernetes/admin.conf > "$TMPKUBE"
+        OUTPUT=$(kubeadm token create --print-join-command --kubeconfig "$TMPKUBE")
+        rm -f "$TMPKUBE"
+        echo "$OUTPUT" | sed "s|[a-zA-Z0-9._-]*:6443|${VIP}:6443|"
+      delegate_to: >-
+        {{
+          groups['foreman_almalinux10_kubernetescontrolplanenode']
+          | map('extract', hostvars)
+          | selectattr('foreman_params.k8s_role', 'equalto', 'primary')
+          | selectattr('foreman_params.cluster_env', 'equalto', foreman_params.cluster_env)
+          | map(attribute='inventory_hostname')
+          | first
+        }}
+      register: _retry_join_cmd_raw
+      changed_when: true
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Build retry join command
+      ansible.builtin.set_fact:
+        kubeadm_cp_join_command: >-
+          {{ _retry_join_cmd_raw.stdout | trim }} --control-plane --certificate-key {{ cp_certificate_key }}
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Retry join cluster as control plane
+      ansible.builtin.command:
+        cmd: "{{ kubeadm_cp_join_command }}"
+      register: join_output
+      changed_when: true
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Set up kubeconfig for root
   ansible.builtin.shell: |
