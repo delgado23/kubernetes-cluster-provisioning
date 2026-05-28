@@ -139,10 +139,13 @@
     contexts:
     - context:
         cluster: kubernetes
+        user: kubeadm-discovery
       name: kubernetes
     current-context: kubernetes
     preferences: {}
-    users: []
+    users:
+    - name: kubeadm-discovery
+      user: {}
     EOF
     chmod 0600 /etc/kubernetes/kubeadm-discovery.yaml
   changed_when: true
