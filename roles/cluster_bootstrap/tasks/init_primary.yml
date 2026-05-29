@@ -48,6 +48,15 @@
     mode: '0600'
   when: not kubelet_conf.stat.exists
 
+- name: Write kube-apiserver authentication config (OIDC + anonymous on health only)
+  ansible.builtin.template:
+    src: apiserver-auth-config.yaml.j2
+    dest: /etc/kubernetes/apiserver-auth.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  when: not kubelet_conf.stat.exists
+
 - name: Create audit log directory
   ansible.builtin.file:
     path: /var/log/kubernetes
@@ -55,6 +64,34 @@
     owner: root
     group: root
     mode: '0700'
+  when: not kubelet_conf.stat.exists
+
+- name: Create kubeadm patches directory
+  ansible.builtin.file:
+    path: /etc/kubernetes/kubeadm-patches
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: not kubelet_conf.stat.exists
+
+- name: Write apiserver liveness probe patch
+  ansible.builtin.copy:
+    dest: /etc/kubernetes/kubeadm-patches/kube-apiserver+strategic.yaml
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: kube-apiserver
+        namespace: kube-system
+      spec:
+        containers:
+        - name: kube-apiserver
+          livenessProbe:
+            failureThreshold: 40
   when: not kubelet_conf.stat.exists
 
 - name: Run kubeadm init
@@ -76,6 +113,20 @@
     chown root:root /root/.kube/config
     chmod 0600 /root/.kube/config
   changed_when: true
+  when: not kubelet_conf.stat.exists
+
+- name: Stage admin kubeconfig as discovery file for secondary CP joins
+  # Required when anonymous-auth=false: kubeadm join's preflight fetches
+  # cluster-info from kube-public, which is anonymous by default.  Using
+  # admin.conf here means the fetch is authenticated with cluster-admin
+  # credentials and bypasses the anonymous-auth gate entirely.
+  ansible.builtin.copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /etc/kubernetes/kubeadm-discovery.yaml
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0600'
   when: not kubelet_conf.stat.exists
 
 - name: Fetch latest Flannel release from GitHub
