@@ -129,18 +129,6 @@
     mode: '0600'
   when: not kubelet_conf.stat.exists
 
-- name: Fetch latest Flannel release from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/flannel-io/flannel/releases/latest
-    return_content: true
-  register: flannel_release
-  delegate_to: localhost
-  become: false
-
-- name: Set Flannel version fact
-  ansible.builtin.set_fact:
-    flannel_version: "{{ flannel_release.json.tag_name }}"
-
 - name: Install Flannel CNI
   ansible.builtin.command:
     cmd: kubectl apply -f https://github.com/flannel-io/flannel/releases/download/{{ flannel_version }}/kube-flannel.yml
@@ -161,6 +149,62 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
+  when: not kubelet_conf.stat.exists
+
+- name: Apply kube-system and kube-flannel NetworkPolicies
+  ansible.builtin.shell: |
+    kubectl apply -f - <<'EOF'
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-coredns-ingress
+      namespace: kube-system
+    spec:
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+      policyTypes:
+        - Ingress
+      ingress:
+        - ports:
+            - port: 53
+              protocol: UDP
+            - port: 53
+              protocol: TCP
+            - port: 9153
+              protocol: TCP
+    ---
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: default-deny-ingress
+      namespace: kube-flannel
+    spec:
+      podSelector: {}
+      policyTypes:
+        - Ingress
+    ---
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-flannel-vxlan
+      namespace: kube-flannel
+    spec:
+      podSelector:
+        matchLabels:
+          app: flannel
+      policyTypes:
+        - Ingress
+      ingress:
+        - ports:
+            - port: 8472
+              protocol: UDP
+            - port: 4789
+              protocol: UDP
+    EOF
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
   when: not kubelet_conf.stat.exists
 
 - name: Create etcd system group (CIS 1.1.12)
