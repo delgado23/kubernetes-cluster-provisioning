@@ -71,13 +71,13 @@
     }}
   register: upload_certs_output
   changed_when: true
-  no_log: false
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
 - name: Extract certificate key from upload output
   ansible.builtin.set_fact:
     cp_certificate_key: "{{ upload_certs_output.stdout_lines | last | trim }}"
-  no_log: false
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
 - name: Generate fresh join command from primary control plane
@@ -99,13 +99,13 @@
     }}
   register: join_cmd_raw
   changed_when: true
-  no_log: false
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
 - name: Extract token from join command
   ansible.builtin.set_fact:
     _bootstrap_token: "{{ join_cmd_raw.stdout | regex_search('--token\\s+(\\S+)', '\\1') | first }}"
-  no_log: false
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
 - name: Fetch discovery kubeconfig from primary control plane
@@ -141,7 +141,7 @@
       --token {{ _bootstrap_token }}
       --control-plane
       --certificate-key {{ cp_certificate_key }}
-  no_log: false
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
 - name: Create kubeadm patches directory
@@ -188,7 +188,7 @@
         cmd: "{{ kubeadm_cp_join_command }} --patches /etc/kubernetes/kubeadm-patches"
       register: join_output
       changed_when: true
-      no_log: false
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
 
     - name: Print join output
       ansible.builtin.debug:
@@ -225,12 +225,12 @@
         }}
       register: _retry_upload_certs_output
       changed_when: true
-      no_log: false
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
 
     - name: Extract retry certificate key
       ansible.builtin.set_fact:
         cp_certificate_key: "{{ _retry_upload_certs_output.stdout_lines | last | trim }}"
-      no_log: false
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
 
     - name: Generate fresh join command for retry
       ansible.builtin.shell: |
@@ -251,7 +251,7 @@
         }}
       register: _retry_join_cmd_raw
       changed_when: true
-      no_log: false
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
 
     - name: Build retry join command
       ansible.builtin.set_fact:
@@ -261,14 +261,14 @@
           --token {{ _retry_join_cmd_raw.stdout | regex_search('--token\s+(\S+)', '\1') | first }}
           --control-plane
           --certificate-key {{ cp_certificate_key }}
-      no_log: false
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
 
     - name: Retry join cluster as control plane
       ansible.builtin.command:
         cmd: "{{ kubeadm_cp_join_command }} --patches /etc/kubernetes/kubeadm-patches"
       register: join_output
       changed_when: true
-      no_log: false
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Set up kubeconfig for root
   ansible.builtin.shell: |

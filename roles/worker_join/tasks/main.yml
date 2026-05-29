@@ -16,7 +16,7 @@
     }}
   register: kubeadm_join_token
   changed_when: true
-  no_log: false
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Fetch discovery kubeconfig from primary control plane
   ansible.builtin.fetch:
@@ -47,7 +47,7 @@
       kubeadm join
       --discovery-file /etc/kubernetes/kubeadm-discovery.yaml
       --token {{ kubeadm_join_token.stdout | trim }}
-  no_log: false
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Verify kubelet service exists
   ansible.builtin.service_facts:
@@ -129,7 +129,7 @@
   when: not kubelet_conf.stat.exists
   register: join_result
   changed_when: join_result.rc == 0
-  no_log: false
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Show join output
   ansible.builtin.debug:
