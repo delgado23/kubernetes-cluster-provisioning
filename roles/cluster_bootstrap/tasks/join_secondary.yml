@@ -80,14 +80,12 @@
   no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
-- name: Generate fresh join command from primary control plane
+- name: Generate bootstrap token from primary control plane
   ansible.builtin.shell: |
-    VIP=$(awk '/virtual_ipaddress/{getline; print $1}' /etc/keepalived/keepalived.conf | tr -d ' ')
     TMPKUBE=$(mktemp)
     sed "s|https://[^:]*:6443|https://127.0.0.1:6443|" /etc/kubernetes/admin.conf > "$TMPKUBE"
-    OUTPUT=$(kubeadm token create --print-join-command --kubeconfig "$TMPKUBE")
+    kubeadm token create --kubeconfig "$TMPKUBE"
     rm -f "$TMPKUBE"
-    echo "$OUTPUT" | sed "s|[a-zA-Z0-9._-]*:6443|${VIP}:6443|"
   delegate_to: >-
     {{
       groups['foreman_almalinux10_kubernetescontrolplanenode']
@@ -99,12 +97,6 @@
     }}
   register: join_cmd_raw
   changed_when: true
-  no_log: "{{ 'debug' not in ansible_run_tags }}"
-  when: not kubelet_conf.stat.exists
-
-- name: Extract token from join command
-  ansible.builtin.set_fact:
-    _bootstrap_token: "{{ join_cmd_raw.stdout | regex_search('--token\\s+(\\S+)', '\\1') | first }}"
   no_log: "{{ 'debug' not in ansible_run_tags }}"
   when: not kubelet_conf.stat.exists
 
@@ -138,7 +130,7 @@
     kubeadm_cp_join_command: >-
       kubeadm join
       --discovery-file /etc/kubernetes/kubeadm-discovery.yaml
-      --token {{ _bootstrap_token }}
+      --token {{ join_cmd_raw.stdout | trim }}
       --control-plane
       --certificate-key {{ cp_certificate_key }}
   no_log: "{{ 'debug' not in ansible_run_tags }}"
@@ -232,14 +224,12 @@
         cp_certificate_key: "{{ _retry_upload_certs_output.stdout_lines | last | trim }}"
       no_log: "{{ 'debug' not in ansible_run_tags }}"
 
-    - name: Generate fresh join command for retry
+    - name: Generate bootstrap token for retry
       ansible.builtin.shell: |
-        VIP=$(awk '/virtual_ipaddress/{getline; print $1}' /etc/keepalived/keepalived.conf | tr -d ' ')
         TMPKUBE=$(mktemp)
         sed "s|https://[^:]*:6443|https://127.0.0.1:6443|" /etc/kubernetes/admin.conf > "$TMPKUBE"
-        OUTPUT=$(kubeadm token create --print-join-command --kubeconfig "$TMPKUBE")
+        kubeadm token create --kubeconfig "$TMPKUBE"
         rm -f "$TMPKUBE"
-        echo "$OUTPUT" | sed "s|[a-zA-Z0-9._-]*:6443|${VIP}:6443|"
       delegate_to: >-
         {{
           groups['foreman_almalinux10_kubernetescontrolplanenode']
@@ -258,7 +248,7 @@
         kubeadm_cp_join_command: >-
           kubeadm join
           --discovery-file /etc/kubernetes/kubeadm-discovery.yaml
-          --token {{ _retry_join_cmd_raw.stdout | regex_search('--token\s+(\S+)', '\1') | first }}
+          --token {{ _retry_join_cmd_raw.stdout | trim }}
           --control-plane
           --certificate-key {{ cp_certificate_key }}
       no_log: "{{ 'debug' not in ansible_run_tags }}"
