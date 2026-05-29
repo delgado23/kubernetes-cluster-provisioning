@@ -1,0 +1,30 @@
+# kube-apiserver structured authentication configuration.
+#
+# Replaces the bare --anonymous-auth=false flag, which made the kubelet's
+# unauthenticated /livez and /readyz probes return 401 and crash-looped the
+# apiserver.  Here anonymous access is enabled ONLY for the health endpoints,
+# so probes pass while every other path still requires authentication.
+#
+# OIDC (Headlamp) lives in the jwt section because --authentication-config is
+# mutually exclusive with the --oidc-* command-line flags.
+# Requires Kubernetes >= 1.32 (AnonymousAuthConfigurableEndpoints).
+apiVersion: apiserver.config.k8s.io/v1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: true
+  conditions:
+    - path: /livez
+    - path: /readyz
+    - path: /healthz
+jwt:
+  - issuer:
+      url: "{{ authentik_headlamp_issuer }}"
+      audiences:
+        - "{{ vault_authentik_headlamp_client_id }}"
+    claimMappings:
+      username:
+        claim: email
+        prefix: ""
+      groups:
+        claim: groups
+        prefix: ""

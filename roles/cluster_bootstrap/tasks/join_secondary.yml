@@ -36,6 +36,15 @@
     mode: '0600'
   when: not kubelet_conf.stat.exists
 
+- name: Write kube-apiserver authentication config (OIDC + anonymous on health only)
+  ansible.builtin.template:
+    src: apiserver-auth-config.yaml.j2
+    dest: /etc/kubernetes/apiserver-auth.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  when: not kubelet_conf.stat.exists
+
 - name: Create audit log directory
   ansible.builtin.file:
     path: /var/log/kubernetes

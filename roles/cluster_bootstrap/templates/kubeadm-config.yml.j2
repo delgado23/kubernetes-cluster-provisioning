@@ -44,16 +44,14 @@ apiServer:
       value: "10"
     - name: audit-log-maxsize
       value: "100"
-    - name: oidc-issuer-url
-      value: "{{ authentik_headlamp_issuer }}"
-    - name: oidc-client-id
-      value: "{{ vault_authentik_headlamp_client_id }}"
-    - name: oidc-username-claim
-      value: email
-    - name: oidc-groups-claim
-      value: groups
-    - name: anonymous-auth
-      value: "false"
+    # OIDC (Headlamp) and the anonymous-auth restriction are configured via the
+    # structured AuthenticationConfiguration file mounted below.  A bare
+    # --anonymous-auth=false breaks the kubelet's /livez & /readyz probes
+    # (401 -> apiserver crash loop), so anonymous is enabled there for health
+    # endpoints only.  --authentication-config is mutually exclusive with the
+    # --oidc-* flags, so OIDC lives in that file too.
+    - name: authentication-config
+      value: /etc/kubernetes/apiserver-auth.yaml
     - name: profiling
       value: "false"
     - name: kubelet-certificate-authority
@@ -74,6 +72,11 @@ apiServer:
       mountPath: /var/log/kubernetes
       readOnly: false
       pathType: DirectoryOrCreate
+    - name: apiserver-auth
+      hostPath: /etc/kubernetes/apiserver-auth.yaml
+      mountPath: /etc/kubernetes/apiserver-auth.yaml
+      readOnly: true
+      pathType: File
 controllerManager:
   extraArgs:
     - name: profiling
