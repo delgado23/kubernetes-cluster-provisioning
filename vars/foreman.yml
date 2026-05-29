@@ -5,9 +5,7 @@
 foreman_url: "{{ vault_foreman_url }}"
 foreman_user: "{{ vault_foreman_user }}"
 foreman_password: "{{ vault_foreman_password }}"
-# false because Foreman uses a self-signed cert on the internal homelab network.
-# Set to true if Foreman is fronted by a trusted CA-signed certificate.
-foreman_validate_certs: false
+foreman_validate_certs: true
 foreman_domain: "{{ vault_domain }}"
 
 # Location and Organization — required by Foreman on every host
