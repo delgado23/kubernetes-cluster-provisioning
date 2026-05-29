@@ -52,7 +52,7 @@
     content: |
       configs:
         params:
-          server.insecure: "true"
+          server.insecure: "false"
         cm:
           url: "https://argocd.{{ ingress_domain }}"
           oidc.config: |
@@ -84,8 +84,6 @@
 
       server:
         replicas: 2
-        extraArgs:
-          - --insecure
         resources:
           requests:
             cpu: 100m
@@ -238,6 +236,14 @@
     mode: "0600"
     content: |
       apiVersion: traefik.io/v1alpha1
+      kind: ServersTransport
+      metadata:
+        name: argocd-backend
+        namespace: {{ argocd_namespace }}
+      spec:
+        insecureSkipVerify: true
+      ---
+      apiVersion: traefik.io/v1alpha1
       kind: IngressRoute
       metadata:
         name: argocd
@@ -250,7 +256,9 @@
             kind: Rule
             services:
               - name: argocd-server
-                port: 80
+                port: 443
+                scheme: https
+                serversTransport: argocd-backend
         tls:
           secretName: {{ wildcard_secret_name }}
 
@@ -266,15 +274,18 @@
   ansible.builtin.debug:
     var: argocd_ingress_output.stdout_lines
 
+- name: Delete ArgoCD initial admin secret
+  ansible.builtin.command:
+    cmd: kubectl delete secret argocd-initial-admin-secret -n {{ argocd_namespace }} --ignore-not-found
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
 - name: Print ArgoCD access summary
   ansible.builtin.debug:
     msg:
       - "================================================="
       - "ArgoCD installed."
       - "URL      : https://argocd.{{ ingress_domain }}"
-      - "Username : admin"
-      - "Password : kubectl get secret argocd-initial-admin-secret"
-      - "           -n {{ argocd_namespace }}"
-      - "           -o jsonpath='{.data.password}' | base64 -d"
-      - "Change the password after first login."
+      - "Login via Authentik OIDC — initial admin secret deleted."
       - "================================================="

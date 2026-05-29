@@ -53,3 +53,12 @@
 - name: Print reflector Helm output
   ansible.builtin.debug:
     var: reflector_helm_output.stdout_lines
+
+- name: Restrict reflector ClusterRole to minimum required verbs
+  ansible.builtin.shell: |
+    kubectl patch clusterrole reflector --type=json -p='[
+      {"op": "replace", "path": "/rules/0/verbs", "value": ["get","list","watch","create","update","patch"]}
+    ]'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true

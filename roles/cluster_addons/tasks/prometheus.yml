@@ -152,6 +152,47 @@
       apiVersion: networking.k8s.io/v1
       kind: NetworkPolicy
       metadata:
+        name: monitoring-egress
+        namespace: {{ prometheus_namespace }}
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Egress
+        egress:
+          # DNS resolution
+          - ports:
+              - port: 53
+                protocol: UDP
+              - port: 53
+                protocol: TCP
+          # Intra-namespace (prometheus <-> alertmanager <-> operator)
+          - to:
+              - podSelector: {}
+          # kube-apiserver (metrics scraping + API access)
+          - to:
+              - ipBlock:
+                  cidr: {{ k8s_service_cidr }}
+            ports:
+              - port: 443
+                protocol: TCP
+          # Scrape metrics from pods in any namespace
+          - to:
+              - namespaceSelector: {}
+            ports:
+              - port: 9100
+                protocol: TCP
+              - port: 8080
+                protocol: TCP
+              - port: 8443
+                protocol: TCP
+              - port: 10250
+                protocol: TCP
+              - port: 10255
+                protocol: TCP
+      ---
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
         name: prometheus-ingress
         namespace: {{ prometheus_namespace }}
       spec:
