@@ -656,6 +656,45 @@
         state: present
 
 # -----------------------------------------------------------------------------
+# PHASE 6: Enable autoscale schedule
+# -----------------------------------------------------------------------------
+
+- name: Enable autoscale schedule for {{ cluster_env }}
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [addons]
+  vars_files:
+    - vars/vault.yml
+    - vars/awx.yml
+    - vars/vms.yml
+  tasks:
+    - name: Find autoscale schedule for {{ cluster_env }}
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/job_templates/{{ autoscale_template_id }}/schedules/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ awx_token }}"
+        validate_certs: true
+        return_content: true
+      register: _schedules
+
+    - name: Enable autoscale schedule
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/schedules/{{ item.id }}/"
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ awx_token }}"
+        body_format: json
+        body:
+          enabled: true
+        validate_certs: true
+        status_code: [200]
+      loop: "{{ _schedules.json.results | selectattr('name', 'search', 'Autoscale ' + cluster_env) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+# -----------------------------------------------------------------------------
 # DEBUG: Ingress diagnostics (ansible-playbook main.yml --tags debug)
 # -----------------------------------------------------------------------------
 

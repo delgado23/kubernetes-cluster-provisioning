@@ -1,0 +1,4 @@
+---
+awx_url:                  "{{ vault_awx_url }}"
+awx_token:                "{{ vault_awx_token }}"
+autoscale_template_id:    56
