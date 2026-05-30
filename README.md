@@ -19,9 +19,10 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | Monitoring | Prometheus + AlertManager (kube-prometheus-stack), Longhorn-backed PVCs, node-exporter + kube-state-metrics; Grafana replaced by Headlamp plugin |
 | Dashboard | Headlamp (Kubernetes UI) with Prometheus metrics plugin for in-UI charts |
 | Tooling | kubectl, Helm, k9s on all control plane nodes |
-| etcd encryption | AES-CBC encryption at rest for all Secrets, configured at kubeadm init time |
+| etcd encryption | XSalsa20-Poly1305 (secretbox) authenticated encryption at rest for all Secrets, configured at kubeadm init time |
 | Pod Security Standards | Namespace-scoped enforcement — `privileged` for storage/network system namespaces, `baseline`/`restricted` for application namespaces |
-| Policy engine | Kyverno in Audit mode — reports violations for latest image tags, missing resource limits, privileged containers, and host namespace use |
+| Policy engine | Kyverno in Enforce mode — blocks pods violating latest image tags, missing resource limits, privileged containers, and host namespace use |
+| NetworkPolicies | Default-deny ingress in all addon namespaces; kube-system (CoreDNS allow), kube-flannel (VXLAN allow), and monitoring (egress scoped to DNS, API server, scrape targets) |
 | Pod rebalancing | Descheduler CronJob (every 6 h) — evicts pods from hot nodes, spreads Deployment replicas, enforces topology spread constraints |
 | Addon versions | Resolved from GitHub releases at runtime — always installs latest |
 
@@ -99,7 +100,7 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_domain` | Base domain (e.g. `example.com`) — drives `k8s_api_endpoint`, `ingress_domain`, `foreman_domain`, `wildcard_secret_name`, and FreeIPA realm |
 | `vault_authentik_url` | Authentik base URL (e.g. `https://auth.example.com`) |
 | `vault_foreman_url` | Foreman base URL (e.g. `https://foreman.example.com`) |
-| `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
+| `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd secretbox (XSalsa20-Poly1305) encryption at rest |
 | `vault_duo_ikey` | DUO Unix integration key (application identifier) |
 | `vault_duo_secret_key` | DUO Unix integration secret key for SSH 2FA |
 | `vault_duo_host` | DUO API hostname (e.g. `api-xxxxxxxx.duosecurity.com`) |
@@ -115,7 +116,7 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_ntp_servers` | List of NTP server FQDNs for FreeIPA client enrollment |
 | `vault_keepalived_password` | Keepalived VRRP authentication password |
 
-Generate the etcd encryption key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
+Generate the secretbox key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
 
 ```bash
 head -c 32 /dev/urandom | base64
@@ -340,7 +341,7 @@ The Traefik and Longhorn IngressRoutes include a dedicated route for `/outpost.g
 3. Note the Client ID and Client Secret — add the secret to vault as `vault_authentik_headlamp_client_secret`
 4. In Authentik, ensure the user's email is marked as **verified** — kube-apiserver rejects OIDC tokens where `email_verified: false` when `--oidc-username-claim=email` is set
 
-The kube-apiserver is configured with OIDC flags (`--oidc-issuer-url`, `--oidc-client-id`, `--oidc-username-claim=email`, `--oidc-groups-claim=groups`) so that Headlamp can make Kubernetes API calls using the user's OIDC token directly. This configuration is applied automatically during the addons phase via the `patch_apiserver_oidc` task, which patches the static pod manifest on all control plane nodes and waits for the apiserver to restart. The `headlamp_admin_group` default (`"authentik Admins"`) is bound to `cluster-admin` via a ClusterRoleBinding that covers both the Headlamp service account and OIDC group subjects.
+The kube-apiserver is configured via a structured `AuthenticationConfiguration` file (`apiserver-auth.yaml`) that enables OIDC for Headlamp (issuer URL, client ID, username/groups claims) and restricts anonymous access to health endpoints only (`/livez`, `/readyz`, `/healthz`). This replaces individual `--oidc-*` flags, which are mutually exclusive with `--authentication-config`. The configuration is applied automatically during bootstrap and updated during the addons phase via the `patch_apiserver_oidc` task. The `headlamp_admin_group` default (`"authentik Admins"`) is bound to `cluster-admin` via a ClusterRoleBinding that covers both the Headlamp service account and OIDC group subjects.
 
 ## Prometheus Monitoring
 
@@ -435,10 +436,4 @@ The wildcard A record in FreeIPA (`*.k8s` for prod, `*.k8s-test` for test) is cr
 
 Headlamp login uses Authentik OIDC — click **Sign in** on the Headlamp page and you will be redirected to Authentik. No service account token is needed.
 
-Retrieve the ArgoCD initial admin password after the addons run completes:
-
-```bash
-kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath='{.data.password}' | base64 -d
-```
-
-Change the password after first login — ArgoCD deletes the `argocd-initial-admin-secret` once the password is updated, which is expected.
+ArgoCD login uses Authentik OIDC exclusively — the `argocd-initial-admin-secret` is automatically deleted after install. Use the **Log in via Authentik** button on the ArgoCD login page.
