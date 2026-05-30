@@ -20,7 +20,7 @@
         - resources:
             - secrets
           providers:
-            - aescbc:
+            - secretbox:
                 keys:
                   - name: key1
                     secret: {{ vault_etcd_encryption_key }}
