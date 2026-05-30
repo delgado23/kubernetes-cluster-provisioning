@@ -166,7 +166,7 @@
         validate_certs: true
         return_content: true
       register: _pve_vms
-      no_log: "{{ 'debug' not in ansible_run_tags }}"
+      no_log: false
 
     - name: Build short-hostname → VMID map
       ansible.builtin.set_fact:
@@ -192,7 +192,7 @@
       loop_control:
         label: "{{ item.short }}"
       when: item.short in _vmid_map
-      no_log: "{{ 'debug' not in ansible_run_tags }}"
+      no_log: false
 
     # ── 5. Combine utilisation + Proxmox config into scale decision list ────
 
@@ -234,7 +234,7 @@
         - item.cpu_pct | int > cpu_scale_threshold | int
         - item.cur_cores < item.max_cores
       register: _cpu_scaled
-      no_log: "{{ 'debug' not in ansible_run_tags }}"
+      no_log: false
 
     - name: Report CPU scaling actions
       ansible.builtin.debug:
@@ -267,7 +267,7 @@
         - item.mem_pct | int > memory_scale_threshold | int
         - item.cur_mem_mb < item.max_mem_mb
       register: _mem_scaled
-      no_log: "{{ 'debug' not in ansible_run_tags }}"
+      no_log: false
 
     - name: Report memory scaling actions
       ansible.builtin.debug:
@@ -300,7 +300,7 @@
         - item.cpu_pct | int < cpu_scaledown_threshold | int
         - item.cur_cores > item.min_cores
       register: _cpu_scaled_down
-      no_log: "{{ 'debug' not in ansible_run_tags }}"
+      no_log: false
 
     - name: Report CPU scale-down actions
       ansible.builtin.debug:
@@ -333,7 +333,7 @@
         - item.mem_pct | int < memory_scaledown_threshold | int
         - item.cur_mem_mb > item.min_mem_mb
       register: _mem_scaled_down
-      no_log: "{{ 'debug' not in ansible_run_tags }}"
+      no_log: false
 
     - name: Report memory scale-down actions
       ansible.builtin.debug:
