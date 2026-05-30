@@ -17,12 +17,19 @@
 # =============================================================================
 
 - name: Autoscale cluster node CPU and memory
-  hosts: localhost
-  connection: local
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
   gather_facts: false
   vars_files:
     - vars/vault.yml
     - vars/vms.yml
+
+  pre_tasks:
+    - name: Run on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
 
   vars:
     cpu_scale_threshold:      70    # scale up CPU  when node utilisation exceeds this %
@@ -52,8 +59,6 @@
     _pve_base: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}"
     _pve_auth: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ vault_proxmox_api_token }}"
 
-    _primary_cp: "{{ controlplane_name_prefix }}-01.{{ vault_domain }}"
-
   tasks:
     # ── 1. Collect Kubernetes metrics ───────────────────────────────────────
 
@@ -62,7 +67,6 @@
       environment:
         KUBECONFIG: /etc/kubernetes/admin.conf
       register: _metrics_raw
-      delegate_to: "{{ _primary_cp }}"
       changed_when: false
 
     - name: Fetch node capacity and role labels
@@ -70,7 +74,6 @@
       environment:
         KUBECONFIG: /etc/kubernetes/admin.conf
       register: _nodes_raw
-      delegate_to: "{{ _primary_cp }}"
       changed_when: false
 
     # ── 2. Build per-node utilisation list ──────────────────────────────────
