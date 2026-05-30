@@ -45,25 +45,22 @@
     _primary_cp: "{{ controlplane_name_prefix }}-01.{{ vault_domain }}"
 
   tasks:
-
     # ── 1. Collect Kubernetes metrics ───────────────────────────────────────
 
     - name: Fetch node resource usage from metrics-server
-      ansible.builtin.command: kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes
+      ansible.builtin.command: sudo kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes
       environment:
         KUBECONFIG: /etc/kubernetes/admin.conf
       register: _metrics_raw
       delegate_to: "{{ _primary_cp }}"
-      become: true
       changed_when: false
 
     - name: Fetch node capacity and role labels
-      ansible.builtin.command: kubectl get nodes -o json
+      ansible.builtin.command: sudo kubectl get nodes -o json
       environment:
         KUBECONFIG: /etc/kubernetes/admin.conf
       register: _nodes_raw
       delegate_to: "{{ _primary_cp }}"
-      become: true
       changed_when: false
 
     # ── 2. Build per-node utilisation list ──────────────────────────────────
