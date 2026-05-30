@@ -32,7 +32,7 @@
             memory: 128Mi
           limits:
             cpu: 500m
-            memory: 384Mi
+            memory: 640Mi
 
       backgroundController:
         resources:
@@ -50,7 +50,7 @@
             memory: 64Mi
           limits:
             cpu: 200m
-            memory: 128Mi
+            memory: 256Mi
 
       reportsController:
         resources:
