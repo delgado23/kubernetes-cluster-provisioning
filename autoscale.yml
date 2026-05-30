@@ -63,8 +63,6 @@
         KUBECONFIG: /etc/kubernetes/admin.conf
       register: _metrics_raw
       delegate_to: "{{ _primary_cp }}"
-      become: true
-      become_user: root
       changed_when: false
 
     - name: Fetch node capacity and role labels
@@ -73,8 +71,6 @@
         KUBECONFIG: /etc/kubernetes/admin.conf
       register: _nodes_raw
       delegate_to: "{{ _primary_cp }}"
-      become: true
-      become_user: root
       changed_when: false
 
     # ── 2. Build per-node utilisation list ──────────────────────────────────
