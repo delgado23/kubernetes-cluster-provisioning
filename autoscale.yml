@@ -30,6 +30,16 @@
     cpu_scale_step:           1     # vCPU cores to add per run
     memory_scale_step_mb:     1024  # MB to add per run (1 GB)
 
+    cpu_scaledown_threshold:      30    # scale down CPU  when utilisation drops below this %
+    memory_scaledown_threshold:   40    # scale down RAM  when utilisation drops below this %
+    cpu_scaledown_step:           1     # vCPU cores to remove per run
+    memory_scaledown_step_mb:     1024  # MB to remove per run (1 GB)
+
+    controlplane_min_cores:     2
+    controlplane_min_memory_mb: 2048   # 2 GB
+    worker_min_cores:           2
+    worker_min_memory_mb:       2048   # 2 GB
+
     controlplane_max_cores:     6
     controlplane_max_memory_mb: 6144   # 6 GB
     worker_max_cores:           4
@@ -95,6 +105,8 @@
                 'is_cp':      is_cp,
                 'cpu_pct':    cpu_pct,
                 'mem_pct':    mem_pct,
+                'min_cores':  controlplane_min_cores     if is_cp else worker_min_cores,
+                'min_mem_mb': controlplane_min_memory_mb if is_cp else worker_min_memory_mb,
                 'max_cores':  controlplane_max_cores     if is_cp else worker_max_cores,
                 'max_mem_mb': controlplane_max_memory_mb if is_cp else worker_max_memory_mb
               }) -%}
@@ -237,9 +249,77 @@
         label: "{{ item.item.short }}"
       when: not (item.skipped | default(false))
 
+    # ── 8. Scale down CPU cores where utilisation is low ────────────────────
+
+    - name: Scale down CPU cores
+      ansible.builtin.uri:
+        url: "{{ _pve_base }}/qemu/{{ item.vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _pve_auth }}"
+        body_format: form-urlencoded
+        body:
+          cores: "{{ [item.cur_cores - cpu_scaledown_step, item.min_cores] | max }}"
+        validate_certs: true
+        status_code: [200]
+      loop: "{{ _scale_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+      when:
+        - item.cpu_pct | int < cpu_scaledown_threshold | int
+        - item.cur_cores > item.min_cores
+      register: _cpu_scaled_down
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Report CPU scale-down actions
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.short }}: CPU scaled down
+          {{ item.item.cur_cores }} → {{ [item.item.cur_cores - cpu_scaledown_step, item.item.min_cores] | max }} cores
+          (was {{ item.item.cpu_pct }}% utilised, threshold {{ cpu_scaledown_threshold }}%)
+      loop: "{{ _cpu_scaled_down.results }}"
+      loop_control:
+        label: "{{ item.item.short }}"
+      when: not (item.skipped | default(false))
+
+    # ── 9. Scale down memory where utilisation is low ────────────────────────
+
+    - name: Scale down memory
+      ansible.builtin.uri:
+        url: "{{ _pve_base }}/qemu/{{ item.vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _pve_auth }}"
+        body_format: form-urlencoded
+        body:
+          memory: "{{ [item.cur_mem_mb - memory_scaledown_step_mb, item.min_mem_mb] | max }}"
+        validate_certs: true
+        status_code: [200]
+      loop: "{{ _scale_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+      when:
+        - item.mem_pct | int < memory_scaledown_threshold | int
+        - item.cur_mem_mb > item.min_mem_mb
+      register: _mem_scaled_down
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Report memory scale-down actions
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.short }}: RAM scaled down
+          {{ item.item.cur_mem_mb }} → {{ [item.item.cur_mem_mb - memory_scaledown_step_mb, item.item.min_mem_mb] | max }} MB
+          (was {{ item.item.mem_pct }}% utilised, threshold {{ memory_scaledown_threshold }}%)
+      loop: "{{ _mem_scaled_down.results }}"
+      loop_control:
+        label: "{{ item.item.short }}"
+      when: not (item.skipped | default(false))
+
     - name: No scaling needed
       ansible.builtin.debug:
         msg: "All nodes within thresholds — no scaling applied."
       when:
-        - _cpu_scaled.results | selectattr('skipped', 'equalto', false) | list | length == 0
-        - _mem_scaled.results | selectattr('skipped', 'equalto', false) | list | length == 0
+        - _cpu_scaled.results      | selectattr('skipped', 'equalto', false) | list | length == 0
+        - _mem_scaled.results      | selectattr('skipped', 'equalto', false) | list | length == 0
+        - _cpu_scaled_down.results | selectattr('skipped', 'equalto', false) | list | length == 0
+        - _mem_scaled_down.results | selectattr('skipped', 'equalto', false) | list | length == 0
