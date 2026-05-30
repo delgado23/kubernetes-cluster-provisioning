@@ -9,3 +9,6 @@ controlplane_tags: "k8s;controlplane"
 worker_tags: "k8s;worker"
 shutdown_timeout: 120
 startup_timeout: 120
+
+controlplane_max_cores: 6
+worker_max_cores:       4

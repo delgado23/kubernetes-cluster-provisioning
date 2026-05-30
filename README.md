@@ -19,11 +19,13 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | Monitoring | Prometheus + AlertManager (kube-prometheus-stack), Longhorn-backed PVCs, node-exporter + kube-state-metrics; Grafana replaced by Headlamp plugin |
 | Dashboard | Headlamp (Kubernetes UI) with Prometheus metrics plugin for in-UI charts |
 | Tooling | kubectl, Helm, k9s on all control plane nodes |
-| etcd encryption | AES-CBC encryption at rest for all Secrets, configured at kubeadm init time |
+| etcd encryption | XSalsa20-Poly1305 (secretbox) authenticated encryption at rest for all Secrets, configured at kubeadm init time |
 | Pod Security Standards | Namespace-scoped enforcement — `privileged` for storage/network system namespaces, `baseline`/`restricted` for application namespaces |
-| Policy engine | Kyverno in Audit mode — reports violations for latest image tags, missing resource limits, privileged containers, and host namespace use |
+| Policy engine | Kyverno in Enforce mode — blocks pods violating latest image tags, missing resource limits, privileged containers, and host namespace use |
+| NetworkPolicies | Default-deny ingress in all addon namespaces; kube-system (CoreDNS allow), kube-flannel (VXLAN allow), and monitoring (egress scoped to DNS, API server, scrape targets) |
 | Pod rebalancing | Descheduler CronJob (every 6 h) — evicts pods from hot nodes, spreads Deployment replicas, enforces topology spread constraints |
 | Addon versions | Resolved from GitHub releases at runtime — always installs latest |
+| VM hotplug | CPU and memory hotplug enabled at provision time; `cores` and `vcpus` set to the per-role max (6 CP / 4 worker) so the autoscaler adjusts `vcpus` live without reboots |
 
 Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlplane_node_count` and `worker_node_count` (see [AWX Survey Variables](#awx-survey-variables)).
 
@@ -43,6 +45,8 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ```
 .
 ├── main.yml              # Full cluster provisioning pipeline
+├── autoscale.yml                  # Vertical autoscaler — scales CPU/RAM up and down via Proxmox based on utilisation
+├── autoscale-horizontal.yml       # Horizontal autoscaler — adds or removes worker nodes via AWX based on average utilisation
 ├── maintenance.yml       # Rolling OS maintenance (drain/update/reboot/uncordon)
 ├── wipe.yml              # Remove all nodes from Foreman and FreeIPA
 ├── handlers/
@@ -58,7 +62,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 │   └── vm_defaults.yml   # Default VM hardware specs
 └── roles/
     ├── vm_provisioning/       # Create VMs in Foreman/Proxmox, filters by node counts
-    ├── proxmox_postconfig/    # EFI disk, rename, tags via Proxmox API
+    ├── proxmox_postconfig/    # EFI disk, rename, tags, CPU/memory hotplug via Proxmox API
     ├── enterprise_linux/      # Base OS provisioning: repos, packages, atop, DUO install
     ├── common/                # K8s prerequisites: containerd, kubelet, firewall
     ├── controlplane_infra/    # HAProxy, keepalived, controlplane firewall rules
@@ -99,7 +103,7 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_domain` | Base domain (e.g. `example.com`) — drives `k8s_api_endpoint`, `ingress_domain`, `foreman_domain`, `wildcard_secret_name`, and FreeIPA realm |
 | `vault_authentik_url` | Authentik base URL (e.g. `https://auth.example.com`) |
 | `vault_foreman_url` | Foreman base URL (e.g. `https://foreman.example.com`) |
-| `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
+| `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd secretbox (XSalsa20-Poly1305) encryption at rest |
 | `vault_duo_ikey` | DUO Unix integration key (application identifier) |
 | `vault_duo_secret_key` | DUO Unix integration secret key for SSH 2FA |
 | `vault_duo_host` | DUO API hostname (e.g. `api-xxxxxxxx.duosecurity.com`) |
@@ -114,8 +118,10 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_ipadomain` | FreeIPA domain (e.g. `example.com`) |
 | `vault_ntp_servers` | List of NTP server FQDNs for FreeIPA client enrollment |
 | `vault_keepalived_password` | Keepalived VRRP authentication password |
+| `vault_awx_url` | AWX/Ascender base URL (e.g. `https://ascender.example.com`) |
+| `vault_awx_token` | AWX API token — used to enable/disable autoscale schedules after build/wipe |
 
-Generate the etcd encryption key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
+Generate the secretbox key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
 
 ```bash
 head -c 32 /dev/urandom | base64
@@ -181,6 +187,55 @@ Set `controlplane_node_count=0` to skip bootstrap and cluster add-ons. The playb
 ```bash
 ansible-playbook main.yml --ask-vault-pass -e "controlplane_node_count=0 worker_node_count=2"
 ```
+
+### Vertical Autoscaling
+
+`autoscale.yml` queries the metrics-server for current CPU and memory utilisation on each node and adjusts resources via the Proxmox API — scaling up when utilisation is high, and reclaiming when it is low. The VM does not reboot — CPU changes are delivered live by adjusting `vcpus` (Proxmox hotplug), and memory changes are delivered live via memory hotplug. Both are enabled automatically during the provision phase, which also sets `cores` to the per-role maximum so the full range is available for hotplug from first boot.
+
+| Role | CPU min | CPU max | RAM min | RAM max |
+|---|---|---|---|---|
+| Control plane | 2 cores | 6 cores | 2 GB | 6 GB |
+| Worker | 2 cores | 4 cores | 2 GB | 4 GB |
+
+Run manually:
+
+```bash
+ansible-playbook autoscale.yml --ask-vault-pass -e "cluster_env=prod"
+```
+
+Designed to run on an AWX schedule (e.g. every 30 minutes). Survey variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `cluster_env` | `prod` | Target cluster — `prod` or `test` |
+| `cpu_scale_threshold` | `70` | Add a core when any node's CPU% exceeds this |
+| `memory_scale_threshold` | `80` | Add 1 GB when any node's memory% exceeds this |
+| `cpu_scaledown_threshold` | `30` | Remove a core when any node's CPU% drops below this |
+| `memory_scaledown_threshold` | `40` | Remove 1 GB when any node's memory% drops below this |
+
+Each run adds or removes at most 1 core or 1 GB per node, clamped to the per-role min/max. If all nodes are within their thresholds the playbook reports "no scaling needed" and exits cleanly. Requires `metrics-server` running in the cluster (installed automatically).
+
+### Horizontal Autoscaling
+
+`autoscale-horizontal.yml` monitors average worker utilisation and provisions or removes entire worker nodes by triggering the existing AWX job templates. Designed to run every 15 minutes.
+
+**Scale-out** — when average worker CPU or memory exceeds the threshold, launches "Scale Out Worker Nodes" (template 54) to add one worker via the full Foreman provisioning pipeline (~20–30 min).
+
+**Scale-in** — when average worker CPU and memory both drop below the threshold and removing a node won't push remaining workers over the scale-out threshold, launches "Scale Down Worker Nodes" (template 53) against the least-loaded worker (drain → kubeadm reset → Foreman/FreeIPA removal).
+
+**Cooldown** — skips all scaling if a scale-out or scale-in job is already running or pending, preventing concurrent operations.
+
+| Variable | Default | Description |
+|---|---|---|
+| `cluster_env` | `prod` | Target cluster — `prod` or `test` |
+| `worker_scale_out_cpu_threshold` | `70` | Add a worker when avg CPU% exceeds this |
+| `worker_scale_out_mem_threshold` | `80` | Add a worker when avg memory% exceeds this |
+| `worker_scale_in_cpu_threshold` | `20` | Remove a worker when avg CPU% drops below this |
+| `worker_scale_in_mem_threshold` | `30` | Remove a worker when avg memory% drops below this |
+| `worker_min_count` | `2` | Never scale below this many workers |
+| `worker_max_count` | `10` | Never scale above this many workers |
+
+Both vertical and horizontal autoscale schedules are enabled automatically when a cluster build succeeds and disabled when a cluster is wiped.
 
 ### Run a Specific Phase
 
@@ -340,7 +395,7 @@ The Traefik and Longhorn IngressRoutes include a dedicated route for `/outpost.g
 3. Note the Client ID and Client Secret — add the secret to vault as `vault_authentik_headlamp_client_secret`
 4. In Authentik, ensure the user's email is marked as **verified** — kube-apiserver rejects OIDC tokens where `email_verified: false` when `--oidc-username-claim=email` is set
 
-The kube-apiserver is configured with OIDC flags (`--oidc-issuer-url`, `--oidc-client-id`, `--oidc-username-claim=email`, `--oidc-groups-claim=groups`) so that Headlamp can make Kubernetes API calls using the user's OIDC token directly. This configuration is applied automatically during the addons phase via the `patch_apiserver_oidc` task, which patches the static pod manifest on all control plane nodes and waits for the apiserver to restart. The `headlamp_admin_group` default (`"authentik Admins"`) is bound to `cluster-admin` via a ClusterRoleBinding that covers both the Headlamp service account and OIDC group subjects.
+The kube-apiserver is configured via a structured `AuthenticationConfiguration` file (`apiserver-auth.yaml`) that enables OIDC for Headlamp (issuer URL, client ID, username/groups claims) and restricts anonymous access to health endpoints only (`/livez`, `/readyz`, `/healthz`). This replaces individual `--oidc-*` flags, which are mutually exclusive with `--authentication-config`. The configuration is applied automatically during bootstrap and updated during the addons phase via the `patch_apiserver_oidc` task. The `headlamp_admin_group` default (`"authentik Admins"`) is bound to `cluster-admin` via a ClusterRoleBinding that covers both the Headlamp service account and OIDC group subjects.
 
 ## Prometheus Monitoring
 
@@ -435,10 +490,4 @@ The wildcard A record in FreeIPA (`*.k8s` for prod, `*.k8s-test` for test) is cr
 
 Headlamp login uses Authentik OIDC — click **Sign in** on the Headlamp page and you will be redirected to Authentik. No service account token is needed.
 
-Retrieve the ArgoCD initial admin password after the addons run completes:
-
-```bash
-kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath='{.data.password}' | base64 -d
-```
-
-Change the password after first login — ArgoCD deletes the `argocd-initial-admin-secret` once the password is updated, which is expected.
+ArgoCD login uses Authentik OIDC exclusively — the `argocd-initial-admin-secret` is automatically deleted after install. Use the **Log in via Authentik** button on the ArgoCD login page.
