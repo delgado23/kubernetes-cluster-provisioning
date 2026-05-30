@@ -25,6 +25,7 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | NetworkPolicies | Default-deny ingress in all addon namespaces; kube-system (CoreDNS allow), kube-flannel (VXLAN allow), and monitoring (egress scoped to DNS, API server, scrape targets) |
 | Pod rebalancing | Descheduler CronJob (every 6 h) — evicts pods from hot nodes, spreads Deployment replicas, enforces topology spread constraints |
 | Addon versions | Resolved from GitHub releases at runtime — always installs latest |
+| VM hotplug | CPU and memory hotplug enabled on all VMs at provision time — allows `autoscale.yml` to hot-add resources without reboots |
 
 Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlplane_node_count` and `worker_node_count` (see [AWX Survey Variables](#awx-survey-variables)).
 
@@ -44,6 +45,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ```
 .
 ├── main.yml              # Full cluster provisioning pipeline
+├── autoscale.yml         # Vertical autoscaler — hot-adds CPU/RAM via Proxmox when utilisation is high
 ├── maintenance.yml       # Rolling OS maintenance (drain/update/reboot/uncordon)
 ├── wipe.yml              # Remove all nodes from Foreman and FreeIPA
 ├── handlers/
@@ -59,7 +61,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 │   └── vm_defaults.yml   # Default VM hardware specs
 └── roles/
     ├── vm_provisioning/       # Create VMs in Foreman/Proxmox, filters by node counts
-    ├── proxmox_postconfig/    # EFI disk, rename, tags via Proxmox API
+    ├── proxmox_postconfig/    # EFI disk, rename, tags, CPU/memory hotplug via Proxmox API
     ├── enterprise_linux/      # Base OS provisioning: repos, packages, atop, DUO install
     ├── common/                # K8s prerequisites: containerd, kubelet, firewall
     ├── controlplane_infra/    # HAProxy, keepalived, controlplane firewall rules
@@ -182,6 +184,31 @@ Set `controlplane_node_count=0` to skip bootstrap and cluster add-ons. The playb
 ```bash
 ansible-playbook main.yml --ask-vault-pass -e "controlplane_node_count=0 worker_node_count=2"
 ```
+
+### Vertical Autoscaling (Scale Up Node Resources)
+
+`autoscale.yml` queries the metrics-server for current CPU and memory utilisation on each node and hot-adds resources via the Proxmox API when utilisation exceeds the configured thresholds. The VM does not reboot — Proxmox delivers the new cores and memory live via hotplug (enabled automatically during the provision phase).
+
+| Role | CPU max | RAM max |
+|---|---|---|
+| Control plane | 6 cores | 6 GB |
+| Worker | 4 cores | 4 GB |
+
+Run manually:
+
+```bash
+ansible-playbook autoscale.yml --ask-vault-pass -e "cluster_env=prod"
+```
+
+Designed to run on an AWX schedule (e.g. every 30 minutes). Survey variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `cluster_env` | `prod` | Target cluster — `prod` or `test` |
+| `cpu_scale_threshold` | `70` | Add a core when any node's CPU% exceeds this |
+| `memory_scale_threshold` | `80` | Add 1 GB when any node's memory% exceeds this |
+
+Each run adds at most 1 core or 1 GB per node. If all nodes are within their thresholds the playbook reports "no scaling needed" and exits cleanly. Requires `metrics-server` running in the cluster (installed automatically).
 
 ### Run a Specific Phase
 
