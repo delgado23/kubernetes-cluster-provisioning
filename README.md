@@ -45,7 +45,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ```
 .
 ├── main.yml              # Full cluster provisioning pipeline
-├── autoscale.yml         # Vertical autoscaler — hot-adds CPU/RAM via Proxmox when utilisation is high
+├── autoscale.yml         # Vertical autoscaler — scales CPU/RAM up and down via Proxmox based on utilisation
 ├── maintenance.yml       # Rolling OS maintenance (drain/update/reboot/uncordon)
 ├── wipe.yml              # Remove all nodes from Foreman and FreeIPA
 ├── handlers/
