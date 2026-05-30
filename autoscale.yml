@@ -109,8 +109,8 @@
     - name: Build node utilisation list
       ansible.builtin.set_fact:
         _node_list: >-
-          {%- set metrics = (_metrics_raw.stdout | from_json).items -%}
-          {%- set nodes   = (_nodes_raw.stdout  | from_json).items -%}
+          {%- set metrics = (_metrics_raw.stdout | from_json)['items'] -%}
+          {%- set nodes   = (_nodes_raw.stdout  | from_json)['items'] -%}
           {%- set result  = [] -%}
           {%- for node in nodes -%}
             {%- set name    = node.metadata.name -%}
