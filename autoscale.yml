@@ -21,9 +21,37 @@
   gather_facts: false
   vars_files:
     - vars/vault.yml
+    - vars/foreman.yml
     - vars/vms.yml
 
   pre_tasks:
+    - name: Re-fetch host parameters from Foreman
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ inventory_hostname }}/parameters"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: _fresh_params
+      delegate_to: localhost
+      become: false
+
+    - name: Merge fresh host parameters into foreman_params
+      ansible.builtin.set_fact:
+        foreman_params: >-
+          {{
+            (foreman_params | default({})) | combine(
+              dict(
+                _fresh_params.json.results | map(attribute='name')
+                | zip(_fresh_params.json.results | map(attribute='value'))
+              )
+            )
+          }}
+      when: _fresh_params.status == 200
+
     - name: Run on primary control plane only
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'primary'
