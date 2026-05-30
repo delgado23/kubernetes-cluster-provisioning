@@ -99,7 +99,7 @@
     msg: "efidisk0 already exists on VMID {{ vmid }} — skipping."
   when: efidisk_exists
 
-- name: Enable CPU and memory hotplug
+- name: Enable CPU and memory hotplug with NUMA
   ansible.builtin.uri:
     url: "{{ _base }}/qemu/{{ vmid }}/config"
     method: PUT
@@ -108,6 +108,7 @@
     body_format: form-urlencoded
     body:
       hotplug: "cpu,memory"
+      numa: 1
     validate_certs: "{{ proxmox_validate_certs }}"
     status_code: [200]
   delegate_to: localhost
@@ -198,4 +199,4 @@
   ansible.builtin.debug:
     msg: >
       VMID {{ vmid }} | Name: {{ vm_new_name }} | Tags: {{ vm_tags }}
-      | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Hotplug: cpu,memory | Status: running
+      | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Hotplug: cpu,memory | NUMA: enabled | Status: running
