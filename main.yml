@@ -669,9 +669,9 @@
     - vars/awx.yml
     - vars/vms.yml
   tasks:
-    - name: Find autoscale schedule for {{ cluster_env }}
+    - name: Find autoscale schedules for {{ cluster_env }}
       ansible.builtin.uri:
-        url: "{{ awx_url }}/api/v2/job_templates/{{ autoscale_template_id }}/schedules/"
+        url: "{{ awx_url }}/api/v2/schedules/?name__icontains={{ cluster_env }}&page_size=20"
         method: GET
         headers:
           Authorization: "Bearer {{ awx_token }}"
@@ -679,7 +679,7 @@
         return_content: true
       register: _schedules
 
-    - name: Enable autoscale schedule
+    - name: Enable autoscale schedules for {{ cluster_env }}
       ansible.builtin.uri:
         url: "{{ awx_url }}/api/v2/schedules/{{ item.id }}/"
         method: PATCH
@@ -690,7 +690,7 @@
           enabled: true
         validate_certs: true
         status_code: [200]
-      loop: "{{ _schedules.json.results | selectattr('name', 'search', 'Autoscale ' + cluster_env) | list }}"
+      loop: "{{ _schedules.json.results | selectattr('name', 'search', cluster_env) | list }}"
       loop_control:
         label: "{{ item.name }}"
 

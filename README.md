@@ -45,7 +45,8 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ```
 .
 ├── main.yml              # Full cluster provisioning pipeline
-├── autoscale.yml         # Vertical autoscaler — scales CPU/RAM up and down via Proxmox based on utilisation
+├── autoscale.yml                  # Vertical autoscaler — scales CPU/RAM up and down via Proxmox based on utilisation
+├── autoscale-horizontal.yml       # Horizontal autoscaler — adds or removes worker nodes via AWX based on average utilisation
 ├── maintenance.yml       # Rolling OS maintenance (drain/update/reboot/uncordon)
 ├── wipe.yml              # Remove all nodes from Foreman and FreeIPA
 ├── handlers/
@@ -213,6 +214,28 @@ Designed to run on an AWX schedule (e.g. every 30 minutes). Survey variables:
 | `memory_scaledown_threshold` | `40` | Remove 1 GB when any node's memory% drops below this |
 
 Each run adds or removes at most 1 core or 1 GB per node, clamped to the per-role min/max. If all nodes are within their thresholds the playbook reports "no scaling needed" and exits cleanly. Requires `metrics-server` running in the cluster (installed automatically).
+
+### Horizontal Autoscaling
+
+`autoscale-horizontal.yml` monitors average worker utilisation and provisions or removes entire worker nodes by triggering the existing AWX job templates. Designed to run every 15 minutes.
+
+**Scale-out** — when average worker CPU or memory exceeds the threshold, launches "Scale Out Worker Nodes" (template 54) to add one worker via the full Foreman provisioning pipeline (~20–30 min).
+
+**Scale-in** — when average worker CPU and memory both drop below the threshold and removing a node won't push remaining workers over the scale-out threshold, launches "Scale Down Worker Nodes" (template 53) against the least-loaded worker (drain → kubeadm reset → Foreman/FreeIPA removal).
+
+**Cooldown** — skips all scaling if a scale-out or scale-in job is already running or pending, preventing concurrent operations.
+
+| Variable | Default | Description |
+|---|---|---|
+| `cluster_env` | `prod` | Target cluster — `prod` or `test` |
+| `worker_scale_out_cpu_threshold` | `70` | Add a worker when avg CPU% exceeds this |
+| `worker_scale_out_mem_threshold` | `80` | Add a worker when avg memory% exceeds this |
+| `worker_scale_in_cpu_threshold` | `20` | Remove a worker when avg CPU% drops below this |
+| `worker_scale_in_mem_threshold` | `30` | Remove a worker when avg memory% drops below this |
+| `worker_min_count` | `2` | Never scale below this many workers |
+| `worker_max_count` | `10` | Never scale above this many workers |
+
+Both vertical and horizontal autoscale schedules are enabled automatically when a cluster build succeeds and disabled when a cluster is wiped.
 
 ### Run a Specific Phase
 
