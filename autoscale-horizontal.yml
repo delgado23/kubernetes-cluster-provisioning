@@ -230,6 +230,7 @@
           extra_vars:
             cluster_env: "{{ cluster_env }}"
             worker_node_count: 1
+            k8s_api_endpoint_ip: "{{ foreman_params.k8s_api_endpoint_ip }}"
         validate_certs: true
         status_code: [201]
       register: _scale_out_job
