@@ -99,6 +99,19 @@
     msg: "efidisk0 already exists on VMID {{ vmid }} — skipping."
   when: efidisk_exists
 
+- name: Enable CPU and memory hotplug
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/config"
+    method: PUT
+    headers:
+      Authorization: "{{ _auth }}"
+    body_format: form-urlencoded
+    body:
+      hotplug: "cpu,memory"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200]
+  delegate_to: localhost
+
 - name: Compute cleaned VM name
   ansible.builtin.set_fact:
     vm_new_name: "{{ vm_current_name | regex_replace('\\.' + vault_domain + '$', '') }}"
@@ -185,4 +198,4 @@
   ansible.builtin.debug:
     msg: >
       VMID {{ vmid }} | Name: {{ vm_new_name }} | Tags: {{ vm_tags }}
-      | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Status: running
+      | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Hotplug: cpu,memory | Status: running
