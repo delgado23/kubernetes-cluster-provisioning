@@ -1,0 +1,248 @@
+---
+# =============================================================================
+# autoscale.yml — Vertical autoscaler: hot-add CPU cores and RAM to cluster VMs
+# =============================================================================
+# Queries the metrics-server for current node utilisation and hot-adds CPU
+# or memory via the Proxmox API when utilisation exceeds the configured
+# thresholds — up to per-role maximums.
+#
+# Designed to run on an AWX schedule (e.g. every 30 minutes).
+# Requires: metrics-server running in the target cluster, hotplug=cpu,memory
+# enabled on all VMs (set automatically by the provision phase).
+#
+# AWX survey variables (all optional — defaults shown):
+#   cluster_env              prod | test     (default: prod)
+#   cpu_scale_threshold      0–100           (default: 70)
+#   memory_scale_threshold   0–100           (default: 80)
+# =============================================================================
+
+- name: Autoscale cluster node CPU and memory
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars/vault.yml
+    - vars/vms.yml
+
+  vars:
+    cpu_scale_threshold:      70    # scale up CPU  when node utilisation exceeds this %
+    memory_scale_threshold:   80    # scale up RAM  when node utilisation exceeds this %
+    cpu_scale_step:           1     # vCPU cores to add per run
+    memory_scale_step_mb:     1024  # MB to add per run (1 GB)
+
+    controlplane_max_cores:     6
+    controlplane_max_memory_mb: 6144   # 6 GB
+    worker_max_cores:           4
+    worker_max_memory_mb:       4096   # 4 GB
+
+    proxmox_host:     "{{ vault_proxmox_host }}"
+    proxmox_user:     "{{ vault_proxmox_user }}"
+    proxmox_token_id: "foreman"
+    proxmox_node:     "{{ vault_proxmox_node }}"
+    _pve_base: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}"
+    _pve_auth: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ vault_proxmox_api_token }}"
+
+    _primary_cp: "{{ controlplane_name_prefix }}-01.{{ vault_domain }}"
+
+  tasks:
+
+    # ── 1. Collect Kubernetes metrics ───────────────────────────────────────
+
+    - name: Fetch node resource usage from metrics-server
+      ansible.builtin.command: kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: _metrics_raw
+      delegate_to: "{{ _primary_cp }}"
+      become: true
+      changed_when: false
+
+    - name: Fetch node capacity and role labels
+      ansible.builtin.command: kubectl get nodes -o json
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: _nodes_raw
+      delegate_to: "{{ _primary_cp }}"
+      become: true
+      changed_when: false
+
+    # ── 2. Build per-node utilisation list ──────────────────────────────────
+
+    - name: Build node utilisation list
+      ansible.builtin.set_fact:
+        _node_list: >-
+          {%- set metrics = (_metrics_raw.stdout | from_json).items -%}
+          {%- set nodes   = (_nodes_raw.stdout  | from_json).items -%}
+          {%- set result  = [] -%}
+          {%- for node in nodes -%}
+            {%- set name    = node.metadata.name -%}
+            {%- set short   = name | regex_replace('\\..*$', '') -%}
+            {%- set is_cp   = 'node-role.kubernetes.io/control-plane' in (node.metadata.labels | default({})) -%}
+            {%- set cap_cpu = node.status.capacity.cpu | int -%}
+            {%- set cap_mem = node.status.capacity.memory | regex_replace('Ki$', '') | int -%}
+            {%- for m in metrics if m.metadata.name == name -%}
+              {%- set cpu_str = m.usage.cpu | string -%}
+              {%- if cpu_str.endswith('n') -%}
+                {%- set cpu_m = (cpu_str[:-1] | int) / 1000000 -%}
+              {%- elif cpu_str.endswith('m') -%}
+                {%- set cpu_m = cpu_str[:-1] | float -%}
+              {%- else -%}
+                {%- set cpu_m = (cpu_str | int) * 1000 -%}
+              {%- endif -%}
+              {%- set use_mem = m.usage.memory | regex_replace('Ki$', '') | int -%}
+              {%- set cpu_pct = (cpu_m / (cap_cpu * 1000) * 100) | round(0) | int -%}
+              {%- set mem_pct = (use_mem / cap_mem * 100) | round(0) | int -%}
+              {%- set _ = result.append({
+                'name':       name,
+                'short':      short,
+                'is_cp':      is_cp,
+                'cpu_pct':    cpu_pct,
+                'mem_pct':    mem_pct,
+                'max_cores':  controlplane_max_cores     if is_cp else worker_max_cores,
+                'max_mem_mb': controlplane_max_memory_mb if is_cp else worker_max_memory_mb
+              }) -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ result }}
+
+    - name: Report current node utilisation
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.short }} ({{ 'CP' if item.is_cp else 'worker' }}):
+          CPU {{ item.cpu_pct }}%  MEM {{ item.mem_pct }}%
+          — max {{ item.max_cores }} cores / {{ item.max_mem_mb }} MB
+      loop: "{{ _node_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+
+    # ── 3. Fetch Proxmox VM inventory ───────────────────────────────────────
+
+    - name: Get Proxmox VM list
+      ansible.builtin.uri:
+        url: "{{ _pve_base }}/qemu"
+        method: GET
+        headers:
+          Authorization: "{{ _pve_auth }}"
+        validate_certs: true
+        return_content: true
+      register: _pve_vms
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Build short-hostname → VMID map
+      ansible.builtin.set_fact:
+        _vmid_map: >-
+          {%- set result = {} -%}
+          {%- for vm in _pve_vms.json.data if vm.name is defined -%}
+            {%- set _ = result.update({vm.name: vm.vmid | string}) -%}
+          {%- endfor -%}
+          {{ result }}
+
+    # ── 4. Fetch current Proxmox config for each cluster node ───────────────
+
+    - name: Fetch Proxmox VM config for each node
+      ansible.builtin.uri:
+        url: "{{ _pve_base }}/qemu/{{ _vmid_map[item.short] }}/config"
+        method: GET
+        headers:
+          Authorization: "{{ _pve_auth }}"
+        validate_certs: true
+        return_content: true
+      register: _pve_cfgs
+      loop: "{{ _node_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+      when: item.short in _vmid_map
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    # ── 5. Combine utilisation + Proxmox config into scale decision list ────
+
+    - name: Build scale decision list
+      ansible.builtin.set_fact:
+        _scale_list: >-
+          {%- set result = [] -%}
+          {%- for i in range(_node_list | length) -%}
+            {%- set node = _node_list[i] -%}
+            {%- set res  = _pve_cfgs.results[i] -%}
+            {%- if not (res.skipped | default(false)) -%}
+              {%- set cfg = res.json.data -%}
+              {%- set _ = result.append(node | combine({
+                'vmid':       _vmid_map[node.short],
+                'cur_cores':  cfg.cores  | int,
+                'cur_mem_mb': cfg.memory | int
+              })) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ result }}
+
+    # ── 6. Hot-add CPU cores where needed ───────────────────────────────────
+
+    - name: Scale up CPU cores
+      ansible.builtin.uri:
+        url: "{{ _pve_base }}/qemu/{{ item.vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _pve_auth }}"
+        body_format: form-urlencoded
+        body:
+          cores: "{{ [item.cur_cores + cpu_scale_step, item.max_cores] | min }}"
+        validate_certs: true
+        status_code: [200]
+      loop: "{{ _scale_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+      when:
+        - item.cpu_pct | int > cpu_scale_threshold | int
+        - item.cur_cores < item.max_cores
+      register: _cpu_scaled
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Report CPU scaling actions
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.short }}: CPU scaled
+          {{ item.item.cur_cores }} → {{ [item.item.cur_cores + cpu_scale_step, item.item.max_cores] | min }} cores
+          (was {{ item.item.cpu_pct }}% utilised, threshold {{ cpu_scale_threshold }}%)
+      loop: "{{ _cpu_scaled.results }}"
+      loop_control:
+        label: "{{ item.item.short }}"
+      when: not (item.skipped | default(false))
+
+    # ── 7. Hot-add memory where needed ──────────────────────────────────────
+
+    - name: Scale up memory
+      ansible.builtin.uri:
+        url: "{{ _pve_base }}/qemu/{{ item.vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _pve_auth }}"
+        body_format: form-urlencoded
+        body:
+          memory: "{{ [item.cur_mem_mb + memory_scale_step_mb, item.max_mem_mb] | min }}"
+        validate_certs: true
+        status_code: [200]
+      loop: "{{ _scale_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+      when:
+        - item.mem_pct | int > memory_scale_threshold | int
+        - item.cur_mem_mb < item.max_mem_mb
+      register: _mem_scaled
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Report memory scaling actions
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.short }}: RAM scaled
+          {{ item.item.cur_mem_mb }} → {{ [item.item.cur_mem_mb + memory_scale_step_mb, item.item.max_mem_mb] | min }} MB
+          (was {{ item.item.mem_pct }}% utilised, threshold {{ memory_scale_threshold }}%)
+      loop: "{{ _mem_scaled.results }}"
+      loop_control:
+        label: "{{ item.item.short }}"
+      when: not (item.skipped | default(false))
+
+    - name: No scaling needed
+      ansible.builtin.debug:
+        msg: "All nodes within thresholds — no scaling applied."
+      when:
+        - _cpu_scaled.results | selectattr('skipped', 'equalto', false) | list | length == 0
+        - _mem_scaled.results | selectattr('skipped', 'equalto', false) | list | length == 0
