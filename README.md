@@ -117,6 +117,8 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_ipadomain` | FreeIPA domain (e.g. `example.com`) |
 | `vault_ntp_servers` | List of NTP server FQDNs for FreeIPA client enrollment |
 | `vault_keepalived_password` | Keepalived VRRP authentication password |
+| `vault_awx_url` | AWX/Ascender base URL (e.g. `https://ascender.example.com`) |
+| `vault_awx_token` | AWX API token — used to enable/disable autoscale schedules after build/wipe |
 
 Generate the secretbox key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
 
