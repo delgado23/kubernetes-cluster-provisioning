@@ -61,7 +61,7 @@
 
   vars:
     cpu_scale_threshold:      70    # scale up CPU  when node utilisation exceeds this %
-    memory_scale_threshold:   80    # scale up RAM  when node utilisation exceeds this %
+    memory_scale_threshold:   45    # scale up RAM  when node utilisation exceeds this %
     cpu_scale_step:           1     # vCPU cores to add per run
     memory_scale_step_mb:     1024  # MB to add per run (1 GB)
 
