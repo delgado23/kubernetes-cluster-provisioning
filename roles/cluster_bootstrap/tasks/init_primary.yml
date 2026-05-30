@@ -129,6 +129,20 @@
     mode: '0600'
   when: not kubelet_conf.stat.exists
 
+- name: Fetch latest Flannel release from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/flannel-io/flannel/releases/latest
+    return_content: true
+  register: flannel_release
+  delegate_to: localhost
+  become: false
+  when: flannel_version is not defined
+
+- name: Set Flannel version fact
+  ansible.builtin.set_fact:
+    flannel_version: "{{ flannel_release.json.tag_name }}"
+  when: flannel_version is not defined
+
 - name: Install Flannel CNI
   ansible.builtin.command:
     cmd: kubectl apply -f https://github.com/flannel-io/flannel/releases/download/{{ flannel_version }}/kube-flannel.yml
