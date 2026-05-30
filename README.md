@@ -25,7 +25,7 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | NetworkPolicies | Default-deny ingress in all addon namespaces; kube-system (CoreDNS allow), kube-flannel (VXLAN allow), and monitoring (egress scoped to DNS, API server, scrape targets) |
 | Pod rebalancing | Descheduler CronJob (every 6 h) — evicts pods from hot nodes, spreads Deployment replicas, enforces topology spread constraints |
 | Addon versions | Resolved from GitHub releases at runtime — always installs latest |
-| VM hotplug | CPU and memory hotplug enabled on all VMs at provision time — allows `autoscale.yml` to hot-add and reclaim resources without reboots |
+| VM hotplug | CPU and memory hotplug enabled at provision time; `cores` and `vcpus` set to the per-role max (6 CP / 4 worker) so the autoscaler adjusts `vcpus` live without reboots |
 
 Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlplane_node_count` and `worker_node_count` (see [AWX Survey Variables](#awx-survey-variables)).
 
@@ -187,7 +187,7 @@ ansible-playbook main.yml --ask-vault-pass -e "controlplane_node_count=0 worker_
 
 ### Vertical Autoscaling
 
-`autoscale.yml` queries the metrics-server for current CPU and memory utilisation on each node and adjusts resources via the Proxmox API — hot-adding when utilisation is high, and reclaiming when it is low. The VM does not reboot — Proxmox delivers the change live via hotplug (enabled automatically during the provision phase).
+`autoscale.yml` queries the metrics-server for current CPU and memory utilisation on each node and adjusts resources via the Proxmox API — scaling up when utilisation is high, and reclaiming when it is low. The VM does not reboot — CPU changes are delivered live by adjusting `vcpus` (Proxmox hotplug), and memory changes are delivered live via memory hotplug. Both are enabled automatically during the provision phase, which also sets `cores` to the per-role maximum so the full range is available for hotplug from first boot.
 
 | Role | CPU min | CPU max | RAM min | RAM max |
 |---|---|---|---|---|
