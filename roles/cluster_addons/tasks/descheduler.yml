@@ -55,8 +55,6 @@
                 enabled:
                   - LowNodeUtilization
                   - RemoveDuplicates
-              deschedule:
-                enabled:
                   - RemovePodsViolatingTopologySpreadConstraint
 
       resources:
