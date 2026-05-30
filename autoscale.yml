@@ -350,7 +350,7 @@
       ansible.builtin.debug:
         msg: "All nodes within thresholds — no scaling applied."
       when:
-        - _cpu_scaled.results      | selectattr('skipped', 'equalto', false) | list | length == 0
-        - _mem_scaled.results      | selectattr('skipped', 'equalto', false) | list | length == 0
-        - _cpu_scaled_down.results | selectattr('skipped', 'equalto', false) | list | length == 0
-        - _mem_scaled_down.results | selectattr('skipped', 'equalto', false) | list | length == 0
+        - _cpu_scaled.results      | rejectattr('skipped', 'equalto', true) | list | length == 0
+        - _mem_scaled.results      | rejectattr('skipped', 'equalto', true) | list | length == 0
+        - _cpu_scaled_down.results | rejectattr('skipped', 'equalto', true) | list | length == 0
+        - _mem_scaled_down.results | rejectattr('skipped', 'equalto', true) | list | length == 0
