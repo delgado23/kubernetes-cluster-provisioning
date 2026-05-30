@@ -113,6 +113,20 @@
     status_code: [200]
   delegate_to: localhost
 
+- name: Set CPU cores ceiling and initial vCPUs by role
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/config"
+    method: PUT
+    headers:
+      Authorization: "{{ _auth }}"
+    body_format: form-urlencoded
+    body:
+      cores: "{{ controlplane_max_cores if 'Controlplane' in foreman_hostgroup else worker_max_cores }}"
+      vcpus: "{{ controlplane_max_cores if 'Controlplane' in foreman_hostgroup else worker_max_cores }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200]
+  delegate_to: localhost
+
 - name: Compute cleaned VM name
   ansible.builtin.set_fact:
     vm_new_name: "{{ vm_current_name | regex_replace('\\.' + vault_domain + '$', '') }}"
@@ -199,4 +213,6 @@
   ansible.builtin.debug:
     msg: >
       VMID {{ vmid }} | Name: {{ vm_new_name }} | Tags: {{ vm_tags }}
-      | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Hotplug: cpu,memory | NUMA: enabled | Status: running
+      | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Hotplug: cpu,memory | NUMA: enabled
+      | cores/vcpus: {{ controlplane_max_cores if 'Controlplane' in foreman_hostgroup else worker_max_cores }}
+      | Status: running

@@ -207,7 +207,7 @@
               {%- set cfg = res.json.data -%}
               {%- set _ = result.append(node | combine({
                 'vmid':       _vmid_map[node.short],
-                'cur_cores':  cfg.cores  | int,
+                'cur_cores':  (cfg.vcpus | default(cfg.cores)) | int,
                 'cur_mem_mb': cfg.memory | int
               })) -%}
             {%- endif -%}
@@ -224,7 +224,7 @@
           Authorization: "{{ _pve_auth }}"
         body_format: form-urlencoded
         body:
-          cores: "{{ [item.cur_cores + cpu_scale_step, item.max_cores] | min }}"
+          vcpus: "{{ [item.cur_cores + cpu_scale_step, item.max_cores] | min }}"
         validate_certs: true
         status_code: [200]
       loop: "{{ _scale_list }}"
@@ -290,7 +290,7 @@
           Authorization: "{{ _pve_auth }}"
         body_format: form-urlencoded
         body:
-          cores: "{{ [item.cur_cores - cpu_scaledown_step, item.min_cores] | max }}"
+          vcpus: "{{ [item.cur_cores - cpu_scaledown_step, item.min_cores] | max }}"
         validate_certs: true
         status_code: [200]
       loop: "{{ _scale_list }}"
