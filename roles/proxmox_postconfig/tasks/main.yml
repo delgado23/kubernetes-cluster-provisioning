@@ -3,7 +3,7 @@
   ansible.builtin.set_fact:
     _auth: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_api_token }}"
     _base: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}"
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Get full VM list from Proxmox node
   ansible.builtin.uri:
@@ -99,11 +99,39 @@
     msg: "efidisk0 already exists on VMID {{ vmid }} — skipping."
   when: efidisk_exists
 
+- name: Enable CPU and memory hotplug with NUMA
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/config"
+    method: PUT
+    headers:
+      Authorization: "{{ _auth }}"
+    body_format: form-urlencoded
+    body:
+      hotplug: "cpu,memory"
+      numa: 1
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200]
+  delegate_to: localhost
+
+- name: Set CPU cores ceiling and initial vCPUs by role
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/config"
+    method: PUT
+    headers:
+      Authorization: "{{ _auth }}"
+    body_format: form-urlencoded
+    body:
+      cores: "{{ controlplane_max_cores if 'Controlplane' in foreman_hostgroup else worker_max_cores }}"
+      vcpus: "{{ controlplane_max_cores if 'Controlplane' in foreman_hostgroup else worker_max_cores }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200]
+  delegate_to: localhost
+
 - name: Compute cleaned VM name
   ansible.builtin.set_fact:
-    vm_new_name: "{{ vm_current_name | regex_replace('\\.garaventaville\\.com$', '') }}"
+    vm_new_name: "{{ vm_current_name | regex_replace('\\.' + vault_domain + '$', '') }}"
 
-- name: Rename VM (strip .example.com suffix)
+- name: Rename VM (strip domain suffix)
   ansible.builtin.uri:
     url: "{{ _base }}/qemu/{{ vmid }}/config"
     method: PUT
@@ -119,7 +147,7 @@
 
 - name: Skip rename notice (name already clean)
   ansible.builtin.debug:
-    msg: "VM name '{{ vm_current_name }}' has no .example.com suffix — skipping."
+    msg: "VM name '{{ vm_current_name }}' has no domain suffix — skipping."
   when: vm_new_name == vm_current_name
 
 - name: Resolve tags for control plane nodes
@@ -185,4 +213,6 @@
   ansible.builtin.debug:
     msg: >
       VMID {{ vmid }} | Name: {{ vm_new_name }} | Tags: {{ vm_tags }}
-      | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Status: running
+      | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Hotplug: cpu,memory | NUMA: enabled
+      | cores/vcpus: {{ controlplane_max_cores if 'Controlplane' in foreman_hostgroup else worker_max_cores }}
+      | Status: running

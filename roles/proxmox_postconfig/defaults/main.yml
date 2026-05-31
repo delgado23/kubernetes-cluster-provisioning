@@ -1,11 +1,14 @@
 ---
-proxmox_host: "pve-01.example.com:8006"
-proxmox_user: "user@Authentik"
+proxmox_host: "{{ vault_proxmox_host }}"
+proxmox_user: "{{ vault_proxmox_user }}"
 proxmox_token_id: "foreman"
-proxmox_node: "pve-01"
+proxmox_node: "{{ vault_proxmox_node }}"
 proxmox_validate_certs: true
 efi_storage: "linstor"
 controlplane_tags: "k8s;controlplane"
 worker_tags: "k8s;worker"
 shutdown_timeout: 120
 startup_timeout: 120
+
+controlplane_max_cores: 6
+worker_max_cores:       4

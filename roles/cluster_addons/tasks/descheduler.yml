@@ -32,13 +32,6 @@
         profiles:
           - name: default
             pluginConfig:
-              - name: DefaultEvictor
-                args:
-                  nodeFit: true
-                  evictSystemCriticalPods: false
-                  evictFailedBarePods: false
-                  evictLocalStoragePods: false
-                  ignorePvcPods: true
               - name: LowNodeUtilization
                 args:
                   thresholds:
@@ -50,7 +43,7 @@
                     memory: 50
                     pods: 50
               - name: RemoveDuplicates
-              - name: RemovePodsViolatingTopologySpreadConstraints
+              - name: RemovePodsViolatingTopologySpreadConstraint
                 args:
                   constraints:
                     - DoNotSchedule
@@ -62,9 +55,7 @@
                 enabled:
                   - LowNodeUtilization
                   - RemoveDuplicates
-              deschedule:
-                enabled:
-                  - RemovePodsViolatingTopologySpreadConstraints
+                  - RemovePodsViolatingTopologySpreadConstraint
 
       resources:
         requests:
@@ -87,6 +78,9 @@
   environment:
     KUBECONFIG: /root/.kube/config
   register: descheduler_helm_output
+  until: descheduler_helm_output.rc == 0
+  retries: 3
+  delay: 30
   changed_when: true
 
 - name: Print descheduler Helm output

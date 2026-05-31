@@ -1,12 +1,24 @@
 ---
+- name: Check if primary is already initialized
+  ansible.builtin.stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf
+
+- name: Skip init if primary is already initialized
+  ansible.builtin.debug:
+    msg: "Node {{ inventory_hostname }} already has kubelet.conf — skipping kubeadm init."
+  when: kubelet_conf.stat.exists
+
 - name: Write etcd encryption config
   ansible.builtin.include_tasks: etcd_encryption.yml
+  when: not kubelet_conf.stat.exists
 
 - name: Deploy kubeadm config
   ansible.builtin.template:
     src: kubeadm-config.yml.j2
     dest: /etc/kubernetes/kubeadm-config.yml
     mode: "0600"
+  when: not kubelet_conf.stat.exists
 
 - name: Pre-pull kubeadm images (retry on registry rate limits)
   ansible.builtin.command:
@@ -16,16 +28,83 @@
   retries: 5
   delay: 30
   changed_when: false
+  when: not kubelet_conf.stat.exists
+
+- name: Create audit policy directory
+  ansible.builtin.file:
+    path: /etc/kubernetes/audit
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: not kubelet_conf.stat.exists
+
+- name: Write kube-apiserver audit policy
+  ansible.builtin.template:
+    src: audit-policy.yaml.j2
+    dest: /etc/kubernetes/audit/policy.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  when: not kubelet_conf.stat.exists
+
+- name: Write kube-apiserver authentication config (OIDC + anonymous on health only)
+  ansible.builtin.template:
+    src: apiserver-auth-config.yaml.j2
+    dest: /etc/kubernetes/apiserver-auth.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  when: not kubelet_conf.stat.exists
+
+- name: Create audit log directory
+  ansible.builtin.file:
+    path: /var/log/kubernetes
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: not kubelet_conf.stat.exists
+
+- name: Create kubeadm patches directory
+  ansible.builtin.file:
+    path: /etc/kubernetes/kubeadm-patches
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: not kubelet_conf.stat.exists
+
+- name: Write apiserver liveness probe patch
+  ansible.builtin.copy:
+    dest: /etc/kubernetes/kubeadm-patches/kube-apiserver+strategic.yaml
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: kube-apiserver
+        namespace: kube-system
+      spec:
+        containers:
+        - name: kube-apiserver
+          livenessProbe:
+            failureThreshold: 40
+  when: not kubelet_conf.stat.exists
 
 - name: Run kubeadm init
   ansible.builtin.command:
     cmd: kubeadm init --config /etc/kubernetes/kubeadm-config.yml --upload-certs
   register: kubeadm_init_output
   changed_when: true
+  when: not kubelet_conf.stat.exists
 
 - name: Print kubeadm init output
   ansible.builtin.debug:
     var: kubeadm_init_output.stdout_lines
+  when: not kubelet_conf.stat.exists
 
 - name: Set up kubeconfig for root
   ansible.builtin.shell: |
@@ -34,6 +113,21 @@
     chown root:root /root/.kube/config
     chmod 0600 /root/.kube/config
   changed_when: true
+  when: not kubelet_conf.stat.exists
+
+- name: Stage admin kubeconfig as discovery file for secondary CP joins
+  # Required when anonymous-auth=false: kubeadm join's preflight fetches
+  # cluster-info from kube-public, which is anonymous by default.  Using
+  # admin.conf here means the fetch is authenticated with cluster-admin
+  # credentials and bypasses the anonymous-auth gate entirely.
+  ansible.builtin.copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /etc/kubernetes/kubeadm-discovery.yaml
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0600'
+  when: not kubelet_conf.stat.exists
 
 - name: Fetch latest Flannel release from GitHub
   ansible.builtin.uri:
@@ -42,10 +136,12 @@
   register: flannel_release
   delegate_to: localhost
   become: false
+  when: flannel_version is not defined
 
 - name: Set Flannel version fact
   ansible.builtin.set_fact:
     flannel_version: "{{ flannel_release.json.tag_name }}"
+  when: flannel_version is not defined
 
 - name: Install Flannel CNI
   ansible.builtin.command:
@@ -54,10 +150,12 @@
     KUBECONFIG: /root/.kube/config
   register: flannel_output
   changed_when: true
+  when: not kubelet_conf.stat.exists
 
 - name: Print Flannel install output
   ansible.builtin.debug:
     var: flannel_output.stdout_lines
+  when: not kubelet_conf.stat.exists
 
 - name: Wait for control plane to be ready
   ansible.builtin.command:
@@ -65,3 +163,88 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
+  when: not kubelet_conf.stat.exists
+
+- name: Apply kube-system and kube-flannel NetworkPolicies
+  ansible.builtin.shell: |
+    kubectl apply -f - <<'EOF'
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-coredns-ingress
+      namespace: kube-system
+    spec:
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+      policyTypes:
+        - Ingress
+      ingress:
+        - ports:
+            - port: 53
+              protocol: UDP
+            - port: 53
+              protocol: TCP
+            - port: 9153
+              protocol: TCP
+    ---
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: default-deny-ingress
+      namespace: kube-flannel
+    spec:
+      podSelector: {}
+      policyTypes:
+        - Ingress
+    ---
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-flannel-vxlan
+      namespace: kube-flannel
+    spec:
+      podSelector:
+        matchLabels:
+          app: flannel
+      policyTypes:
+        - Ingress
+      ingress:
+        - ports:
+            - port: 8472
+              protocol: UDP
+            - port: 4789
+              protocol: UDP
+    EOF
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+  when: not kubelet_conf.stat.exists
+
+- name: Create etcd system group (CIS 1.1.12)
+  ansible.builtin.group:
+    name: etcd
+    system: true
+    state: present
+
+- name: Create etcd system user (CIS 1.1.12)
+  ansible.builtin.user:
+    name: etcd
+    group: etcd
+    system: true
+    shell: /sbin/nologin
+    home: /var/lib/etcd
+    create_home: false
+    state: present
+
+- name: Set etcd data directory ownership (CIS 1.1.12)
+  ansible.builtin.file:
+    path: /var/lib/etcd
+    owner: etcd
+    group: etcd
+    recurse: true
+
+- name: Set kubelet config file permissions (CIS 4.1.9)
+  ansible.builtin.file:
+    path: /var/lib/kubelet/config.yaml
+    mode: "0600"

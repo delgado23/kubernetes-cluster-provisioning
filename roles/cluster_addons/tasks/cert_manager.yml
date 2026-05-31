@@ -83,6 +83,9 @@
   environment:
     KUBECONFIG: /root/.kube/config
   register: certmgr_output
+  until: certmgr_output.rc == 0
+  retries: 3
+  delay: 30
   changed_when: true
 
 - name: Print cert-manager install output
@@ -118,7 +121,7 @@
       --dry-run=client -o yaml
   register: cf_secret_yaml
   changed_when: false
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Apply Cloudflare API token secret
   ansible.builtin.shell:
@@ -126,7 +129,7 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: true
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Set Let's Encrypt ACME endpoint and issuer name
   ansible.builtin.set_fact:
@@ -207,9 +210,9 @@
         secretTemplate:
           annotations:
             reflector.v1.k8s.emberstack.com/reflection-allowed: "true"
-            reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces: "{{ traefik_namespace }},{{ longhorn_namespace }},{{ headlamp_namespace }},{{ argocd_namespace }}"
+            reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces: "{{ traefik_namespace }},{{ longhorn_namespace }},{{ headlamp_namespace }},{{ argocd_namespace }},{{ prometheus_namespace }}"
             reflector.v1.k8s.emberstack.com/reflection-auto-enabled: "true"
-            reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: "{{ traefik_namespace }},{{ longhorn_namespace }},{{ headlamp_namespace }},{{ argocd_namespace }}"
+            reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: "{{ traefik_namespace }},{{ longhorn_namespace }},{{ headlamp_namespace }},{{ argocd_namespace }},{{ prometheus_namespace }}"
         issuerRef:
           name: {{ _issuer_name }}
           kind: ClusterIssuer
@@ -228,6 +231,63 @@
 - name: Print Certificate apply output
   ansible.builtin.debug:
     var: cert_output.stdout_lines
+
+- name: Write cert-manager NetworkPolicy manifest
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/cert-manager/networkpolicy.yml"
+    mode: "0600"
+    content: |
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: default-deny-ingress
+        namespace: {{ cert_manager_namespace }}
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+      ---
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-intra-namespace
+        namespace: {{ cert_manager_namespace }}
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+        ingress:
+          - from:
+              - podSelector: {}
+      ---
+      # kube-apiserver calls cert-manager webhook on port 10250
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-apiserver-webhook
+        namespace: {{ cert_manager_namespace }}
+      spec:
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/component: webhook
+        policyTypes:
+          - Ingress
+        ingress:
+          - ports:
+              - port: 10250
+                protocol: TCP
+
+- name: Apply cert-manager NetworkPolicy
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/cert-manager/networkpolicy.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: certmgr_netpol_output
+  changed_when: true
+
+- name: Print cert-manager NetworkPolicy apply output
+  ansible.builtin.debug:
+    var: certmgr_netpol_output.stdout_lines
 
 - name: Wait for ClusterIssuer to be ready (ACME account registration)
   ansible.builtin.command:
@@ -292,7 +352,7 @@
 
       1. Cloudflare API token is missing Zone:DNS:Edit permission
          → Check token at dash.cloudflare.com → My Profile → API Tokens
-         → The token needs Zone:Zone:Read + Zone:DNS:Edit on example.com
+         → The token needs Zone:Zone:Read + Zone:DNS:Edit on your domain
 
       2. TXT record never created — verify in Cloudflare DNS:
          dig TXT _acme-challenge.{{ ingress_domain }} @8.8.8.8

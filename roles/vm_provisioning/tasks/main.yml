@@ -16,6 +16,13 @@
       Accept: application/json
   register: _existing_cps_result
 
+- name: Record pre-provision CP count for DNS play
+  ansible.builtin.add_host:
+    name: _provision_state
+    groups: _provision_state
+    cps_pre_existed: "{{ (_existing_cps_result.json.results | length) > 0 }}"
+  changed_when: false
+
 - name: Clamp controlplane_node_count to remaining slots (max 3 total)
   ansible.builtin.set_fact:
     _existing_cp_count: "{{ _existing_cps_result.json.results | length }}"
@@ -75,7 +82,14 @@
 - name: Generate worker node definitions
   ansible.builtin.set_fact:
     _generated_workers: >-
-      {{ _generated_workers | default([]) + [{'name': worker_name_prefix + '-' + '%02d' | format(item), 'hostgroup': worker_hostgroup}] }}
+      {{ _generated_workers | default([]) + [{
+        'name': worker_name_prefix + '-' + '%02d' | format(item),
+        'hostgroup': worker_hostgroup,
+        'host_parameters': [
+          {'name': 'k8s_role',    'value': 'worker'},
+          {'name': 'cluster_env', 'value': cluster_env}
+        ]
+      }] }}
   loop: "{{ _new_worker_indices }}"
 
 - name: Report worker nodes to be provisioned

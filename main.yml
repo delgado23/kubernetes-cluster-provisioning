@@ -21,6 +21,45 @@
 
 
 # -----------------------------------------------------------------------------
+# PHASE 0: Disable autoscale schedules before any changes
+# -----------------------------------------------------------------------------
+
+- name: Disable autoscale schedules for {{ cluster_env }}
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars/vault.yml
+    - vars/awx.yml
+    - vars/vms.yml
+  tasks:
+    - name: Find autoscale schedules for {{ cluster_env }}
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/schedules/?name__icontains={{ cluster_env }}&page_size=20"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ awx_token }}"
+        validate_certs: true
+        return_content: true
+      register: _schedules
+
+    - name: Disable autoscale schedules
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/schedules/{{ item.id }}/"
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ awx_token }}"
+        body_format: json
+        body:
+          enabled: false
+        validate_certs: true
+        status_code: [200]
+      loop: "{{ _schedules.json.results | selectattr('name', 'search', cluster_env) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+
+# -----------------------------------------------------------------------------
 # WIPE (conditional — only runs when wipe_cluster=true)
 # -----------------------------------------------------------------------------
 
@@ -108,10 +147,33 @@
   tags: [provision]
   vars_files:
     - vars/vault.yml
+    - vars/vms.yml
   vars:
     proxmox_api_token: "{{ vault_proxmox_api_token }}"
   roles:
     - role: proxmox_postconfig
+
+- name: Manage k8s-api DNS record in FreeIPA
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [provision]
+  vars_files:
+    - vars/vault.yml
+    - vars/vms.yml
+    - vars/freeipa.yml
+  tasks:
+    - name: Create / update A record for {{ k8s_api_endpoint }}
+      community.general.ipa_dnsrecord:
+        ipa_user: admin
+        ipa_pass: "{{ vault_ipaadmin_password }}"
+        ipa_host: "{{ vault_ipa_server }}"
+        zone_name: "{{ vault_ipadomain }}"
+        record_name: "{{ k8s_api_endpoint | regex_replace('\\.' + vault_ipadomain + '$', '') }}"
+        record_type: A
+        record_value: "{{ k8s_api_endpoint_ip }}"
+        state: present
+      when: not (hostvars['_provision_state']['cps_pre_existed'] | default(false) | bool)
 
 
 # -----------------------------------------------------------------------------
@@ -318,6 +380,9 @@
     - name: Run on primary control plane only
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'primary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Bootstrap primary control plane
       ansible.builtin.include_role:
@@ -332,6 +397,7 @@
   tags: [bootstrap]
   vars_files:
     - vars/vault.yml
+    - vars/vms.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
@@ -339,17 +405,42 @@
     - name: Skip non-secondary nodes
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'secondary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Join secondary control plane node
       ansible.builtin.include_role:
         name: cluster_bootstrap
         tasks_from: join_secondary
 
+- name: Configure kube-apiserver audit logging on all control plane nodes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  gather_facts: false
+  tags: [bootstrap]
+  vars_files:
+    - vars/vms.yml
+  pre_tasks:
+    - name: Skip bootstrap when only adding workers
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+  tasks:
+    - name: Enable kube-apiserver audit logging
+      ansible.builtin.include_role:
+        name: cluster_bootstrap
+        tasks_from: audit_logging
+
 - name: Install kubelet-serving-cert-approver
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   become: true
   gather_facts: false
   tags: [bootstrap]
+  vars_files:
+    - vars/vms.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
@@ -357,6 +448,9 @@
     - name: Run on primary control plane only
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'primary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Install kubelet-serving-cert-approver
       ansible.builtin.include_role:
@@ -368,10 +462,15 @@
   become: true
   gather_facts: false
   tags: [bootstrap]
+  vars_files:
+    - vars/vms.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
       when: controlplane_node_count | int == 0
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Install controlplane tooling
       ansible.builtin.include_role:
@@ -389,6 +488,12 @@
   gather_facts: true
   strategy: free
   tags: [workers]
+  vars_files:
+    - vars/vms.yml
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   roles:
     - role: worker_join
 
@@ -397,12 +502,17 @@
   become: true
   gather_facts: false
   tags: [workers]
+  vars_files:
+    - vars/vms.yml
   environment:
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   pre_tasks:
     - name: Run on primary control plane only
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'primary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Label worker nodes
       ansible.builtin.include_role:
@@ -421,6 +531,11 @@
   tags: [addons]
   vars_files:
     - vars/vault.yml
+    - vars/vms.yml
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
     - name: Patch kube-apiserver OIDC configuration
       ansible.builtin.include_role:
@@ -439,8 +554,12 @@
     - name: Run add-ons on primary control plane only
       ansible.builtin.meta: end_host
       when: foreman_params.k8s_role != 'primary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   vars_files:
     - vars/vault.yml
+    - vars/vms.yml
   environment:
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   tasks:
@@ -534,6 +653,86 @@
         name: cluster_addons
         tasks_from: longhorn_ui
 
+- name: Manage wildcard ingress DNS record in FreeIPA
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  become: true
+  gather_facts: false
+  tags: [addons]
+  pre_tasks:
+    - name: Skip when only adding worker nodes
+      ansible.builtin.meta: end_play
+      when: controlplane_node_count | int == 0
+    - name: Run on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+  vars_files:
+    - vars/vault.yml
+    - vars/vms.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  tasks:
+    - name: Wait for Traefik LoadBalancer IP to be assigned
+      ansible.builtin.command:
+        cmd: kubectl get svc traefik -n traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+      register: _traefik_ip
+      changed_when: false
+      until: _traefik_ip.stdout | length > 0
+      retries: 12
+      delay: 10
+
+    - name: Create / update *.{{ ingress_subdomain }} A record for ingress
+      community.general.ipa_dnsrecord:
+        ipa_user: admin
+        ipa_pass: "{{ vault_ipaadmin_password }}"
+        ipa_host: "{{ vault_ipa_server }}"
+        zone_name: "{{ vault_ipadomain }}"
+        record_name: "*.{{ ingress_subdomain }}"
+        record_type: A
+        record_value: "{{ _traefik_ip.stdout }}"
+        state: present
+
+# -----------------------------------------------------------------------------
+# PHASE 6: Enable autoscale schedule
+# -----------------------------------------------------------------------------
+
+- name: Enable autoscale schedule for {{ cluster_env }}
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [addons]
+  vars_files:
+    - vars/vault.yml
+    - vars/awx.yml
+    - vars/vms.yml
+  tasks:
+    - name: Find autoscale schedules for {{ cluster_env }}
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/schedules/?name__icontains={{ cluster_env }}&page_size=20"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ awx_token }}"
+        validate_certs: true
+        return_content: true
+      register: _schedules
+
+    - name: Enable autoscale schedules for {{ cluster_env }}
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/schedules/{{ item.id }}/"
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ awx_token }}"
+        body_format: json
+        body:
+          enabled: true
+        validate_certs: true
+        status_code: [200]
+      loop: "{{ _schedules.json.results | selectattr('name', 'search', cluster_env) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
 # -----------------------------------------------------------------------------
 # DEBUG: Ingress diagnostics (ansible-playbook main.yml --tags debug)
 # -----------------------------------------------------------------------------
@@ -545,6 +744,11 @@
   tags: [debug]
   vars_files:
     - vars/vault.yml
+    - vars/vms.yml
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
   environment:
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   tasks:

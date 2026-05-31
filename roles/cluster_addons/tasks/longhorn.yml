@@ -68,6 +68,9 @@
   environment:
     KUBECONFIG: /root/.kube/config
   register: longhorn_helm_output
+  until: longhorn_helm_output.rc == 0
+  retries: 3
+  delay: 30
   changed_when: true
 
 - name: Print Longhorn Helm output
@@ -83,3 +86,181 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
+
+- name: Write Longhorn support-bundle restricted ClusterRole manifest
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/longhorn/support-bundle-rbac.yml"
+    mode: "0600"
+    content: |
+      # CIS C-01: Replace cluster-admin binding with least-privilege read-only role.
+      # The Longhorn Helm chart ships with a cluster-admin ClusterRoleBinding for the
+      # support-bundle SA. We override it post-install with a scoped read-only role.
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: longhorn-support-bundle
+        labels:
+          app.kubernetes.io/managed-by: Helm
+          app.kubernetes.io/name: longhorn
+        annotations:
+          meta.helm.sh/release-name: longhorn
+          meta.helm.sh/release-namespace: {{ longhorn_namespace }}
+      rules:
+      - apiGroups: [""]
+        resources:
+          - configmaps
+          - endpoints
+          - events
+          - limitranges
+          - namespaces
+          - nodes
+          - persistentvolumeclaims
+          - persistentvolumes
+          - pods
+          - pods/log
+          - resourcequotas
+          - serviceaccounts
+          - services
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["daemonsets", "deployments", "replicasets", "statefulsets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["batch"]
+        resources: ["cronjobs", "jobs"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["networking.k8s.io"]
+        resources: ["ingresses", "networkpolicies"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["policy"]
+        resources: ["poddisruptionbudgets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterrolebindings", "clusterroles", "rolebindings", "roles"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["storage.k8s.io"]
+        resources: ["csidrivers", "csinodes", "csistoragecapacities", "storageclasses", "volumeattachments"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["longhorn.io"]
+        resources: ["*"]
+        verbs: ["get", "list", "watch"]
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: longhorn-support-bundle
+        labels:
+          app.kubernetes.io/managed-by: Helm
+          app.kubernetes.io/name: longhorn
+        annotations:
+          meta.helm.sh/release-name: longhorn
+          meta.helm.sh/release-namespace: {{ longhorn_namespace }}
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: longhorn-support-bundle
+      subjects:
+      - kind: ServiceAccount
+        name: longhorn-support-bundle
+        namespace: {{ longhorn_namespace }}
+
+- name: Delete existing longhorn-support-bundle ClusterRoleBinding so roleRef can be replaced (CIS C-01)
+  ansible.builtin.command:
+    cmd: kubectl delete clusterrolebinding longhorn-support-bundle --ignore-not-found
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Apply Longhorn support-bundle restricted RBAC (CIS C-01)
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/longhorn/support-bundle-rbac.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: longhorn_rbac_output
+  changed_when: true
+
+- name: Print Longhorn RBAC apply output
+  ansible.builtin.debug:
+    var: longhorn_rbac_output.stdout_lines
+
+- name: Write Longhorn NetworkPolicy manifest
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/longhorn/networkpolicy.yml"
+    mode: "0600"
+    content: |
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: default-deny-ingress
+        namespace: {{ longhorn_namespace }}
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+      ---
+      # Allow all intra-namespace traffic. Longhorn has many inter-component
+      # communication paths (manager↔manager, manager↔instance-manager,
+      # CSI sidecars↔manager, ui→manager) all within the same namespace.
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-intra-namespace
+        namespace: {{ longhorn_namespace }}
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+        ingress:
+          - from:
+              - podSelector: {}
+      ---
+      # kube-apiserver calls the Longhorn admission webhook on port 9502
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-apiserver-webhook
+        namespace: {{ longhorn_namespace }}
+      spec:
+        podSelector:
+          matchLabels:
+            longhorn.io/admission-webhook: longhorn-admission-webhook
+        policyTypes:
+          - Ingress
+        ingress:
+          - ports:
+              - port: 9502
+                protocol: TCP
+      ---
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-traefik-ingress
+        namespace: {{ longhorn_namespace }}
+      spec:
+        podSelector:
+          matchLabels:
+            app: longhorn-ui
+        policyTypes:
+          - Ingress
+        ingress:
+          - from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: {{ traefik_namespace }}
+                podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: traefik
+            ports:
+              - port: 8000
+                protocol: TCP
+
+- name: Apply Longhorn NetworkPolicy
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/longhorn/networkpolicy.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: longhorn_netpol_output
+  changed_when: true
+
+- name: Print Longhorn NetworkPolicy apply output
+  ansible.builtin.debug:
+    var: longhorn_netpol_output.stdout_lines

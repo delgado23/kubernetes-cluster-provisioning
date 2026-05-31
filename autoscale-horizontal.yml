@@ -1,0 +1,291 @@
+---
+# =============================================================================
+# autoscale-horizontal.yml — Horizontal autoscaler: add or remove worker nodes
+# =============================================================================
+# Queries the metrics-server for average worker utilisation and triggers an
+# AWX job to scale out (add a worker) or scale in (remove the least-loaded
+# worker) based on configured thresholds.
+#
+# Scale-out: avg worker CPU OR memory exceeds threshold → launch template 54
+# Scale-in:  avg worker CPU AND memory both below threshold, AND remaining
+#            workers can absorb the load without crossing scale-out threshold
+#            → launch template 53 against the least-loaded worker
+# Cooldown:  skips all scaling if a scale-out or scale-in job is already
+#            running or pending, preventing concurrent operations.
+#
+# Designed to run on an AWX schedule (e.g. every 15 minutes).
+# Requires: metrics-server running in the target cluster.
+#
+# AWX survey variables (all optional — defaults shown):
+#   cluster_env                     prod | test  (default: prod)
+#   worker_scale_out_cpu_threshold  0–100        (default: 70)
+#   worker_scale_out_mem_threshold  0–100        (default: 80)
+#   worker_scale_in_cpu_threshold   0–100        (default: 20)
+#   worker_scale_in_mem_threshold   0–100        (default: 30)
+#   worker_min_count                int          (default: 2)
+#   worker_max_count                int          (default: 10)
+# =============================================================================
+
+- name: Horizontal autoscale — add or remove worker nodes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  gather_facts: false
+  vars_files:
+    - vars/vault.yml
+    - vars/foreman.yml
+    - vars/awx.yml
+    - vars/vms.yml
+
+  pre_tasks:
+    - name: Re-fetch host parameters from Foreman
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts/{{ inventory_hostname }}/parameters"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: _fresh_params
+      delegate_to: localhost
+      become: false
+
+    - name: Merge fresh host parameters into foreman_params
+      ansible.builtin.set_fact:
+        foreman_params: >-
+          {{
+            (foreman_params | default({})) | combine(
+              dict(
+                _fresh_params.json.results | map(attribute='name')
+                | zip(_fresh_params.json.results | map(attribute='value'))
+              )
+            )
+          }}
+      when: _fresh_params.status == 200
+
+    - name: Run on primary control plane only
+      ansible.builtin.meta: end_host
+      when: foreman_params.k8s_role != 'primary'
+
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+
+  vars:
+    cluster_env:                    prod
+    worker_scale_out_cpu_threshold: 70
+    worker_scale_out_mem_threshold: 80
+    worker_scale_in_cpu_threshold:  20
+    worker_scale_in_mem_threshold:  30
+    worker_min_count:               3
+    worker_max_count:               10
+    scale_out_template_id:          54
+    scale_in_template_id:           53
+
+  tasks:
+    # ── 1. Collect Kubernetes metrics ───────────────────────────────────────
+
+    - name: Fetch node resource usage from metrics-server
+      ansible.builtin.command: kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: _metrics_raw
+      changed_when: false
+
+    - name: Fetch node capacity and role labels
+      ansible.builtin.command: kubectl get nodes -o json
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: _nodes_raw
+      changed_when: false
+
+    # ── 2. Build worker utilisation list ────────────────────────────────────
+
+    - name: Build worker utilisation list
+      ansible.builtin.set_fact:
+        _worker_list: >-
+          {%- set metrics = (_metrics_raw.stdout | from_json)['items'] -%}
+          {%- set nodes   = (_nodes_raw.stdout  | from_json)['items'] -%}
+          {%- set result  = [] -%}
+          {%- for node in nodes -%}
+            {%- set name  = node.metadata.name -%}
+            {%- set short = name | regex_replace('\\..*$', '') -%}
+            {%- set is_cp = 'node-role.kubernetes.io/control-plane' in (node.metadata.labels | default({})) -%}
+            {%- if not is_cp -%}
+              {%- set cap_cpu = node.status.capacity.cpu | int -%}
+              {%- set cap_mem = node.status.capacity.memory | regex_replace('Ki$', '') | int -%}
+              {%- for m in metrics if m.metadata.name == name -%}
+                {%- set cpu_str = m.usage.cpu | string -%}
+                {%- if cpu_str.endswith('n') -%}
+                  {%- set cpu_m = (cpu_str[:-1] | int) / 1000000 -%}
+                {%- elif cpu_str.endswith('m') -%}
+                  {%- set cpu_m = cpu_str[:-1] | float -%}
+                {%- else -%}
+                  {%- set cpu_m = (cpu_str | int) * 1000 -%}
+                {%- endif -%}
+                {%- set use_mem = m.usage.memory | regex_replace('Ki$', '') | int -%}
+                {%- set cpu_pct = (cpu_m / (cap_cpu * 1000) * 100) | round(0) | int -%}
+                {%- set mem_pct = (use_mem / cap_mem * 100) | round(0) | int -%}
+                {%- set _ = result.append({
+                  'name':    name,
+                  'short':   short,
+                  'cpu_pct': cpu_pct,
+                  'mem_pct': mem_pct,
+                  'score':   cpu_pct + mem_pct
+                }) -%}
+              {%- endfor -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ result }}
+
+    # ── 3. Report worker utilisation ────────────────────────────────────────
+
+    - name: Report worker utilisation
+      ansible.builtin.debug:
+        msg: "{{ item.short }}: CPU {{ item.cpu_pct }}%  MEM {{ item.mem_pct }}%"
+      loop: "{{ _worker_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+
+    # ── 4. Check cooldown — skip if a scaling job is already running ─────────
+
+    - name: Check for active scaling jobs
+      ansible.builtin.uri:
+        url: >-
+          {{ awx_url }}/api/v2/jobs/?job_template__in={{ scale_out_template_id }},{{ scale_in_template_id }}&status__in=running,pending&page_size=10
+        method: GET
+        headers:
+          Authorization: "Bearer {{ awx_token }}"
+        validate_certs: true
+        return_content: true
+      register: _active_jobs
+
+    # ── 5. Compute averages and scaling decision ─────────────────────────────
+
+    - name: Compute worker averages
+      ansible.builtin.set_fact:
+        _worker_count: "{{ _worker_list | length }}"
+        _avg_cpu: >-
+          {{
+            (_worker_list | map(attribute='cpu_pct') | sum / (_worker_list | length)) | round(0) | int
+            if _worker_list | length > 0 else 0
+          }}
+        _avg_mem: >-
+          {{
+            (_worker_list | map(attribute='mem_pct') | sum / (_worker_list | length)) | round(0) | int
+            if _worker_list | length > 0 else 0
+          }}
+        _cooldown_active: "{{ _active_jobs.json.count | int > 0 }}"
+        _scale_in_target: >-
+          {{
+            (_worker_list | sort(attribute='score') | first).short
+            if _worker_list | length > 0 else ''
+          }}
+
+    - name: Compute scale-out and scale-in flags
+      ansible.builtin.set_fact:
+        _scale_out_needed: >-
+          {{
+            (_worker_count | int < worker_min_count | int)
+            or (_avg_cpu | int > worker_scale_out_cpu_threshold | int)
+            or (_avg_mem | int > worker_scale_out_mem_threshold | int)
+          }}
+        _scale_in_safe: >-
+          {{
+            ((_avg_cpu | int * _worker_count | int) / ((_worker_count | int) - 1)) | int
+            < (worker_scale_out_cpu_threshold | int)
+            and
+            ((_avg_mem | int * _worker_count | int) / ((_worker_count | int) - 1)) | int
+            < (worker_scale_out_mem_threshold | int)
+            if _worker_count | int > 1 else false
+          }}
+        _scale_in_needed: >-
+          {{
+            (_avg_cpu | int < worker_scale_in_cpu_threshold | int)
+            and
+            (_avg_mem | int < worker_scale_in_mem_threshold | int)
+          }}
+
+    # ── 6. Report decision ───────────────────────────────────────────────────
+
+    - name: Report scaling summary
+      ansible.builtin.debug:
+        msg: >-
+          Workers: {{ _worker_count }} (min {{ worker_min_count }}, max {{ worker_max_count }})
+          | Avg CPU: {{ _avg_cpu }}%  Avg MEM: {{ _avg_mem }}%
+          | Scale-out: {{ _scale_out_needed }}{% if _worker_count | int < worker_min_count | int %} (below minimum){% endif %}
+          Scale-in: {{ _scale_in_needed }} (safe: {{ _scale_in_safe }})
+          | Cooldown: {{ _cooldown_active }}
+          {% if _scale_in_needed and _scale_in_safe %}| Scale-in target: {{ _scale_in_target }}{% endif %}
+
+    # ── 7. Scale out ─────────────────────────────────────────────────────────
+
+    - name: Launch scale-out job (add 1 worker)
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/job_templates/{{ scale_out_template_id }}/launch/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ awx_token }}"
+        body_format: json
+        body:
+          extra_vars:
+            cluster_env: "{{ cluster_env }}"
+            worker_node_count: 1
+            k8s_api_endpoint_ip: "{{ foreman_params.k8s_api_endpoint_ip }}"
+        validate_certs: true
+        status_code: [201]
+      register: _scale_out_job
+      when:
+        - _scale_out_needed | bool
+        - not (_cooldown_active | bool)
+        - _worker_count | int < worker_max_count | int
+
+    - name: Report scale-out launched
+      ansible.builtin.debug:
+        msg: >-
+          Scale-out triggered — job {{ _scale_out_job.json.id }} launched.
+          Adding 1 worker ({{ _worker_count }} → {{ _worker_count | int + 1 }}).
+          Avg CPU: {{ _avg_cpu }}%  Avg MEM: {{ _avg_mem }}%
+      when: not (_scale_out_job.skipped | default(true))
+
+    # ── 8. Scale in ──────────────────────────────────────────────────────────
+
+    - name: Launch scale-in job (remove least-loaded worker)
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/job_templates/{{ scale_in_template_id }}/launch/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ awx_token }}"
+        body_format: json
+        body:
+          extra_vars:
+            cluster_env: "{{ cluster_env }}"
+            remove_workers: "{{ _scale_in_target }}"
+        validate_certs: true
+        status_code: [201]
+      register: _scale_in_job
+      when:
+        - _scale_in_needed | bool
+        - _scale_in_safe | bool
+        - not (_scale_out_needed | bool)
+        - not (_cooldown_active | bool)
+        - _worker_count | int > worker_min_count | int
+
+    - name: Report scale-in launched
+      ansible.builtin.debug:
+        msg: >-
+          Scale-in triggered — job {{ _scale_in_job.json.id }} launched.
+          Removing {{ _scale_in_target }} ({{ _worker_count }} → {{ _worker_count | int - 1 }} workers).
+          Avg CPU: {{ _avg_cpu }}%  Avg MEM: {{ _avg_mem }}%
+      when: not (_scale_in_job.skipped | default(true))
+
+    # ── 9. No scaling needed ─────────────────────────────────────────────────
+
+    - name: No horizontal scaling needed
+      ansible.builtin.debug:
+        msg: >-
+          All workers within thresholds — no horizontal scaling applied.
+          Workers: {{ _worker_count }}  Avg CPU: {{ _avg_cpu }}%  Avg MEM: {{ _avg_mem }}%
+      when:
+        - (_scale_out_job.skipped | default(true)) | bool
+        - (_scale_in_job.skipped  | default(true)) | bool

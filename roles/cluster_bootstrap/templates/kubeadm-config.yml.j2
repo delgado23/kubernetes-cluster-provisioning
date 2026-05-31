@@ -11,9 +11,12 @@ nodeRegistration:
   kubeletExtraArgs:
     - name: rotate-server-certificates
       value: "true"
+patches:
+  directory: /etc/kubernetes/kubeadm-patches
 ---
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
+clusterName: "k8s-{{ foreman_params.cluster_env }}"
 controlPlaneEndpoint: "{{ foreman_params.k8s_api_endpoint }}:6443"
 networking:
   podSubnet: "{{ k8s_pod_cidr }}"
@@ -31,20 +34,59 @@ apiServer:
   extraArgs:
     - name: encryption-provider-config
       value: /etc/kubernetes/enc/enc.yaml
-    - name: oidc-issuer-url
-      value: "{{ authentik_headlamp_issuer }}"
-    - name: oidc-client-id
-      value: "{{ vault_authentik_headlamp_client_id }}"
-    - name: oidc-username-claim
-      value: email
-    - name: oidc-groups-claim
-      value: groups
+    - name: audit-policy-file
+      value: /etc/kubernetes/audit/policy.yaml
+    - name: audit-log-path
+      value: /var/log/kubernetes/audit.log
+    - name: audit-log-maxage
+      value: "30"
+    - name: audit-log-maxbackup
+      value: "10"
+    - name: audit-log-maxsize
+      value: "100"
+    # OIDC (Headlamp) and the anonymous-auth restriction are configured via the
+    # structured AuthenticationConfiguration file mounted below.  A bare
+    # --anonymous-auth=false breaks the kubelet's /livez & /readyz probes
+    # (401 -> apiserver crash loop), so anonymous is enabled there for health
+    # endpoints only.  --authentication-config is mutually exclusive with the
+    # --oidc-* flags, so OIDC lives in that file too.
+    - name: authentication-config
+      value: /etc/kubernetes/apiserver-auth.yaml
+    - name: profiling
+      value: "false"
+    - name: kubelet-certificate-authority
+      value: /etc/kubernetes/pki/ca.crt
+    - name: service-account-extend-token-expiration
+      value: "false"
   extraVolumes:
     - name: enc
       hostPath: /etc/kubernetes/enc
       mountPath: /etc/kubernetes/enc
       readOnly: true
       pathType: DirectoryOrCreate
+    - name: audit-policy
+      hostPath: /etc/kubernetes/audit
+      mountPath: /etc/kubernetes/audit
+      readOnly: true
+      pathType: DirectoryOrCreate
+    - name: audit-logs
+      hostPath: /var/log/kubernetes
+      mountPath: /var/log/kubernetes
+      readOnly: false
+      pathType: DirectoryOrCreate
+    - name: apiserver-auth
+      hostPath: /etc/kubernetes/apiserver-auth.yaml
+      mountPath: /etc/kubernetes/apiserver-auth.yaml
+      readOnly: true
+      pathType: File
+controllerManager:
+  extraArgs:
+    - name: profiling
+      value: "false"
+scheduler:
+  extraArgs:
+    - name: profiling
+      value: "false"
 ---
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration

@@ -1,5 +1,7 @@
 # Kubernetes Cluster Provisioning
 
+> **This was written entirely with Claude just to mess around building Kubernetes clusters in my homelab. Sharing it in case it's useful to anyone.**
+
 Ansible automation for provisioning and managing a highly-available Kubernetes cluster on Proxmox via Foreman. Targets AlmaLinux 10, uses Flannel CNI, MetalLB, Traefik, cert-manager (Cloudflare DNS-01), Longhorn storage, Prometheus, Headlamp, ArgoCD, and Descheduler.
 
 ## Cluster Architecture
@@ -17,11 +19,13 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 | Monitoring | Prometheus + AlertManager (kube-prometheus-stack), Longhorn-backed PVCs, node-exporter + kube-state-metrics; Grafana replaced by Headlamp plugin |
 | Dashboard | Headlamp (Kubernetes UI) with Prometheus metrics plugin for in-UI charts |
 | Tooling | kubectl, Helm, k9s on all control plane nodes |
-| etcd encryption | AES-CBC encryption at rest for all Secrets, configured at kubeadm init time |
+| etcd encryption | XSalsa20-Poly1305 (secretbox) authenticated encryption at rest for all Secrets, configured at kubeadm init time |
 | Pod Security Standards | Namespace-scoped enforcement — `privileged` for storage/network system namespaces, `baseline`/`restricted` for application namespaces |
-| Policy engine | Kyverno in Audit mode — reports violations for latest image tags, missing resource limits, privileged containers, and host namespace use |
+| Policy engine | Kyverno in Enforce mode — blocks pods violating latest image tags, missing resource limits, privileged containers, and host namespace use |
+| NetworkPolicies | Default-deny ingress in all addon namespaces; kube-system (CoreDNS allow), kube-flannel (VXLAN allow), and monitoring (egress scoped to DNS, API server, scrape targets) |
 | Pod rebalancing | Descheduler CronJob (every 6 h) — evicts pods from hot nodes, spreads Deployment replicas, enforces topology spread constraints |
 | Addon versions | Resolved from GitHub releases at runtime — always installs latest |
+| VM hotplug | CPU and memory hotplug enabled at provision time; `cores` and `vcpus` set to the per-role max (6 CP / 4 worker) so the autoscaler adjusts `vcpus` live without reboots |
 
 Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlplane_node_count` and `worker_node_count` (see [AWX Survey Variables](#awx-survey-variables)).
 
@@ -41,6 +45,8 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ```
 .
 ├── main.yml              # Full cluster provisioning pipeline
+├── autoscale.yml                  # Vertical autoscaler — scales CPU/RAM up and down via Proxmox based on utilisation
+├── autoscale-horizontal.yml       # Horizontal autoscaler — adds or removes worker nodes via AWX based on average utilisation
 ├── maintenance.yml       # Rolling OS maintenance (drain/update/reboot/uncordon)
 ├── wipe.yml              # Remove all nodes from Foreman and FreeIPA
 ├── handlers/
@@ -50,13 +56,13 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 │   └── 00-duo.conf.j2    # sshd_config.d snippet enabling ForceCommand login_duo
 ├── vars/
 │   ├── foreman.yml       # Foreman connection settings and compute profile IDs
-│   ├── freeipa.yml       # FreeIPA connection settings and ipaclient vars
+│   ├── freeipa.yml       # FreeIPA ipaclient vars (sensitive values sourced from vault)
 │   ├── vault.yml         # Ansible Vault: API tokens and passwords
 │   ├── vms.yml           # VM definitions (names, hostgroups, Foreman parameters)
 │   └── vm_defaults.yml   # Default VM hardware specs
 └── roles/
     ├── vm_provisioning/       # Create VMs in Foreman/Proxmox, filters by node counts
-    ├── proxmox_postconfig/    # EFI disk, rename, tags via Proxmox API
+    ├── proxmox_postconfig/    # EFI disk, rename, tags, CPU/memory hotplug via Proxmox API
     ├── enterprise_linux/      # Base OS provisioning: repos, packages, atop, DUO install
     ├── common/                # K8s prerequisites: containerd, kubelet, firewall
     ├── controlplane_infra/    # HAProxy, keepalived, controlplane firewall rules
@@ -89,8 +95,15 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | Variable | Description |
 |---|---|
 | `vault_proxmox_api_token` | Proxmox API token secret |
+| `vault_proxmox_host` | Proxmox host and port (e.g. `pve-01.example.com:8006`) |
+| `vault_proxmox_user` | Proxmox user for API auth (e.g. `user@Authentik`) |
+| `vault_proxmox_node` | Proxmox node name (e.g. `pve-01`) |
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
-| `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd AES-CBC encryption at rest |
+| `vault_cloudflare_email` | Cloudflare account email |
+| `vault_domain` | Base domain (e.g. `example.com`) — drives `k8s_api_endpoint`, `ingress_domain`, `foreman_domain`, `wildcard_secret_name`, and FreeIPA realm |
+| `vault_authentik_url` | Authentik base URL (e.g. `https://auth.example.com`) |
+| `vault_foreman_url` | Foreman base URL (e.g. `https://foreman.example.com`) |
+| `vault_etcd_encryption_key` | Base64-encoded 32-byte key for etcd secretbox (XSalsa20-Poly1305) encryption at rest |
 | `vault_duo_ikey` | DUO Unix integration key (application identifier) |
 | `vault_duo_secret_key` | DUO Unix integration secret key for SSH 2FA |
 | `vault_duo_host` | DUO API hostname (e.g. `api-xxxxxxxx.duosecurity.com`) |
@@ -100,10 +113,15 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_authentik_headlamp_client_secret` | OIDC client secret for the Headlamp application in Authentik |
 | `vault_foreman_user` | Foreman username |
 | `vault_foreman_password` | Foreman password |
-| `vault_ipa_password` | FreeIPA admin password |
+| `vault_ipaadmin_password` | FreeIPA admin password |
+| `vault_ipa_server` | FreeIPA server hostname (e.g. `ipa.example.com`) |
+| `vault_ipadomain` | FreeIPA domain (e.g. `example.com`) |
+| `vault_ntp_servers` | List of NTP server FQDNs for FreeIPA client enrollment |
 | `vault_keepalived_password` | Keepalived VRRP authentication password |
+| `vault_awx_url` | AWX/Ascender base URL (e.g. `https://ascender.example.com`) |
+| `vault_awx_token` | AWX API token — used to enable/disable autoscale schedules after build/wipe |
 
-Generate the etcd encryption key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
+Generate the secretbox key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
 
 ```bash
 head -c 32 /dev/urandom | base64
@@ -116,11 +134,19 @@ head -c 32 /dev/urandom | base64
 | `wipe_cluster` | Boolean | `false` | When `true`, removes all existing cluster nodes from Foreman and FreeIPA first, then provisions a fresh cluster using the current `controlplane_node_count` and `worker_node_count` values. |
 | `controlplane_node_count` | Integer | 1 | Number of control plane nodes to provision this run. Set to `0` when only adding worker nodes — this skips the bootstrap and cluster add-ons phases entirely. Max 3. |
 | `worker_node_count` | Integer | 1 | Number of worker nodes to add this run. The provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
-| `letsencrypt_staging` | Boolean | `false` | When `true`, uses the Let's Encrypt **staging** ACME endpoint and names the ClusterIssuer `letsencrypt-cloudflare-staging`. Staging certs are not trusted by browsers but have no rate limits — use this when testing cert-manager config. Set to `false` for a production cluster to issue real trusted certificates. |
+| `cluster_env` | String | `prod` | `prod` or `test`. Controls node naming prefixes, API endpoint hostname, ingress domain, FreeIPA wildcard DNS record, and ACME endpoint. `prod` → `k8s-cp` / `k8s-worker`, `k8s-api.<domain>`, `k8s.<domain>`, Let's Encrypt production. `test` → `k8s-test-cp` / `k8s-test-worker`, `k8s-test-api.<domain>`, `k8s-test.<domain>`, Let's Encrypt staging. Both clusters can run side-by-side — they use separate DNS records and name prefixes. |
+| `letsencrypt_staging` | Boolean | derived | Auto-derived from `cluster_env` (`true` when `test`, `false` when `prod`). When `true`, uses the Let's Encrypt **staging** ACME endpoint — certs are not browser-trusted but have no rate limits. Only set this directly if you need to decouple it from `cluster_env`. |
+| `k8s_api_endpoint` | String | derived | Auto-derived from `cluster_env` — `k8s-api.<vault_domain>` for prod, `k8s-test-api.<vault_domain>` for test. An A record pointing to `k8s_api_endpoint_ip` is created in FreeIPA during provision and removed on wipe. |
+| `k8s_api_endpoint_ip` | String | `172.16.0.29` | IP address of the keepalived VIP. Also used as `keepalived_vip` — only set this here, do not update them separately. |
+| `metallb_pool` | String | `172.16.0.50-172.16.0.60` | MetalLB L2 address pool range for LoadBalancer services. Traefik automatically claims the first free IP from this pool. |
+| `k8s_pod_cidr` | String | `10.244.0.0/16` | Pod network CIDR passed to kubeadm and used in firewall rules. Must not overlap with your node or service networks. Change only if the default conflicts with your infrastructure. |
+| `k8s_service_cidr` | String | `10.96.0.0/12` | Kubernetes service network CIDR passed to kubeadm and used in firewall rules and NetworkPolicies. Must not overlap with your node or pod networks. Change only if the default conflicts with your infrastructure. |
 
 `wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
 
-Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. Name prefixes and Foreman hostgroup strings are configured in `vars/vms.yml`.
+Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. The prefix is derived from `cluster_env`: `prod` produces `k8s-cp` / `k8s-worker`; `test` produces `k8s-test-cp` / `k8s-test-worker`. Foreman hostgroup strings are configured in `vars/vms.yml`.
+
+Prod and test clusters can run side-by-side. Each has its own FreeIPA DNS wildcard (`*.k8s` vs `*.k8s-test`), so wiping one does not affect the other's ingress. You must set non-overlapping values for `k8s_api_endpoint_ip` and `metallb_pool` in each cluster's AWX survey — those IP ranges cannot be shared.
 
 ## Usage
 
@@ -161,6 +187,55 @@ Set `controlplane_node_count=0` to skip bootstrap and cluster add-ons. The playb
 ```bash
 ansible-playbook main.yml --ask-vault-pass -e "controlplane_node_count=0 worker_node_count=2"
 ```
+
+### Vertical Autoscaling
+
+`autoscale.yml` queries the metrics-server for current CPU and memory utilisation on each node and adjusts resources via the Proxmox API — scaling up when utilisation is high, and reclaiming when it is low. The VM does not reboot — CPU changes are delivered live by adjusting `vcpus` (Proxmox hotplug), and memory changes are delivered live via memory hotplug. Both are enabled automatically during the provision phase, which also sets `cores` to the per-role maximum so the full range is available for hotplug from first boot.
+
+| Role | CPU min | CPU max | RAM min | RAM max |
+|---|---|---|---|---|
+| Control plane | 2 cores | 6 cores | 2 GB | 6 GB |
+| Worker | 2 cores | 4 cores | 2 GB | 4 GB |
+
+Run manually:
+
+```bash
+ansible-playbook autoscale.yml --ask-vault-pass -e "cluster_env=prod"
+```
+
+Designed to run on an AWX schedule (e.g. every 30 minutes). Survey variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `cluster_env` | `prod` | Target cluster — `prod` or `test` |
+| `cpu_scale_threshold` | `70` | Add a core when any node's CPU% exceeds this |
+| `memory_scale_threshold` | `80` | Add 1 GB when any node's memory% exceeds this |
+| `cpu_scaledown_threshold` | `30` | Remove a core when any node's CPU% drops below this |
+| `memory_scaledown_threshold` | `40` | Remove 1 GB when any node's memory% drops below this |
+
+Each run adds or removes at most 1 core or 1 GB per node, clamped to the per-role min/max. If all nodes are within their thresholds the playbook reports "no scaling needed" and exits cleanly. Requires `metrics-server` running in the cluster (installed automatically).
+
+### Horizontal Autoscaling
+
+`autoscale-horizontal.yml` monitors average worker utilisation and provisions or removes entire worker nodes by triggering the existing AWX job templates. Designed to run every 15 minutes.
+
+**Scale-out** — when average worker CPU or memory exceeds the threshold, launches "Scale Out Worker Nodes" (template 54) to add one worker via the full Foreman provisioning pipeline (~20–30 min).
+
+**Scale-in** — when average worker CPU and memory both drop below the threshold and removing a node won't push remaining workers over the scale-out threshold, launches "Scale Down Worker Nodes" (template 53) against the least-loaded worker (drain → kubeadm reset → Foreman/FreeIPA removal).
+
+**Cooldown** — skips all scaling if a scale-out or scale-in job is already running or pending, preventing concurrent operations.
+
+| Variable | Default | Description |
+|---|---|---|
+| `cluster_env` | `prod` | Target cluster — `prod` or `test` |
+| `worker_scale_out_cpu_threshold` | `70` | Add a worker when avg CPU% exceeds this |
+| `worker_scale_out_mem_threshold` | `80` | Add a worker when avg memory% exceeds this |
+| `worker_scale_in_cpu_threshold` | `20` | Remove a worker when avg CPU% drops below this |
+| `worker_scale_in_mem_threshold` | `30` | Remove a worker when avg memory% drops below this |
+| `worker_min_count` | `2` | Never scale below this many workers |
+| `worker_max_count` | `10` | Never scale above this many workers |
+
+Both vertical and horizontal autoscale schedules are enabled automatically when a cluster build succeeds and disabled when a cluster is wiped.
 
 ### Run a Specific Phase
 
@@ -218,36 +293,47 @@ ansible-playbook maintenance.yml -e "drain_timeout=600"
 
 ### Wipe Cluster
 
-Queries Foreman for all hosts matching the configured CP and worker prefixes and removes them from Foreman and FreeIPA. Finds everything regardless of how many scale-out runs were done. Does not touch the Proxmox VMs themselves.
+Queries Foreman for all hosts matching the CP and worker name prefixes for the selected `cluster_env` and removes them from Foreman and FreeIPA, along with the keepalived VIP and wildcard DNS records for that environment. Finds everything regardless of how many scale-out runs were done. Does not touch the Proxmox VMs themselves.
 
 ```bash
+# Wipe the prod cluster
 ansible-playbook wipe.yml --ask-vault-pass
+
+# Wipe the test cluster (leaves prod untouched)
+ansible-playbook wipe.yml --ask-vault-pass -e "cluster_env=test"
 ```
 
 ## VM Definitions
 
-Edit `vars/vms.yml` to configure nodes. There are no hardcoded hostnames — both control plane and worker names are generated at runtime from a prefix and a counter (e.g. `k8s-cp-01`, `k8s-worker-03`).
+Edit `vars/vms.yml` to configure nodes. There are no hardcoded hostnames — both control plane and worker names are generated at runtime from a prefix and a counter. The prefix is derived from the `cluster_env` survey var:
+
+- `cluster_env=prod` → `k8s-cp-01`, `k8s-worker-01`, …
+- `cluster_env=test` → `k8s-test-cp-01`, `k8s-test-worker-01`, …
 
 Control plane configs are ordered: index 0 is always the primary. Only the first `controlplane_node_count` entries are provisioned.
 
 ```yaml
-# Naming — adjust prefixes and hostgroups to match your Foreman setup
+# Hostgroups — must match your Foreman setup
 controlplane_hostgroup: "AlmaLinux 10/Kubernetes Controlplane Node"
-controlplane_name_prefix: "my-cluster-cp"     # → my-cluster-cp-01, my-cluster-cp-02, …
+worker_hostgroup:       "AlmaLinux 10/Kubernetes Worker Node"
 
-worker_hostgroup: "AlmaLinux 10/Kubernetes Worker Node"
-worker_name_prefix: "my-cluster-worker"       # → my-cluster-worker-01, my-cluster-worker-02, …
+# Name prefixes are derived from cluster_env (set in AWX survey):
+#   prod → k8s-cp / k8s-worker
+#   test → k8s-test-cp / k8s-test-worker
 
 controlplane_configs:
   # Index 0 — primary, always provisioned
+  # k8s_api_endpoint, k8s_api_endpoint_ip, metallb_pool, k8s_pod_cidr, and
+  # k8s_service_cidr are AWX survey vars injected at runtime — set them in
+  # your job template survey rather than hardcoding them here.
   - host_parameters:
       - { name: k8s_role,            value: primary }
       - { name: keepalived_state,    value: MASTER }
       - { name: keepalived_priority, value: 101 }
       - { name: cluster_name,        value: my-cluster }
-      - { name: k8s_api_endpoint,    value: k8s-api.example.com }
-      - { name: k8s_api_endpoint_ip, value: 172.16.0.29 }
-      - { name: metallb_pool,        value: 172.16.0.50-172.16.0.60 }
+      - { name: k8s_api_endpoint,    value: "{{ k8s_api_endpoint }}" }
+      - { name: k8s_api_endpoint_ip, value: "{{ k8s_api_endpoint_ip }}" }
+      - { name: metallb_pool,        value: "{{ metallb_pool }}" }
 
   # Index 1 — secondary, provisioned when controlplane_node_count >= 2
   - host_parameters:
@@ -272,7 +358,7 @@ Create the token once in Proxmox before running the playbooks:
 
 ## Authentik SSO Setup
 
-Authentik runs externally (not in the cluster). Set `authentik_url` in `roles/cluster_addons/defaults/main.yml` before running the addons phase.
+Authentik runs externally (not in the cluster). Set `vault_authentik_url` in `vars/vault.yml` before running the addons phase.
 
 ### Proxy outpost — ForwardAuth (Traefik dashboard + Longhorn)
 
@@ -309,7 +395,7 @@ The Traefik and Longhorn IngressRoutes include a dedicated route for `/outpost.g
 3. Note the Client ID and Client Secret — add the secret to vault as `vault_authentik_headlamp_client_secret`
 4. In Authentik, ensure the user's email is marked as **verified** — kube-apiserver rejects OIDC tokens where `email_verified: false` when `--oidc-username-claim=email` is set
 
-The kube-apiserver is configured with OIDC flags (`--oidc-issuer-url`, `--oidc-client-id`, `--oidc-username-claim=email`, `--oidc-groups-claim=groups`) so that Headlamp can make Kubernetes API calls using the user's OIDC token directly. This configuration is applied automatically during the addons phase via the `patch_apiserver_oidc` task, which patches the static pod manifest on all control plane nodes and waits for the apiserver to restart. The `headlamp_admin_group` default (`"authentik Admins"`) is bound to `cluster-admin` via a ClusterRoleBinding that covers both the Headlamp service account and OIDC group subjects.
+The kube-apiserver is configured via a structured `AuthenticationConfiguration` file (`apiserver-auth.yaml`) that enables OIDC for Headlamp (issuer URL, client ID, username/groups claims) and restricts anonymous access to health endpoints only (`/livez`, `/readyz`, `/healthz`). This replaces individual `--oidc-*` flags, which are mutually exclusive with `--authentication-config`. The configuration is applied automatically during bootstrap and updated during the addons phase via the `patch_apiserver_oidc` task. The `headlamp_admin_group` default (`"authentik Admins"`) is bound to `cluster-admin` via a ClusterRoleBinding that covers both the Headlamp service account and OIDC group subjects.
 
 ## Prometheus Monitoring
 
@@ -386,7 +472,7 @@ kubectl logs -n descheduler -l job-name=descheduler-manual -f
 
 ## Exposed Services
 
-After a successful run, all services are accessible via Traefik at the MetalLB LoadBalancer IP. Point `*.{{ ingress_domain }}` at that IP in Cloudflare DNS.
+After a successful run, all services are accessible via Traefik at the MetalLB LoadBalancer IP. The wildcard FreeIPA DNS record (`*.k8s` for `cluster_env=prod`, `*.k8s-test` for `cluster_env=test`) is created automatically during the addons phase — no manual DNS configuration needed for internal access.
 
 | Service | URL | Auth |
 |---|---|---|
@@ -398,14 +484,10 @@ After a successful run, all services are accessible via Traefik at the MetalLB L
 | ArgoCD | `https://argocd.{{ ingress_domain }}` | Authentik SSO (OIDC) |
 | Kubernetes API | `https://{{ k8s_api_endpoint }}:6443` | kubeconfig |
 
-`ingress_domain` defaults to `k8s.<domain>` and is configured in `roles/cluster_addons/defaults/main.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}`, is issued by Let's Encrypt via Cloudflare DNS-01, and is automatically mirrored to all addon namespaces by [reflector](https://github.com/emberstack/kubernetes-reflector). When cert-manager renews the cert, reflector pushes the updated secret to every namespace without any manual intervention.
+`ingress_domain` is derived from `cluster_env` (`k8s.<vault_domain>` for prod, `k8s-test.<vault_domain>` for test) via `ingress_subdomain` in `vars/vms.yml`. The wildcard TLS cert covers `*.{{ ingress_domain }}`, is issued by Let's Encrypt via Cloudflare DNS-01, and is automatically mirrored to all addon namespaces by [reflector](https://github.com/emberstack/kubernetes-reflector). When cert-manager renews the cert, reflector pushes the updated secret to every namespace without any manual intervention.
+
+The wildcard A record in FreeIPA (`*.k8s` for prod, `*.k8s-test` for test) is created automatically at the end of the addons phase. Traefik claims the first free IP from the MetalLB pool at deploy time; the actual assigned IP is read back from the service and used for the DNS record — no manual IP configuration needed. The record is removed automatically when `wipe_cluster=true`, scoped to the cluster being wiped.
 
 Headlamp login uses Authentik OIDC — click **Sign in** on the Headlamp page and you will be redirected to Authentik. No service account token is needed.
 
-Retrieve the ArgoCD initial admin password after the addons run completes:
-
-```bash
-kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath='{.data.password}' | base64 -d
-```
-
-Change the password after first login — ArgoCD deletes the `argocd-initial-admin-secret` once the password is updated, which is expected.
+ArgoCD login uses Authentik OIDC exclusively — the `argocd-initial-admin-secret` is automatically deleted after install. Use the **Log in via Authentik** button on the ArgoCD login page.

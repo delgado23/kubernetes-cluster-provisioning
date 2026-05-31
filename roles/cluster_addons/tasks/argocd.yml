@@ -52,7 +52,7 @@
     content: |
       configs:
         params:
-          server.insecure: "true"
+          server.insecure: "false"
         cm:
           url: "https://argocd.{{ ingress_domain }}"
           oidc.config: |
@@ -84,8 +84,6 @@
 
       server:
         replicas: 2
-        extraArgs:
-          - --insecure
         resources:
           requests:
             cpu: 100m
@@ -140,7 +138,7 @@
           limits:
             cpu: 200m
             memory: 128Mi
-  no_log: true
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
 
 - name: Install or upgrade ArgoCD via Helm
   ansible.builtin.command:
@@ -154,6 +152,9 @@
   environment:
     KUBECONFIG: /root/.kube/config
   register: argocd_helm_output
+  until: argocd_helm_output.rc == 0
+  retries: 3
+  delay: 30
   changed_when: true
 
 - name: Print ArgoCD Helm output
@@ -174,11 +175,13 @@
         podSelector: {}
         policyTypes:
           - Ingress
+          - Egress
         ingress:
           # Allow intra-namespace traffic between ArgoCD components
           - from:
               - podSelector: {}
-          # Allow Traefik to reach argocd-server on port 80
+          # Allow Traefik to reach argocd-server on container port 8080
+          # (Service maps 80->8080; NetworkPolicy uses pod/container port)
           - from:
               - namespaceSelector:
                   matchLabels:
@@ -187,7 +190,32 @@
                   matchLabels:
                     app.kubernetes.io/name: traefik
             ports:
-              - port: 80
+              - port: 8080
+                protocol: TCP
+        egress:
+          # DNS resolution
+          - ports:
+              - port: 53
+                protocol: UDP
+              - port: 53
+                protocol: TCP
+          # kube-apiserver via in-cluster Service (kubernetes.default.svc)
+          - to:
+              - ipBlock:
+                  cidr: {{ k8s_service_cidr }}
+            ports:
+              - port: 443
+                protocol: TCP
+          # Intra-namespace (ArgoCD components talk to each other)
+          - to:
+              - podSelector: {}
+          # Outbound HTTPS (Git repos, Authentik OIDC, container registries)
+          - ports:
+              - port: 443
+                protocol: TCP
+          # Outbound SSH (Git over SSH)
+          - ports:
+              - port: 22
                 protocol: TCP
 
 - name: Apply ArgoCD NetworkPolicy
@@ -208,6 +236,14 @@
     mode: "0600"
     content: |
       apiVersion: traefik.io/v1alpha1
+      kind: ServersTransport
+      metadata:
+        name: argocd-backend
+        namespace: {{ argocd_namespace }}
+      spec:
+        insecureSkipVerify: true
+      ---
+      apiVersion: traefik.io/v1alpha1
       kind: IngressRoute
       metadata:
         name: argocd
@@ -220,7 +256,9 @@
             kind: Rule
             services:
               - name: argocd-server
-                port: 80
+                port: 443
+                scheme: https
+                serversTransport: argocd-backend
         tls:
           secretName: {{ wildcard_secret_name }}
 
@@ -236,15 +274,18 @@
   ansible.builtin.debug:
     var: argocd_ingress_output.stdout_lines
 
+- name: Delete ArgoCD initial admin secret
+  ansible.builtin.command:
+    cmd: kubectl delete secret argocd-initial-admin-secret -n {{ argocd_namespace }} --ignore-not-found
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
 - name: Print ArgoCD access summary
   ansible.builtin.debug:
     msg:
       - "================================================="
       - "ArgoCD installed."
       - "URL      : https://argocd.{{ ingress_domain }}"
-      - "Username : admin"
-      - "Password : kubectl get secret argocd-initial-admin-secret"
-      - "           -n {{ argocd_namespace }}"
-      - "           -o jsonpath='{.data.password}' | base64 -d"
-      - "Change the password after first login."
+      - "Login via Authentik OIDC — initial admin secret deleted."
       - "================================================="

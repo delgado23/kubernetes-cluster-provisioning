@@ -1,4 +1,9 @@
 ---
+# kube-router runs alongside kube-proxy intentionally. kube-proxy handles service
+# routing (ClusterIP, NodePort, LoadBalancer). kube-router handles only NetworkPolicy
+# enforcement (--run-firewall=true, --run-service-proxy=false, --run-router=false).
+# Both are needed: removing kube-proxy breaks service routing; removing kube-router
+# leaves NetworkPolicies unenforced.
 - name: Create kube-router manifest directory
   ansible.builtin.file:
     path: "{{ k8s_manifests_dir }}/kube-router"
@@ -114,6 +119,17 @@
 - name: Wait for kube-router DaemonSet to be ready
   ansible.builtin.command:
     cmd: kubectl rollout status daemonset/kube-router -n kube-system --timeout=5m
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Wait for Kyverno admission controller to recover after NetworkPolicy enforcement starts
+  ansible.builtin.command:
+    cmd: >
+      kubectl wait deployment/kyverno-admission-controller
+      -n {{ kyverno_namespace }}
+      --for=condition=Available
+      --timeout=180s
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
