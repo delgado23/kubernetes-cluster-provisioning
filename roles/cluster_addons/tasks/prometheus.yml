@@ -182,11 +182,13 @@
             ports:
               - port: 6443
                 protocol: TCP
-          # Scrape metrics from pods in any namespace
+          # Scrape metrics from pods in any namespace (pod IPs)
           - to:
               - namespaceSelector: {}
             ports:
               - port: 9100
+                protocol: TCP
+              - port: 9153
                 protocol: TCP
               - port: 8080
                 protocol: TCP
@@ -195,6 +197,26 @@
               - port: 10250
                 protocol: TCP
               - port: 10255
+                protocol: TCP
+          # Scrape node-level metrics via node IPs (hostNetwork pods: kubelet,
+          # node-exporter, kube-proxy, kube-scheduler, kube-controller-manager, etcd)
+          - to:
+              - ipBlock:
+                  cidr: {{ k8s_node_cidr }}
+            ports:
+              - port: 9100
+                protocol: TCP
+              - port: 10249
+                protocol: TCP
+              - port: 10250
+                protocol: TCP
+              - port: 10255
+                protocol: TCP
+              - port: 10257
+                protocol: TCP
+              - port: 10259
+                protocol: TCP
+              - port: 2381
                 protocol: TCP
       ---
       apiVersion: networking.k8s.io/v1

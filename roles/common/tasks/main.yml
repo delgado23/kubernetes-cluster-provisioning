@@ -110,6 +110,20 @@
   when: firewalld_backend_result.changed
 
 
+- name: Open node-exporter metrics port (9100/tcp)
+  ansible.posix.firewalld:
+    port: 9100/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Open kube-proxy metrics port (10249/tcp)
+  ansible.posix.firewalld:
+    port: 10249/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
 - name: Open Flannel VXLAN port
   ansible.posix.firewalld:
     port: 8472/udp
