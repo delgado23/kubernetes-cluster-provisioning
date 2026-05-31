@@ -168,12 +168,19 @@
           # Intra-namespace (prometheus <-> alertmanager <-> operator)
           - to:
               - podSelector: {}
-          # kube-apiserver (metrics scraping + API access)
+          # kube-apiserver via service VIP (pre-DNAT)
           - to:
               - ipBlock:
                   cidr: {{ k8s_service_cidr }}
             ports:
               - port: 443
+                protocol: TCP
+          # kube-apiserver via node IP (post-DNAT by kube-proxy/kube-router)
+          - to:
+              - ipBlock:
+                  cidr: {{ k8s_node_cidr }}
+            ports:
+              - port: 6443
                 protocol: TCP
           # Scrape metrics from pods in any namespace
           - to:
