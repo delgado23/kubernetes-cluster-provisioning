@@ -214,7 +214,11 @@
                 port: 9090
           - from:
               - ipBlock:
-                  cidr: "{{ node_network_cidr }}"
+                  cidr: "{{ k8s_pod_cidr.split('.')[:2] | join('.') }}.0.0/32"
+              - ipBlock:
+                  cidr: "{{ k8s_pod_cidr.split('.')[:2] | join('.') }}.1.0/32"
+              - ipBlock:
+                  cidr: "{{ k8s_pod_cidr.split('.')[:2] | join('.') }}.2.0/32"
             ports:
               - protocol: TCP
                 port: 9090
