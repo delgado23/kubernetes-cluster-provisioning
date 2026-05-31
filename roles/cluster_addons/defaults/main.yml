@@ -19,6 +19,7 @@ descheduler_namespace: descheduler
 prometheus_namespace: monitoring
 prometheus_storage_size: 20Gi
 alertmanager_storage_size: 2Gi
+node_network_cidr: "172.16.0.0/16"
 
 # Authentik SSO — set vault_authentik_url in vault before running addons
 k8s_manifests_dir: /root/k8s-manifests
