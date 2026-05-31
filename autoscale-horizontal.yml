@@ -186,9 +186,9 @@
       ansible.builtin.set_fact:
         _scale_out_needed: >-
           {{
-            (_avg_cpu | int > worker_scale_out_cpu_threshold | int)
-            or
-            (_avg_mem | int > worker_scale_out_mem_threshold | int)
+            (_worker_count | int < worker_min_count | int)
+            or (_avg_cpu | int > worker_scale_out_cpu_threshold | int)
+            or (_avg_mem | int > worker_scale_out_mem_threshold | int)
           }}
         _scale_in_safe: >-
           {{
@@ -213,7 +213,8 @@
         msg: >-
           Workers: {{ _worker_count }} (min {{ worker_min_count }}, max {{ worker_max_count }})
           | Avg CPU: {{ _avg_cpu }}%  Avg MEM: {{ _avg_mem }}%
-          | Scale-out: {{ _scale_out_needed }}  Scale-in: {{ _scale_in_needed }} (safe: {{ _scale_in_safe }})
+          | Scale-out: {{ _scale_out_needed }}{% if _worker_count | int < worker_min_count | int %} (below minimum){% endif %}
+          Scale-in: {{ _scale_in_needed }} (safe: {{ _scale_in_safe }})
           | Cooldown: {{ _cooldown_active }}
           {% if _scale_in_needed and _scale_in_safe %}| Scale-in target: {{ _scale_in_target }}{% endif %}
 
