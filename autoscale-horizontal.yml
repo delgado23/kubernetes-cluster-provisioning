@@ -77,7 +77,7 @@
     worker_scale_out_mem_threshold: 80
     worker_scale_in_cpu_threshold:  20
     worker_scale_in_mem_threshold:  30
-    worker_min_count:               2
+    worker_min_count:               3
     worker_max_count:               10
     scale_out_template_id:          54
     scale_in_template_id:           53
