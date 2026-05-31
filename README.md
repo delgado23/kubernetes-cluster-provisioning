@@ -421,7 +421,7 @@ alertmanager_storage_size: 2Gi
 
 ### Headlamp Plugin Setup
 
-The `@headlamp-k8s/prometheus-metrics` plugin is installed automatically at Headlamp pod startup via an init container. After deployment:
+The `@headlamp-k8s/prometheus-metrics` plugin is installed automatically via the Headlamp plugin manager sidecar. After deployment:
 
 1. Open Headlamp and navigate to **Settings → Plugins → Prometheus Metrics**
 2. Set the Prometheus URL to `https://prometheus.{{ ingress_domain }}`
