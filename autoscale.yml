@@ -258,6 +258,7 @@
         body_format: form-urlencoded
         body:
           memory: "{{ [item.cur_mem_mb + memory_scale_step_mb, item.max_mem_mb] | min }}"
+          balloon: "{{ [item.cur_mem_mb + memory_scale_step_mb, item.max_mem_mb] | min }}"
         validate_certs: true
         status_code: [200]
       loop: "{{ _scale_list }}"
@@ -324,6 +325,7 @@
         body_format: form-urlencoded
         body:
           memory: "{{ [item.cur_mem_mb - memory_scaledown_step_mb, item.min_mem_mb] | max }}"
+          balloon: "{{ [item.cur_mem_mb - memory_scaledown_step_mb, item.min_mem_mb] | max }}"
         validate_certs: true
         status_code: [200]
       loop: "{{ _scale_list }}"
