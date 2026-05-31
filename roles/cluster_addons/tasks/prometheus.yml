@@ -206,6 +206,9 @@
               - namespaceSelector:
                   matchLabels:
                     kubernetes.io/metadata.name: {{ traefik_namespace }}
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: {{ headlamp_namespace }}
             ports:
               - protocol: TCP
                 port: 9090
