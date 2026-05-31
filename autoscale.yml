@@ -248,6 +248,7 @@
       when: not (item.skipped | default(false))
 
     # ── 7. Hot-add memory where needed ──────────────────────────────────────
+    # Scale-up: set memory first (balloon stays below new value), then balloon.
 
     - name: Scale up memory
       ansible.builtin.uri:
@@ -258,7 +259,6 @@
         body_format: form-urlencoded
         body:
           memory: "{{ [item.cur_mem_mb + memory_scale_step_mb, item.max_mem_mb] | min }}"
-          balloon: "{{ [item.cur_mem_mb + memory_scale_step_mb, item.max_mem_mb] | min }}"
         validate_certs: true
         status_code: [200]
       loop: "{{ _scale_list }}"
@@ -268,6 +268,25 @@
         - item.mem_pct | int > memory_scale_threshold | int
         - item.cur_mem_mb < item.max_mem_mb
       register: _mem_scaled
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Scale up balloon to match new memory
+      ansible.builtin.uri:
+        url: "{{ _pve_base }}/qemu/{{ item.vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _pve_auth }}"
+        body_format: form-urlencoded
+        body:
+          balloon: "{{ [item.cur_mem_mb + memory_scale_step_mb, item.max_mem_mb] | min }}"
+        validate_certs: true
+        status_code: [200]
+      loop: "{{ _scale_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+      when:
+        - item.mem_pct | int > memory_scale_threshold | int
+        - item.cur_mem_mb < item.max_mem_mb
       no_log: "{{ 'debug' not in ansible_run_tags }}"
 
     - name: Report memory scaling actions
@@ -315,6 +334,26 @@
       when: not (item.skipped | default(false))
 
     # ── 9. Scale down memory where utilisation is low ────────────────────────
+    # Scale-down: reduce balloon first (must stay <= memory), then memory.
+
+    - name: Scale down balloon before memory
+      ansible.builtin.uri:
+        url: "{{ _pve_base }}/qemu/{{ item.vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _pve_auth }}"
+        body_format: form-urlencoded
+        body:
+          balloon: "{{ [item.cur_mem_mb - memory_scaledown_step_mb, item.min_mem_mb] | max }}"
+        validate_certs: true
+        status_code: [200]
+      loop: "{{ _scale_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+      when:
+        - item.mem_pct | int < memory_scaledown_threshold | int
+        - item.cur_mem_mb > item.min_mem_mb
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
 
     - name: Scale down memory
       ansible.builtin.uri:
@@ -325,7 +364,6 @@
         body_format: form-urlencoded
         body:
           memory: "{{ [item.cur_mem_mb - memory_scaledown_step_mb, item.min_mem_mb] | max }}"
-          balloon: "{{ [item.cur_mem_mb - memory_scaledown_step_mb, item.min_mem_mb] | max }}"
         validate_certs: true
         status_code: [200]
       loop: "{{ _scale_list }}"
