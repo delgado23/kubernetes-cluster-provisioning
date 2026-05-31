@@ -23,6 +23,7 @@ k8s_api_endpoint_ip: "172.16.0.29"
 metallb_pool:        "172.16.0.50-172.16.0.60"
 k8s_pod_cidr:        "10.244.0.0/16"    # Flannel pod network
 k8s_service_cidr:    "10.96.0.0/12"     # Kubernetes service network
+k8s_node_cidr:       "172.16.0.0/23"    # Node/VM network (post-DNAT kube-apiserver destination)
 
 # ------------------------------------------------------------------
 # Derived from cluster_env — override via extra_vars only if needed
