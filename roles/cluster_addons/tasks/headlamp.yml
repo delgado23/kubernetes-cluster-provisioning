@@ -149,8 +149,11 @@
         kind: ClusterRole
         name: cluster-admin
       subjects:
+        # M-OIDC: the kube-apiserver prefixes OIDC groups with "oidc:" (see
+        # apiserver-auth-config.yaml.j2), so this cluster-admin binding must
+        # reference the prefixed group name to match.
         - kind: Group
-          name: "{{ headlamp_admin_group }}"
+          name: "oidc:{{ headlamp_admin_group }}"
           apiGroup: rbac.authorization.k8s.io
 
 - name: Apply Headlamp RBAC

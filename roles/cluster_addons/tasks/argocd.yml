@@ -70,6 +70,9 @@
             oidc.authentik.clientSecret: "{{ vault_authentik_argocd_client_secret }}"
         rbac:
           policy.default: role:readonly
+          # ArgoCD authenticates users through its OWN OIDC (Dex -> Authentik),
+          # not the kube-apiserver, so the apiserver's "oidc:" group prefix
+          # (M-OIDC) does NOT apply here. Match the raw Authentik group name.
           policy.csv: |
             g, {{ argocd_admin_group }}, role:admin
 

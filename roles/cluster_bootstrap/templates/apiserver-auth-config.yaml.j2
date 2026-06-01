@@ -27,4 +27,10 @@ jwt:
         prefix: ""
       groups:
         claim: groups
-        prefix: ""
+        # M-OIDC: namespace OIDC groups so a token group such as "system:masters"
+        # cannot collide with a built-in Kubernetes group and escalate to
+        # cluster-admin. Any RBAC that binds an OIDC group reached THROUGH the
+        # kube-apiserver (e.g. Headlamp) must use this prefix — see
+        # headlamp.yml (oidc:{{ '{{' }} headlamp_admin_group {{ '}}' }}).
+        # NOTE: ArgoCD does its own OIDC and is NOT affected by this prefix.
+        prefix: "oidc:"
