@@ -23,6 +23,13 @@
     - 2379
     - 2380
 
+- name: Open etcd metrics port (2381/tcp)
+  ansible.posix.firewalld:
+    port: 2381/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
 - name: Open Kubelet API port (10250/tcp)
   ansible.posix.firewalld:
     port: 10250/tcp
