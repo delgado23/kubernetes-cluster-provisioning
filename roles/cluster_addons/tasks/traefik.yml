@@ -64,6 +64,24 @@
       deployment:
         replicas: 2
 
+      # Traefik is the cluster ingress — if all replicas go down, every service
+      # behind it is unreachable. A PDB stops a node drain (maintenance.yml) from
+      # evicting the last replica, and anti-affinity spreads the two replicas onto
+      # different nodes so a single drain (or a 2-node worker drain) can't take both.
+      podDisruptionBudget:
+        enabled: true
+        minAvailable: 1
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: traefik
+
       service:
         type: LoadBalancer
         loadBalancerIP: "{{ _ingress_ip.stdout | trim }}"

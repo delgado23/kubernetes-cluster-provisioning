@@ -50,6 +50,38 @@
       service:
         type: ClusterIP
 
+      # The headlamp namespace enforces the "restricted" Pod Security Standard
+      # (see pss.yml). The chart's default securityContext is missing
+      # allowPrivilegeEscalation, capabilities.drop and seccompProfile, so the
+      # ReplicaSet cannot recreate pods once the restricted label is applied —
+      # which silently breaks Headlamp the moment a node is drained (maintenance.yml)
+      # and an evicted pod tries to come back. These fields make the pods compliant.
+      podSecurityContext:
+        seccompProfile:
+          type: RuntimeDefault
+
+      securityContext:
+        runAsNonRoot: true
+        privileged: false
+        runAsUser: 100
+        runAsGroup: 101
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+
+      # Spread the 3 replicas across nodes so a node drain (see maintenance.yml,
+      # which drains workers two at a time) can never evict every replica at once.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: headlamp
+
       config:
         baseURL: ""
         oidc:
@@ -134,6 +166,37 @@
   ansible.builtin.fail:
     msg: "Headlamp Helm install failed — see pod status and logs above"
   when: headlamp_helm_output.rc != 0
+
+- name: Write Headlamp PodDisruptionBudget manifest
+  # Without a PDB, kubectl drain (maintenance.yml) can evict every Headlamp
+  # replica at once, taking the whole UI down. minAvailable: 1 forces the drain
+  # to wait until a replica reschedules elsewhere before evicting the last one.
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/headlamp/pdb.yml"
+    mode: "0600"
+    content: |
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: headlamp
+        namespace: {{ headlamp_namespace }}
+      spec:
+        minAvailable: 1
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: headlamp
+
+- name: Apply Headlamp PodDisruptionBudget
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/headlamp/pdb.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: headlamp_pdb_output
+  changed_when: true
+
+- name: Print Headlamp PodDisruptionBudget apply output
+  ansible.builtin.debug:
+    var: headlamp_pdb_output.stdout_lines
 
 - name: Write Headlamp RBAC manifest
   ansible.builtin.copy:
