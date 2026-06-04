@@ -136,14 +136,13 @@
             cpu: 200m
             memory: 128Mi
 
+      # Dex is not used: SSO is configured via configs.cm.oidc.config above, which
+      # is ArgoCD's OWN OIDC client talking to Authentik directly (no dex.config
+      # connectors). The chart-bundled dex also crash-loops here — the argocd-dex
+      # binary segfaults (exit 139) inside the incompatible bundled dex image — so
+      # disable the unused component rather than ship a perpetually failing pod.
       dex:
-        resources:
-          requests:
-            cpu: 50m
-            memory: 64Mi
-          limits:
-            cpu: 200m
-            memory: 128Mi
+        enabled: false
 
       notifications:
         resources:
