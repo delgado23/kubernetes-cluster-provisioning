@@ -70,6 +70,9 @@
             oidc.authentik.clientSecret: "{{ vault_authentik_argocd_client_secret }}"
         rbac:
           policy.default: role:readonly
+          # ArgoCD authenticates users through its OWN OIDC (Dex -> Authentik),
+          # not the kube-apiserver, so the apiserver's "oidc:" group prefix
+          # (M-OIDC) does NOT apply here. Match the raw Authentik group name.
           policy.csv: |
             g, {{ argocd_admin_group }}, role:admin
 
@@ -84,6 +87,12 @@
 
       server:
         replicas: 2
+        # Keep a replica serving through node drains (maintenance.yml). These
+        # components already have pod anti-affinity from the chart; the PDB stops
+        # a 2-node worker drain from evicting both replicas at once.
+        pdb:
+          enabled: true
+          minAvailable: 1
         resources:
           requests:
             cpu: 100m
@@ -94,6 +103,9 @@
 
       repoServer:
         replicas: 2
+        pdb:
+          enabled: true
+          minAvailable: 1
         resources:
           requests:
             cpu: 100m
@@ -104,6 +116,9 @@
 
       applicationSet:
         replicas: 2
+        pdb:
+          enabled: true
+          minAvailable: 1
         resources:
           requests:
             cpu: 50m
@@ -121,14 +136,13 @@
             cpu: 200m
             memory: 128Mi
 
+      # Dex is not used: SSO is configured via configs.cm.oidc.config above, which
+      # is ArgoCD's OWN OIDC client talking to Authentik directly (no dex.config
+      # connectors). The chart-bundled dex also crash-loops here — the argocd-dex
+      # binary segfaults (exit 139) inside the incompatible bundled dex image — so
+      # disable the unused component rather than ship a perpetually failing pod.
       dex:
-        resources:
-          requests:
-            cpu: 50m
-            memory: 64Mi
-          limits:
-            cpu: 200m
-            memory: 128Mi
+        enabled: false
 
       notifications:
         resources:

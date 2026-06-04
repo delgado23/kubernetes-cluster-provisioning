@@ -2,19 +2,26 @@
 # =============================================================================
 # maintenance.yml — Rolling OS Maintenance for Kubernetes Nodes
 # =============================================================================
-# Drains, updates packages, reboots, and uncordons nodes one at a time
-# for control planes and two at a time for workers.
+# Drains, updates packages, reboots, and uncordons nodes one at a time for
+# both control planes and workers.
+#
+# Cluster scoping: this playbook targets the Foreman host groups, which contain
+# the nodes of EVERY cluster regardless of environment. Each play therefore
+# skips any node whose Foreman `cluster_env` parameter does not match the
+# `cluster_env` passed in — before any SSH connection — so a run only ever
+# touches one cluster. `cluster_env` is REQUIRED (the Ascender survey supplies
+# it; on the CLI pass `-e cluster_env=test|prod`).
 #
 # Usage:
-#   ansible-playbook maintenance.yml
-#   ansible-playbook maintenance.yml --limit foreman_almalinux10_kubernetesworkernode
-#   ansible-playbook maintenance.yml -e "drain_timeout=600"
+#   ansible-playbook maintenance.yml -e cluster_env=test
+#   ansible-playbook maintenance.yml -e cluster_env=prod
+#   ansible-playbook maintenance.yml -e cluster_env=test -e "drain_timeout=600"
 # =============================================================================
 
 - name: OS Maintenance — Control Plane Nodes
   hosts: foreman_almalinux10_kubernetescontrolplanenode
   serial: 1
-  gather_facts: true
+  gather_facts: false
   become: true
   vars:
     drain_timeout: 300
@@ -24,13 +31,25 @@
     kubeconfig: /etc/kubernetes/admin.conf
     node_role: control-plane
     delegate_kubectl: false
+  pre_tasks:
+    # Drop nodes from other clusters before any connection is attempted, so a
+    # powered-off / mid-wipe node in another cluster can never fail this run.
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+    - name: Gather facts for this cluster's nodes
+      ansible.builtin.setup:
   roles:
     - role: node_maintenance
 
 - name: OS Maintenance — Worker Nodes
   hosts: foreman_almalinux10_kubernetesworkernode
-  serial: 2
-  gather_facts: true
+  # serial: 1 — drain one worker at a time. Draining more than one at once can
+  # overwhelm the remaining workers on small clusters (a 3-worker cluster has
+  # only 2 nodes left to absorb the load), tipping a node NotReady and failing
+  # the run. One at a time always leaves maximum capacity for evicted pods.
+  serial: 1
+  gather_facts: false
   become: true
   vars:
     drain_timeout: 300
@@ -40,6 +59,21 @@
     kubeconfig: /etc/kubernetes/admin.conf
     node_role: worker
     delegate_kubectl: true
-    control_plane_host: "{{ groups['foreman_almalinux10_kubernetescontrolplanenode'][0] }}"
+    # Delegate kubectl to a control plane of THIS cluster (not just the first
+    # CP in the group, which may belong to a different cluster_env).
+    control_plane_host: >-
+      {{
+        groups['foreman_almalinux10_kubernetescontrolplanenode']
+        | map('extract', hostvars)
+        | selectattr('foreman_params.cluster_env', 'equalto', cluster_env)
+        | map(attribute='inventory_hostname')
+        | first
+      }}
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+    - name: Gather facts for this cluster's nodes
+      ansible.builtin.setup:
   roles:
     - role: node_maintenance
