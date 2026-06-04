@@ -29,6 +29,17 @@
         enabled: false
 
       prometheus:
+        # The Headlamp prometheus plugin (static, baked into the Headlamp image)
+        # auto-discovers Prometheus by listing Services labelled
+        # app.kubernetes.io/name=prometheus[,app.kubernetes.io/component=server].
+        # kube-prometheus-stack does NOT set these on its Service, so without
+        # them the plugin finds nothing and renders no graphs in Headlamp.
+        # (Re-add them here because the chart version is unpinned and a bump
+        # silently dropped whatever the plugin used to match on.)
+        service:
+          labels:
+            app.kubernetes.io/name: prometheus
+            app.kubernetes.io/component: server
         prometheusSpec:
           retention: 15d
           retentionSize: "18GB"
