@@ -44,10 +44,15 @@
   ansible.builtin.command: sysctl --system
   changed_when: false
 
+# containerd and the Kubernetes components (kubelet/kubeadm/kubectl) are baked
+# into the kubernetes-common bootc image, so the package installs are skipped on
+# image-mode hosts. The config deploy and service enablement below still run —
+# they only write /etc and toggle units, which are writable on an ostree system.
 - name: Install containerd
   ansible.builtin.dnf:
     name: containerd
     state: present
+  when: not (image_mode | default(false))
 
 - name: Ensure /etc/containerd directory exists
   ansible.builtin.file:
@@ -80,6 +85,7 @@
       - kubectl
     state: present
     disable_excludes: kubernetes
+  when: not (image_mode | default(false))
 
 - name: Enable and start kubelet
   ansible.builtin.systemd:

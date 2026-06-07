@@ -283,11 +283,22 @@
   changed_when: false
   when: not kubelet_conf.stat.exists
 
+# On image-mode (bootc) hosts the etcd user/group are baked into the image via
+# nss-altfiles (/usr/lib/passwd), not /etc/passwd, so the user module would try
+# to usermod that entry and fail ("user 'etcd' does not exist in /etc/passwd").
+# The baked user already matches CIS intent, so only create when missing.
+- name: Check whether the etcd user already exists
+  ansible.builtin.command: getent passwd etcd
+  register: _etcd_user_check
+  changed_when: false
+  failed_when: false
+
 - name: Create etcd system group (CIS 1.1.12)
   ansible.builtin.group:
     name: etcd
     system: true
     state: present
+  when: _etcd_user_check.rc != 0
 
 - name: Create etcd system user (CIS 1.1.12)
   ansible.builtin.user:
@@ -298,6 +309,7 @@
     home: /var/lib/etcd
     create_home: false
     state: present
+  when: _etcd_user_check.rc != 0
 
 - name: Set etcd data directory ownership (CIS 1.1.12)
   ansible.builtin.file:
