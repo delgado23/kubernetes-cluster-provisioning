@@ -20,6 +20,9 @@
     headers:
       Accept: application/vnd.github+json
   register: _helm_release_info
+  retries: 5
+  delay: 10
+  until: _helm_release_info is success
 
 - name: Set Helm version fact
   ansible.builtin.set_fact:
@@ -83,6 +86,9 @@
     headers:
       Accept: application/vnd.github+json
   register: k9s_release_info
+  retries: 5
+  delay: 10
+  until: k9s_release_info is success
 
 - name: Set k9s version fact
   ansible.builtin.set_fact:
@@ -94,6 +100,10 @@
   changed_when: false
   failed_when: false
 
+# k9s is installed from the release tarball into /usr/local/bin (like Helm above),
+# not the RPM via dnf — dnf fails on image-mode hosts (pkg_mgr=atomic_container,
+# immutable /usr), and /usr/local is a writable symlink to /var/usrlocal in the
+# bootc image. This works on both package- and image-mode hosts.
 - name: Install k9s
   when: _k9s_installed.rc != 0 or k9s_version not in _k9s_installed.stdout
   block:
@@ -104,24 +114,27 @@
         mode: "0600"
         force: true
 
-    - name: Extract k9s RPM checksum
+    - name: Extract k9s tarball checksum
       ansible.builtin.shell:
-        cmd: "grep 'k9s_linux_amd64.rpm$' /tmp/k9s_{{ k9s_version }}_checksums.sha256 | awk '{print $1}'"
-      register: _k9s_rpm_checksum
+        cmd: "grep 'k9s_Linux_amd64.tar.gz$' /tmp/k9s_{{ k9s_version }}_checksums.sha256 | awk '{print $1}'"
+      register: _k9s_tgz_checksum
       changed_when: false
 
-    - name: Download k9s RPM
+    - name: Download k9s tarball
       ansible.builtin.get_url:
-        url: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/k9s_linux_amd64.rpm"
-        dest: "/tmp/k9s_{{ k9s_version }}_linux_amd64.rpm"
+        url: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/k9s_Linux_amd64.tar.gz"
+        dest: "/tmp/k9s_{{ k9s_version }}_Linux_amd64.tar.gz"
         mode: "0644"
-        checksum: "sha256:{{ _k9s_rpm_checksum.stdout }}"
+        checksum: "sha256:{{ _k9s_tgz_checksum.stdout }}"
 
-    - name: Install k9s RPM
-      ansible.builtin.dnf:
-        name: "/tmp/k9s_{{ k9s_version }}_linux_amd64.rpm"
-        state: present
-        disable_gpg_check: true
+    - name: Extract k9s binary to /usr/local/bin
+      ansible.builtin.unarchive:
+        src: "/tmp/k9s_{{ k9s_version }}_Linux_amd64.tar.gz"
+        dest: /usr/local/bin
+        remote_src: true
+        extra_opts:
+          - k9s
+        mode: "0755"
 
 - name: Configure k9s KUBECONFIG for root in bash profile
   ansible.builtin.lineinfile:

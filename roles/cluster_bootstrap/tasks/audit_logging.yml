@@ -24,10 +24,14 @@
     group: root
     mode: '0700'
 
+# python3-pyyaml is baked into the bootc image (and the dnf module fails on
+# image-mode hosts: pkg_mgr is detected as atomic_container). Skip the install
+# there; the python3 manifest-patch task below still runs (yaml is importable).
 - name: Ensure python3-pyyaml is installed
   ansible.builtin.dnf:
     name: python3-pyyaml
     state: present
+  when: not (image_mode | default(false))
 
 # Patch the static pod manifest directly. kubeadm-config.yml.j2 covers fresh installs;
 # this task ensures existing clusters also get audit logging without a full kubeadm upgrade.

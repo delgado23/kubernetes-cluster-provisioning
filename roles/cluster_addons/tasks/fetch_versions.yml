@@ -131,13 +131,17 @@
         | regex_replace('^v', '')
       }}
     reflector_version:      "{{ _fetch_results.results[5].json.tag_name | regex_replace('^v', '') }}"
+    # Honor argocd_version_pin (defaults/main.yml) when set; otherwise track the
+    # latest argo-cd chart release. Empty/undefined pin falls through to latest.
     argocd_version: >-
       {{
-        _fetch_results.results[6].json
-        | selectattr('tag_name', 'match', '^argo-cd-')
-        | map(attribute='tag_name')
-        | first
-        | regex_replace('^argo-cd-', '')
+        argocd_version_pin | default('', true) or (
+          _fetch_results.results[6].json
+          | selectattr('tag_name', 'match', '^argo-cd-')
+          | map(attribute='tag_name')
+          | first
+          | regex_replace('^argo-cd-', '')
+        )
       }}
     descheduler_version:    "{{ _fetch_results.results[7].json.tag_name | regex_replace('^v', '') }}"
     prometheus_version: >-
