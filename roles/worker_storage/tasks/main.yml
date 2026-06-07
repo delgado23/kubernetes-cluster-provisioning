@@ -45,6 +45,9 @@
     lsblk_data: "{{ lsblk_output.stdout | from_json }}"
 
 - name: Identify root disk name
+  # On image-mode (bootc/ostree) hosts the real root filesystem is mounted at
+  # /sysroot, not / (lsblk shows the root LV at /sysroot). Match both so the
+  # root disk is found on package-mode (/) and image-mode (/sysroot) hosts.
   ansible.builtin.set_fact:
     root_disk_name: >-
       {{
@@ -52,7 +55,7 @@
         | selectattr('type', 'equalto', 'disk')
         | selectattr('children', 'defined')
         | selectattr('children', 'ne', none)
-        | json_query("[?children[?mountpoint=='/'] || children[?children[?mountpoint=='/']]]")
+        | json_query("[?children[?mountpoint=='/' || mountpoint=='/sysroot'] || children[?children[?mountpoint=='/' || mountpoint=='/sysroot']]]")
         | map(attribute='name')
         | first
       }}
