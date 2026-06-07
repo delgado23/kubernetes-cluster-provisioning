@@ -136,6 +136,12 @@
   register: flannel_release
   delegate_to: localhost
   become: false
+  # Retry: this runs on the Ascender execution node, whose DNS/egress to
+  # api.github.com can transiently fail ("Name or service not known") and would
+  # otherwise abort the whole build before the CNI is installed.
+  retries: 5
+  delay: 10
+  until: flannel_release is success
   when: flannel_version is not defined
 
 - name: Set Flannel version fact

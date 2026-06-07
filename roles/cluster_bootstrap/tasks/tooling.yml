@@ -20,6 +20,9 @@
     headers:
       Accept: application/vnd.github+json
   register: _helm_release_info
+  retries: 5
+  delay: 10
+  until: _helm_release_info is success
 
 - name: Set Helm version fact
   ansible.builtin.set_fact:
@@ -83,6 +86,9 @@
     headers:
       Accept: application/vnd.github+json
   register: k9s_release_info
+  retries: 5
+  delay: 10
+  until: k9s_release_info is success
 
 - name: Set k9s version fact
   ansible.builtin.set_fact:
