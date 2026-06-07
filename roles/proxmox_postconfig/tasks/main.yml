@@ -49,6 +49,11 @@
     msg: "Matched '{{ inventory_hostname }}' → '{{ vm_current_name }}' (VMID {{ vmid }})"
 
 - name: Send ACPI shutdown signal
+  # forceStop: 1 — fall back to a hard stop if the guest doesn't ACPI-shut-down
+  # within shutdown_timeout. Image-mode (bootc) nodes occasionally don't honour
+  # the ACPI power event in time, and this is a fresh, pre-cluster node that is
+  # about to be reconfigured and restarted, so forcing the stop is safe and keeps
+  # provisioning from hanging.
   ansible.builtin.uri:
     url: "{{ _base }}/qemu/{{ vmid }}/status/shutdown"
     method: POST
@@ -56,7 +61,7 @@
       Authorization: "{{ _auth }}"
     body_format: form-urlencoded
     body:
-      forceStop: 0
+      forceStop: 1
       timeout: "{{ shutdown_timeout }}"
     validate_certs: "{{ proxmox_validate_certs }}"
     status_code: [200]
@@ -72,7 +77,9 @@
     return_content: true
   register: vm_status
   until: vm_status.json.data.status == 'stopped'
-  retries: "{{ (shutdown_timeout / 5) | int }}"
+  # Outlast the graceful window: the forceStop only lands after shutdown_timeout,
+  # so poll for shutdown_timeout + a margin for the hard stop to complete.
+  retries: "{{ ((shutdown_timeout / 5) | int) + 24 }}"
   delay: 5
   delegate_to: localhost
 
