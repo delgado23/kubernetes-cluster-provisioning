@@ -189,6 +189,20 @@
       ansible.builtin.wait_for_connection:
         timeout: 600
 
+    # Image-mode (bootc/ostree) hosts have an immutable /usr — packages are baked
+    # into the bootc image, not installed at runtime. Detect that here (this play
+    # runs for every host with no sentinel/kubelet gating) so the image_mode fact
+    # is available to all later prep plays and roles; package-mode tasks are
+    # skipped when it is true.
+    - name: Detect image-mode (ostree/bootc) booted system
+      ansible.builtin.stat:
+        path: /run/ostree-booted
+      register: ostree_booted
+
+    - name: Set image_mode fact
+      ansible.builtin.set_fact:
+        image_mode: "{{ ostree_booted.stat.exists }}"
+
 - name: Linux base provisioning
   hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
   become: true
@@ -224,6 +238,10 @@
   vars_files:
     - vars/vault.yml
     - vars/freeipa.yml
+  vars:
+    # ipa-client is baked into the bootc image; on image-mode hosts the
+    # ansible_freeipa role must NOT try to install it (immutable /usr).
+    ipaclient_install_packages: "{{ not (image_mode | default(false)) }}"
   pre_tasks:
     - name: Check for provisioned sentinel file
       ansible.builtin.stat:

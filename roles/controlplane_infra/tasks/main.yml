@@ -62,12 +62,16 @@
   ansible.builtin.command: firewall-cmd --reload
   changed_when: false
 
+# keepalived and haproxy are baked into the kubernetes-controlplane bootc image,
+# so the install is skipped on image-mode hosts. The templated configs, SELinux
+# boolean and service enablement below still run (they write /etc / toggle units).
 - name: Install controlplane packages
   ansible.builtin.dnf:
     name:
       - keepalived
       - haproxy
     state: present
+  when: not (image_mode | default(false))
 
 - name: Deploy HAProxy k8s config
   ansible.builtin.template:

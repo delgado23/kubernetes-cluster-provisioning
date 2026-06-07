@@ -1,19 +1,28 @@
+# --- Package-mode tasks -----------------------------------------------------
+# Repo cleanup, OS update and the baseline package install only apply to
+# traditional (package-based) hosts. On image-mode (bootc) hosts /usr is
+# immutable and this exact package set is baked into the base bootc image
+# (foreman-bootc Containerfile), so these are skipped. image_mode is set in
+# main.yml's "Wait for nodes to become reachable" play.
 - name: Find AlmaLinux Repos
   ansible.builtin.find:
     path: /etc/yum.repos.d/
     patterns: "Alma*.repo,alma*.repo"
   register: alma_repos
+  when: not (image_mode | default(false))
 
 - name: Remove AlmaLinux Repos
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: absent
-  loop: "{{ alma_repos.files }}"
+  loop: "{{ alma_repos.files | default([]) }}"
+  when: not (image_mode | default(false))
 
 - name: Make sure system is up to date
   ansible.builtin.yum:
     state: latest
     name: "*"
+  when: not (image_mode | default(false))
 
 - name: Install packages
   ansible.builtin.yum:
@@ -36,7 +45,11 @@
       - katello-host-tools-tracer
       - yum-utils
       - duo_unix
+  when: not (image_mode | default(false))
 
+# --- Runtime configuration --------------------------------------------------
+# Writes only to /etc, /var and /opt and toggles services — all writable on an
+# ostree system, so these run on both package-mode and image-mode hosts.
 - name: Enable services and timers
   ansible.builtin.systemd_service:
     name: "{{ item }}"
