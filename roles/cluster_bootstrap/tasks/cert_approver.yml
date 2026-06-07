@@ -8,6 +8,9 @@
   register: _cert_approver_release
   delegate_to: localhost
   become: false
+  retries: 5
+  delay: 10
+  until: _cert_approver_release is success
 
 - name: Set cert-approver version fact
   ansible.builtin.set_fact:
