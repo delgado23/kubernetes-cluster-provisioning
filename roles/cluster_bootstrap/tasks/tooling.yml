@@ -100,8 +100,14 @@
   changed_when: false
   failed_when: false
 
+# k9s is installed from a downloaded RPM via dnf, which fails on image-mode hosts
+# (pkg_mgr=atomic_container, immutable /usr). It's an operator convenience, so
+# skip it on image-mode; Helm and kubectl (the tooling the playbook relies on)
+# install to the writable /usr/local/bin and still run.
 - name: Install k9s
-  when: _k9s_installed.rc != 0 or k9s_version not in _k9s_installed.stdout
+  when:
+    - not (image_mode | default(false))
+    - _k9s_installed.rc != 0 or k9s_version not in _k9s_installed.stdout
   block:
     - name: Download k9s checksums
       ansible.builtin.get_url:
