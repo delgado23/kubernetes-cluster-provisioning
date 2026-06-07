@@ -17,6 +17,9 @@
   ansible.builtin.command: firewall-cmd --reload
   changed_when: false
 
+# lvm2, gdisk and iscsi-initiator-utils are baked into the kubernetes-worker
+# bootc image, so the install is skipped on image-mode hosts. iscsid enablement
+# and the data-disk LVM/XFS/mount flow below still run (runtime, disk-specific).
 - name: Install LVM2, gdisk, and iSCSI initiator (required by Longhorn)
   ansible.builtin.dnf:
     name:
@@ -24,6 +27,7 @@
       - gdisk
       - iscsi-initiator-utils
     state: present
+  when: not (image_mode | default(false))
 
 - name: Enable and start iscsid
   ansible.builtin.systemd:
