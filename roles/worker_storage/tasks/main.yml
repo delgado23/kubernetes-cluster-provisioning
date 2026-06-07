@@ -17,6 +17,9 @@
   ansible.builtin.command: firewall-cmd --reload
   changed_when: false
 
+# lvm2, gdisk and iscsi-initiator-utils are baked into the kubernetes-worker
+# bootc image, so the install is skipped on image-mode hosts. iscsid enablement
+# and the data-disk LVM/XFS/mount flow below still run (runtime, disk-specific).
 - name: Install LVM2, gdisk, and iSCSI initiator (required by Longhorn)
   ansible.builtin.dnf:
     name:
@@ -24,6 +27,7 @@
       - gdisk
       - iscsi-initiator-utils
     state: present
+  when: not (image_mode | default(false))
 
 - name: Enable and start iscsid
   ansible.builtin.systemd:
@@ -41,6 +45,9 @@
     lsblk_data: "{{ lsblk_output.stdout | from_json }}"
 
 - name: Identify root disk name
+  # On image-mode (bootc/ostree) hosts the real root filesystem is mounted at
+  # /sysroot, not / (lsblk shows the root LV at /sysroot). Match both so the
+  # root disk is found on package-mode (/) and image-mode (/sysroot) hosts.
   ansible.builtin.set_fact:
     root_disk_name: >-
       {{
@@ -48,7 +55,7 @@
         | selectattr('type', 'equalto', 'disk')
         | selectattr('children', 'defined')
         | selectattr('children', 'ne', none)
-        | json_query("[?children[?mountpoint=='/'] || children[?children[?mountpoint=='/']]]")
+        | json_query("[?children[?mountpoint=='/' || mountpoint=='/sysroot'] || children[?children[?mountpoint=='/' || mountpoint=='/sysroot']]]")
         | map(attribute='name')
         | first
       }}
