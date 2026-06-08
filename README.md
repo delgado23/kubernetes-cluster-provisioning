@@ -8,6 +8,7 @@ Ansible automation for provisioning and managing a highly-available Kubernetes c
 
 | Component | Details |
 |---|---|
+| Node OS | AlmaLinux 10, either package-mode (dnf) or image-mode (bootc/ostree) — auto-detected per node, see [OS Image Mode](#os-image-mode-bootc) |
 | Control plane | 1–3 nodes (primary always included, up to 2 secondaries), HA via HAProxy + keepalived |
 | Workers | 1–99 nodes, Longhorn LVM on dedicated data disk |
 | Networking | Flannel VXLAN, MetalLB L2 LoadBalancer |
@@ -87,6 +88,19 @@ The playbook is safe to re-run against a partially or fully provisioned cluster:
 ### AWX Compatibility
 
 All plays target static Foreman inventory groups. Primary vs secondary control plane targeting is done via `foreman_params.k8s_role` (an inventory variable set by the Foreman plugin) rather than dynamic groups — `group_by` and `add_host` do not reliably persist across plays in AWX's isolated executor.
+
+## OS Image Mode (bootc)
+
+Nodes can run on traditional **package-mode** AlmaLinux 10 (mutable filesystem, packages installed at runtime via dnf) or on **image-mode** AlmaLinux built with [bootc](https://containers.github.io/bootc/) (an immutable, ostree-based OS shipped as a container image). The playbooks support both transparently — no survey variable is involved.
+
+Each node detects its own mode early in the prep phase by checking for `/run/ostree-booted`, and sets an `image_mode` fact that gates the rest of the run. On image-mode hosts:
+
+- **Packages are baked into the image, not installed at runtime.** `/usr` is immutable and the dnf module fails (`pkg_mgr` is detected as `atomic_container`), so all `dnf`/package-install tasks are skipped. The required software — containerd, kubelet, kubeadm, ipa-client, etcd user/group, python3-pyyaml, etc. — is expected to be present in the bootc image already (the homelab builds `kubernetes-common`, `kubernetes-controlplane`, and `kubernetes-worker` images for this).
+- **Config and unit management still run.** Tasks that only write under `/etc` or toggle systemd units work unchanged — those paths stay writable on an ostree system.
+- **Tooling installs to `/usr/local/bin`.** Helm and k9s are installed from upstream release tarballs into `/usr/local/bin` (a writable symlink to `/var/usrlocal` in the bootc image) rather than via dnf, so they work identically on both modes.
+- **OS updates use `bootc upgrade`, not dnf.** See [Node Maintenance](#node-maintenance-rolling-os-updates) below.
+
+Package-mode nodes are unaffected — `image_mode` is `false` and every dnf/package task runs as before. A cluster can even mix the two modes; detection is per-node.
 
 ## Vault Variables
 
@@ -279,7 +293,12 @@ Covers all kubeadm-managed certs (apiserver, etcd, front-proxy, admin/controller
 
 ### Node Maintenance (Rolling OS Updates)
 
-Drains, updates packages, reboots, and uncordons nodes. Control planes are rolled one at a time; workers two at a time.
+Drains, updates the OS, reboots, and uncordons nodes. Control planes are rolled one at a time; workers two at a time. The maintenance playbook runs standalone (it never runs `main.yml`'s prep play), so it re-detects `image_mode` from `/run/ostree-booted` in its own `pre_tasks`.
+
+The OS update mechanism is mode-aware (see [OS Image Mode](#os-image-mode-bootc)):
+
+- **Package-mode** nodes are patched in place with `dnf upgrade "*"` and always reboot (kernel and other in-place patches require it).
+- **Image-mode** nodes run `bootc upgrade`, which stages the newest build of the image the node already tracks (rebuilt with patches by the foreman-bootc pipeline) for the next boot. The reboot is **conditional** — the node only reboots when bootc actually staged a new image; rebooting into an identical deployment is skipped.
 
 ```bash
 ansible-playbook maintenance.yml --ask-vault-pass
