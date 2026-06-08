@@ -50,16 +50,44 @@
   ansible.builtin.debug:
     var: drain_result.stdout_lines
 
+# OS update. Package-mode hosts patch in place with dnf. Image-mode (bootc)
+# hosts have an immutable /usr — dnf fails (pkg_mgr=atomic_container) and in-place
+# changes wouldn't survive a reboot anyway. Instead `bootc upgrade` pulls the
+# newest build of the image the node already tracks (rebuilt with patches by the
+# foreman-bootc pipeline) and stages it for the next boot; the reboot below boots
+# into it.
 - name: Update all packages (dnf upgrade)
   ansible.builtin.dnf:
     name: "*"
     state: latest
     update_cache: true
   register: dnf_result
+  when: not (image_mode | default(false))
 
 - name: Show updated packages
   ansible.builtin.debug:
     msg: "{{ dnf_result.results | default(['No package output available']) }}"
+  when: not (image_mode | default(false))
+
+- name: Stage OS update (bootc upgrade)
+  ansible.builtin.command: bootc upgrade
+  register: bootc_result
+  # bootc prints "No changes" when the tracked image already matches; anything
+  # else means a new deployment was staged and a reboot is required.
+  changed_when: "'No changes' not in bootc_result.stdout"
+  when: image_mode | default(false)
+
+- name: Show bootc upgrade output
+  ansible.builtin.debug:
+    var: bootc_result.stdout_lines
+  when: image_mode | default(false)
+
+# Whether the node will reboot this run. Package-mode always reboots (kernel and
+# other in-place patches require it). Image-mode reboots only when bootc actually
+# staged a new image — rebooting into the identical deployment is pointless churn.
+- name: Determine whether a reboot is needed
+  ansible.builtin.set_fact:
+    reboot_required: "{{ (not (image_mode | default(false))) or (bootc_result.changed | default(false)) }}"
 
 - name: Reboot node
   ansible.builtin.reboot:
@@ -67,6 +95,7 @@
     msg: "Rebooting for OS maintenance"
     pre_reboot_delay: 5
     post_reboot_delay: 30
+  when: reboot_required
 
 - name: Wait for kubelet service to be active
   ansible.builtin.systemd:
@@ -112,7 +141,8 @@
       - "============================================================"
       - "Node         : {{ inventory_hostname }}"
       - "Role         : {{ node_role | default('unknown') }}"
-      - "Packages upd : {{ dnf_result.changed }}"
-      - "Rebooted     : true"
+      - "Update mode  : {{ 'bootc upgrade' if image_mode | default(false) else 'dnf upgrade' }}"
+      - "OS updated   : {{ bootc_result.changed | default(dnf_result.changed) }}"
+      - "Rebooted     : {{ reboot_required }}"
       - "Status       : Ready / Schedulable"
       - "============================================================"

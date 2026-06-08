@@ -39,6 +39,16 @@
       when: foreman_params.cluster_env | default('') != cluster_env
     - name: Gather facts for this cluster's nodes
       ansible.builtin.setup:
+    # This playbook runs standalone (it never runs main.yml's prep play), so the
+    # image_mode fact the maintenance role keys off has to be detected here too.
+    # Image-mode (bootc/ostree) hosts patch the OS with `bootc upgrade`, not dnf.
+    - name: Detect image-mode (ostree/bootc) booted system
+      ansible.builtin.stat:
+        path: /run/ostree-booted
+      register: ostree_booted
+    - name: Set image_mode fact
+      ansible.builtin.set_fact:
+        image_mode: "{{ ostree_booted.stat.exists }}"
   roles:
     - role: node_maintenance
 
@@ -75,5 +85,12 @@
       when: foreman_params.cluster_env | default('') != cluster_env
     - name: Gather facts for this cluster's nodes
       ansible.builtin.setup:
+    - name: Detect image-mode (ostree/bootc) booted system
+      ansible.builtin.stat:
+        path: /run/ostree-booted
+      register: ostree_booted
+    - name: Set image_mode fact
+      ansible.builtin.set_fact:
+        image_mode: "{{ ostree_booted.stat.exists }}"
   roles:
     - role: node_maintenance
