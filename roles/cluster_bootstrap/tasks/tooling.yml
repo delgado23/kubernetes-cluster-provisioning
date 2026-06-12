@@ -13,20 +13,13 @@
         source <(kubectl completion bash)
       fi
 
-- name: Resolve latest Helm version from GitHub API
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/helm/helm/releases/latest
-    return_content: true
-    headers:
-      Accept: application/vnd.github+json
-  register: _helm_release_info
-  retries: 5
-  delay: 10
-  until: _helm_release_info is success
-
-- name: Set Helm version fact
+# Pin Helm to the 3.x line. Resolving "latest" from GitHub silently pulled Helm 4,
+# whose `--wait` hangs indefinitely (ignoring --timeout) on charts that bundle CRDs
+# in the tracked manifest (cert-manager crds.enabled, kube-prometheus-stack), wedging
+# the cluster build. Bump this deliberately after validating newer Helm releases.
+- name: Set Helm version fact (pinned)
   ansible.builtin.set_fact:
-    helm_version: "{{ _helm_release_info.json.tag_name }}"
+    helm_version: "v3.21.1"
 
 - name: Check installed Helm version
   ansible.builtin.command: helm version --short
