@@ -1,160 +1,159 @@
 ---
+# GitHub's release API occasionally returns transient 5xx errors (e.g. 504
+# Gateway Timeout). Previously these fetches ran fire-and-forget (async +
+# poll: 0) and were only waited on with async_status, whose until/retries
+# re-polled "is the job done?" but never re-issued a failed HTTP request -- so
+# a single transient 5xx hard-failed the whole build. Each fetch now runs
+# synchronously and retries on any non-200, trading a few seconds of build
+# time for resilience against GitHub flakiness.
+
 - name: Fetch Flannel release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/flannel-io/flannel/releases/latest
     return_content: true
-  async: 60
-  poll: 0
   register: _flannel_job
+  until: _flannel_job.status == 200
+  retries: 5
+  delay: 5
 
 - name: Fetch Longhorn release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/longhorn/longhorn/releases/latest
     return_content: true
-  async: 60
-  poll: 0
   register: _longhorn_job
+  until: _longhorn_job.status == 200
+  retries: 5
+  delay: 5
 
 - name: Fetch Traefik Helm chart release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/traefik/traefik-helm-chart/releases/latest
     return_content: true
-  async: 60
-  poll: 0
   register: _traefik_job
+  until: _traefik_job.status == 200
+  retries: 5
+  delay: 5
 
 - name: Fetch cert-manager release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/cert-manager/cert-manager/releases/latest
     return_content: true
-  async: 60
-  poll: 0
   register: _certmgr_job
+  until: _certmgr_job.status == 200
+  retries: 5
+  delay: 5
 
 - name: Fetch Headlamp releases from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/kubernetes-sigs/headlamp/releases?per_page=20
     return_content: true
-  async: 60
-  poll: 0
   register: _headlamp_job
+  until: _headlamp_job.status == 200
+  retries: 5
+  delay: 5
 
 - name: Fetch reflector release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/emberstack/kubernetes-reflector/releases/latest
     return_content: true
-  async: 60
-  poll: 0
   register: _reflector_job
+  until: _reflector_job.status == 200
+  retries: 5
+  delay: 5
 
 - name: Fetch ArgoCD Helm chart releases from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/argoproj/argo-helm/releases?per_page=20
     return_content: true
-  async: 60
-  poll: 0
   register: _argocd_job
+  until: _argocd_job.status == 200
+  retries: 5
+  delay: 5
 
 - name: Fetch descheduler release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/kubernetes-sigs/descheduler/releases/latest
     return_content: true
-  async: 60
-  poll: 0
   register: _descheduler_job
+  until: _descheduler_job.status == 200
+  retries: 5
+  delay: 5
 
 - name: Fetch kube-prometheus-stack Helm chart releases from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/prometheus-community/helm-charts/releases?per_page=20
     return_content: true
-  async: 60
-  poll: 0
   register: _prometheus_job
+  until: _prometheus_job.status == 200
+  retries: 5
+  delay: 5
 
 - name: Fetch kube-router release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/cloudnativelabs/kube-router/releases/latest
     return_content: true
-  async: 60
-  poll: 0
   register: _kube_router_job
+  until: _kube_router_job.status == 200
+  retries: 5
+  delay: 5
 
 - name: Fetch MetalLB release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/metallb/metallb/releases/latest
     return_content: true
-  async: 60
-  poll: 0
   register: _metallb_job
+  until: _metallb_job.status == 200
+  retries: 5
+  delay: 5
 
 - name: Fetch metrics-server release from GitHub
   ansible.builtin.uri:
     url: https://api.github.com/repos/kubernetes-sigs/metrics-server/releases/latest
     return_content: true
-  async: 60
-  poll: 0
   register: _metrics_server_job
-
-- name: Wait for all GitHub version fetches to complete
-  ansible.builtin.async_status:
-    jid: "{{ item.ansible_job_id }}"
-  register: _fetch_results
-  until: _fetch_results.finished
-  retries: 20
-  delay: 3
-  loop:
-    - "{{ _flannel_job }}"
-    - "{{ _longhorn_job }}"
-    - "{{ _traefik_job }}"
-    - "{{ _certmgr_job }}"
-    - "{{ _headlamp_job }}"
-    - "{{ _reflector_job }}"
-    - "{{ _argocd_job }}"
-    - "{{ _descheduler_job }}"
-    - "{{ _prometheus_job }}"
-    - "{{ _kube_router_job }}"
-    - "{{ _metallb_job }}"
-    - "{{ _metrics_server_job }}"
+  until: _metrics_server_job.status == 200
+  retries: 5
+  delay: 5
 
 - name: Set resolved addon versions
   ansible.builtin.set_fact:
-    flannel_version:        "{{ _fetch_results.results[0].json.tag_name }}"
-    longhorn_version:       "{{ _fetch_results.results[1].json.tag_name | regex_replace('^v', '') }}"
-    traefik_chart_version:  "{{ _fetch_results.results[2].json.tag_name | regex_replace('^v', '') }}"
-    cert_manager_version:   "{{ _fetch_results.results[3].json.tag_name }}"
+    flannel_version:        "{{ _flannel_job.json.tag_name }}"
+    longhorn_version:       "{{ _longhorn_job.json.tag_name | regex_replace('^v', '') }}"
+    traefik_chart_version:  "{{ _traefik_job.json.tag_name | regex_replace('^v', '') }}"
+    cert_manager_version:   "{{ _certmgr_job.json.tag_name }}"
     headlamp_version: >-
       {{
-        _fetch_results.results[4].json
+        _headlamp_job.json
         | selectattr('tag_name', 'match', '^v\d')
         | map(attribute='tag_name')
         | first
         | regex_replace('^v', '')
       }}
-    reflector_version:      "{{ _fetch_results.results[5].json.tag_name | regex_replace('^v', '') }}"
+    reflector_version:      "{{ _reflector_job.json.tag_name | regex_replace('^v', '') }}"
     # Honor argocd_version_pin (defaults/main.yml) when set; otherwise track the
     # latest argo-cd chart release. Empty/undefined pin falls through to latest.
     argocd_version: >-
       {{
         argocd_version_pin | default('', true) or (
-          _fetch_results.results[6].json
+          _argocd_job.json
           | selectattr('tag_name', 'match', '^argo-cd-')
           | map(attribute='tag_name')
           | first
           | regex_replace('^argo-cd-', '')
         )
       }}
-    descheduler_version:    "{{ _fetch_results.results[7].json.tag_name | regex_replace('^v', '') }}"
+    descheduler_version:    "{{ _descheduler_job.json.tag_name | regex_replace('^v', '') }}"
     prometheus_version: >-
       {{
-        _fetch_results.results[8].json
+        _prometheus_job.json
         | selectattr('tag_name', 'match', '^kube-prometheus-stack-')
         | map(attribute='tag_name')
         | first
         | regex_replace('^kube-prometheus-stack-', '')
       }}
-    kube_router_version:    "{{ _fetch_results.results[9].json.tag_name }}"
-    metallb_version:        "{{ _fetch_results.results[10].json.tag_name }}"
-    metrics_server_version:        "{{ _fetch_results.results[11].json.tag_name }}"
+    kube_router_version:    "{{ _kube_router_job.json.tag_name }}"
+    metallb_version:        "{{ _metallb_job.json.tag_name }}"
+    metrics_server_version:        "{{ _metrics_server_job.json.tag_name }}"
 
 - name: Display resolved addon versions
   ansible.builtin.debug:
