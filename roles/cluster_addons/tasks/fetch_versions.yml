@@ -1,159 +1,79 @@
 ---
-# GitHub's release API occasionally returns transient 5xx errors (e.g. 504
-# Gateway Timeout). Previously these fetches ran fire-and-forget (async +
-# poll: 0) and were only waited on with async_status, whose until/retries
-# re-polled "is the job done?" but never re-issued a failed HTTP request -- so
-# a single transient 5xx hard-failed the whole build. Each fetch now runs
-# synchronously and retries on any non-200, trading a few seconds of build
-# time for resilience against GitHub flakiness.
+# Resolve addon versions from the local Gitea mirrors (github-mirror org) rather
+# than api.github.com. GitHub's release API throttles unauthenticated callers
+# (60 req/hr) and serves transient 504s that abort whole builds; the mirrors are
+# local and reliable. We read git *tags* (always synced on a Gitea pull mirror,
+# unlike releases, which Gitea does not import) and pick the highest *stable*
+# semver matching each repo's tag pattern -- "highest", not "newest", because
+# upstreams publish backport patch releases to older minors out of version order.
+#
+# Mirrors are created/refreshed by mirror-github-repos.yml. See vars/gitea.yml.
 
-- name: Fetch Flannel release from GitHub
+- name: Define addon version specs (mirror repo, tag pattern, prefix to strip)
+  ansible.builtin.set_fact:
+    _addon_version_specs:
+      # strip '^$' is a no-op (matches only the empty string) -> keep the tag,
+      # including its leading 'v', where downstream needs the exact git ref / tag.
+      - {var: flannel_version,        repo: flannel,                match: '^v\d+\.\d+\.\d+$',                strip: '^$'}
+      - {var: longhorn_version,       repo: longhorn,               match: '^v\d+\.\d+\.\d+$',                strip: '^v'}
+      - {var: traefik_chart_version,  repo: traefik-helm-chart,     match: '^v\d+\.\d+\.\d+$',                strip: '^v'}
+      - {var: cert_manager_version,   repo: cert-manager,           match: '^v\d+\.\d+\.\d+$',                strip: '^$'}
+      - {var: headlamp_version,       repo: headlamp,               match: '^v\d+\.\d+\.\d+$',                strip: '^v'}
+      - {var: reflector_version,      repo: kubernetes-reflector,   match: '^v\d+\.\d+\.\d+$',                strip: '^v'}
+      - {var: argocd_version,         repo: argo-helm,              match: '^argo-cd-\d',                     strip: '^argo-cd-'}
+      - {var: descheduler_version,    repo: descheduler,            match: '^v\d+\.\d+\.\d+$',                strip: '^v'}
+      - {var: prometheus_version,     repo: helm-charts,            match: '^kube-prometheus-stack-\d',       strip: '^kube-prometheus-stack-'}
+      - {var: kube_router_version,    repo: kube-router,            match: '^v\d+\.\d+\.\d+$',                strip: '^$'}
+      - {var: metallb_version,        repo: metallb,                match: '^v\d+\.\d+\.\d+$',                strip: '^$'}
+      - {var: metrics_server_version, repo: metrics-server,         match: '^v\d+\.\d+\.\d+$',                strip: '^$'}
+
+- name: Fetch tags for each addon from the Gitea mirror
   ansible.builtin.uri:
-    url: https://api.github.com/repos/flannel-io/flannel/releases/latest
+    url: "{{ mirror_api_base }}/{{ gitea_mirror_org }}/{{ item.repo }}/tags?limit=100"
     return_content: true
-  register: _flannel_job
-  until: _flannel_job.status == 200
+  register: _addon_tags
+  until: _addon_tags.status == 200
   retries: 8
   delay: 15
+  loop: "{{ _addon_version_specs }}"
+  loop_control:
+    label: "{{ item.repo }}"
 
-- name: Fetch Longhorn release from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/longhorn/longhorn/releases/latest
-    return_content: true
-  register: _longhorn_job
-  until: _longhorn_job.status == 200
-  retries: 8
-  delay: 15
-
-- name: Fetch Traefik Helm chart release from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/traefik/traefik-helm-chart/releases/latest
-    return_content: true
-  register: _traefik_job
-  until: _traefik_job.status == 200
-  retries: 8
-  delay: 15
-
-- name: Fetch cert-manager release from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/cert-manager/cert-manager/releases/latest
-    return_content: true
-  register: _certmgr_job
-  until: _certmgr_job.status == 200
-  retries: 8
-  delay: 15
-
-- name: Fetch Headlamp releases from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/kubernetes-sigs/headlamp/releases?per_page=20
-    return_content: true
-  register: _headlamp_job
-  until: _headlamp_job.status == 200
-  retries: 8
-  delay: 15
-
-- name: Fetch reflector release from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/emberstack/kubernetes-reflector/releases/latest
-    return_content: true
-  register: _reflector_job
-  until: _reflector_job.status == 200
-  retries: 8
-  delay: 15
-
-- name: Fetch ArgoCD Helm chart releases from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/argoproj/argo-helm/releases?per_page=20
-    return_content: true
-  register: _argocd_job
-  until: _argocd_job.status == 200
-  retries: 8
-  delay: 15
-
-- name: Fetch descheduler release from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/kubernetes-sigs/descheduler/releases/latest
-    return_content: true
-  register: _descheduler_job
-  until: _descheduler_job.status == 200
-  retries: 8
-  delay: 15
-
-- name: Fetch kube-prometheus-stack Helm chart releases from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/prometheus-community/helm-charts/releases?per_page=20
-    return_content: true
-  register: _prometheus_job
-  until: _prometheus_job.status == 200
-  retries: 8
-  delay: 15
-
-- name: Fetch kube-router release from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/cloudnativelabs/kube-router/releases/latest
-    return_content: true
-  register: _kube_router_job
-  until: _kube_router_job.status == 200
-  retries: 8
-  delay: 15
-
-- name: Fetch MetalLB release from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/metallb/metallb/releases/latest
-    return_content: true
-  register: _metallb_job
-  until: _metallb_job.status == 200
-  retries: 8
-  delay: 15
-
-- name: Fetch metrics-server release from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/kubernetes-sigs/metrics-server/releases/latest
-    return_content: true
-  register: _metrics_server_job
-  until: _metrics_server_job.status == 200
-  retries: 8
-  delay: 15
+- name: Resolve highest stable version per addon
+  ansible.builtin.set_fact:
+    _resolved_versions: >-
+      {{
+        _resolved_versions | default({}) | combine({
+          item.0.var: (
+            item.1.json
+            | map(attribute='name')
+            | select('match', item.0.match)
+            | map('regex_replace', item.0.strip, '')
+            | community.general.version_sort
+            | last
+          )
+        })
+      }}
+  loop: "{{ _addon_version_specs | zip(_addon_tags.results) | list }}"
+  loop_control:
+    label: "{{ item.0.var }}"
 
 - name: Set resolved addon versions
   ansible.builtin.set_fact:
-    flannel_version:        "{{ _flannel_job.json.tag_name }}"
-    longhorn_version:       "{{ _longhorn_job.json.tag_name | regex_replace('^v', '') }}"
-    traefik_chart_version:  "{{ _traefik_job.json.tag_name | regex_replace('^v', '') }}"
-    cert_manager_version:   "{{ _certmgr_job.json.tag_name }}"
-    headlamp_version: >-
-      {{
-        _headlamp_job.json
-        | selectattr('tag_name', 'match', '^v\d')
-        | map(attribute='tag_name')
-        | first
-        | regex_replace('^v', '')
-      }}
-    reflector_version:      "{{ _reflector_job.json.tag_name | regex_replace('^v', '') }}"
+    flannel_version:        "{{ _resolved_versions.flannel_version }}"
+    longhorn_version:       "{{ _resolved_versions.longhorn_version }}"
+    traefik_chart_version:  "{{ _resolved_versions.traefik_chart_version }}"
+    cert_manager_version:   "{{ _resolved_versions.cert_manager_version }}"
+    headlamp_version:       "{{ _resolved_versions.headlamp_version }}"
+    reflector_version:      "{{ _resolved_versions.reflector_version }}"
     # Honor argocd_version_pin (defaults/main.yml) when set; otherwise track the
     # latest argo-cd chart release. Empty/undefined pin falls through to latest.
-    argocd_version: >-
-      {{
-        argocd_version_pin | default('', true) or (
-          _argocd_job.json
-          | selectattr('tag_name', 'match', '^argo-cd-')
-          | map(attribute='tag_name')
-          | first
-          | regex_replace('^argo-cd-', '')
-        )
-      }}
-    descheduler_version:    "{{ _descheduler_job.json.tag_name | regex_replace('^v', '') }}"
-    prometheus_version: >-
-      {{
-        _prometheus_job.json
-        | selectattr('tag_name', 'match', '^kube-prometheus-stack-')
-        | map(attribute='tag_name')
-        | first
-        | regex_replace('^kube-prometheus-stack-', '')
-      }}
-    kube_router_version:    "{{ _kube_router_job.json.tag_name }}"
-    metallb_version:        "{{ _metallb_job.json.tag_name }}"
-    metrics_server_version:        "{{ _metrics_server_job.json.tag_name }}"
+    argocd_version:         "{{ argocd_version_pin | default('', true) or _resolved_versions.argocd_version }}"
+    descheduler_version:    "{{ _resolved_versions.descheduler_version }}"
+    prometheus_version:     "{{ _resolved_versions.prometheus_version }}"
+    kube_router_version:    "{{ _resolved_versions.kube_router_version }}"
+    metallb_version:        "{{ _resolved_versions.metallb_version }}"
+    metrics_server_version: "{{ _resolved_versions.metrics_server_version }}"
 
 - name: Display resolved addon versions
   ansible.builtin.debug:

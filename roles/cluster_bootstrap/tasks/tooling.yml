@@ -72,20 +72,21 @@
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   changed_when: false
 
-- name: Resolve latest k9s version from GitHub API
+- name: Resolve latest k9s version from Gitea mirror
   ansible.builtin.uri:
-    url: https://api.github.com/repos/derailed/k9s/releases/latest
+    url: "{{ mirror_api_base }}/{{ gitea_mirror_org }}/k9s/tags?limit=100"
     return_content: true
-    headers:
-      Accept: application/vnd.github+json
-  register: k9s_release_info
-  retries: 5
-  delay: 10
-  until: k9s_release_info is success
+  register: k9s_tags
+  retries: 8
+  delay: 15
+  until: k9s_tags.status == 200
 
 - name: Set k9s version fact
   ansible.builtin.set_fact:
-    k9s_version: "{{ k9s_release_info.json.tag_name }}"
+    k9s_version: >-
+      {{ k9s_tags.json | map(attribute='name')
+         | select('match', '^v\d+\.\d+\.\d+$')
+         | community.general.version_sort | last }}
 
 - name: Check installed k9s version
   ansible.builtin.command: k9s version --short
@@ -101,8 +102,11 @@
   when: _k9s_installed.rc != 0 or k9s_version not in _k9s_installed.stdout
   block:
     - name: Download k9s checksums
+      # k9s release binaries are not in the git tree, so the mirror playbook
+      # republishes them to Gitea's generic package registry (see
+      # roles/gitea_mirrors); fetch from there instead of github.com.
       ansible.builtin.get_url:
-        url: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/checksums.sha256"
+        url: "{{ mirror_pkg_base }}/k9s/{{ k9s_version }}/checksums.sha256"
         dest: "/tmp/k9s_{{ k9s_version }}_checksums.sha256"
         mode: "0600"
         force: true
@@ -115,7 +119,7 @@
 
     - name: Download k9s tarball
       ansible.builtin.get_url:
-        url: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/k9s_Linux_amd64.tar.gz"
+        url: "{{ mirror_pkg_base }}/k9s/{{ k9s_version }}/k9s_Linux_amd64.tar.gz"
         dest: "/tmp/k9s_{{ k9s_version }}_Linux_amd64.tar.gz"
         mode: "0644"
         checksum: "sha256:{{ _k9s_tgz_checksum.stdout }}"
