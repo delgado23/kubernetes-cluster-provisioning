@@ -1,0 +1,26 @@
+---
+# vars/gitea.yml
+# Local Gitea instance used to mirror upstream GitHub repos, so cluster builds
+# read versions/manifests/binaries from a reliable local source instead of
+# api.github.com (which throttles unauthenticated callers and serves transient
+# 504s that abort builds). Mirrors are created/maintained by
+# mirror-github-repos.yml and refresh from upstream on Gitea's own schedule.
+
+gitea_url:        "{{ vault_gitea_url | default('https://git.garaventaville.com') }}"
+gitea_mirror_org: github-mirror
+
+# Used only by mirror-github-repos.yml to create/sync mirrors (needs write).
+# Cluster builds read the public mirrors anonymously, so they do not need this.
+gitea_token:      "{{ vault_gitea_token | default('') }}"
+
+# Optional GitHub PAT handed to Gitea so its own upstream sync is not subject to
+# GitHub's unauthenticated rate limit. Empty is fine for public repos.
+gitea_mirror_github_token: "{{ vault_github_token | default('') }}"
+
+# Bases used by the build to fetch from the mirrors (anonymous read).
+mirror_api_base: "{{ gitea_url }}/api/v1/repos"                       # tag/version discovery
+mirror_raw_base: "{{ gitea_url }}/{{ gitea_mirror_org }}"             # raw git-tree files
+# Gitea does not mirror release *assets*, so release-only artifacts (k9s binary,
+# metrics-server components.yaml) are republished by mirror-github-repos.yml into
+# Gitea's generic package registry and fetched from here.
+mirror_pkg_base: "{{ gitea_url }}/api/packages/{{ gitea_mirror_org }}/generic"

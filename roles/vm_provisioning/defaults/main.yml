@@ -2,6 +2,10 @@
 wait_for_build: true
 build_wait_retries: 60
 build_wait_delay_seconds: 30
+# Foreman provisions the Proxmox VM synchronously inside the POST /api/hosts
+# call, which can exceed the uri module's 30s default and trip a client-side
+# read timeout (status -1) even though Foreman creates the host. Give it room.
+foreman_create_timeout_seconds: 180
 worker_node_count: 1
 controlplane_node_count: 1
 worker_name_prefix: k8s-worker

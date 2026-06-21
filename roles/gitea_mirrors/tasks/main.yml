@@ -1,0 +1,180 @@
+---
+# Create/maintain pull mirrors of upstream GitHub repos in the local Gitea.
+# Idempotent: existing org/repos are left in place; only missing ones are created.
+# Requires gitea_token (a Gitea token with org+repo create rights).
+
+- name: Assert Gitea token is available
+  ansible.builtin.assert:
+    that:
+      - gitea_token | length > 0
+    fail_msg: >-
+      gitea_token is empty. Set vault_gitea_token in vars/vault.yml (a Gitea
+      access token with permission to create the github-mirror org and repos).
+
+- name: Check whether the mirror org exists
+  ansible.builtin.uri:
+    url: "{{ gitea_url }}/api/v1/orgs/{{ gitea_mirror_org }}"
+    method: GET
+    headers:
+      Authorization: "token {{ gitea_token }}"
+    status_code: [200, 404]
+  register: _mirror_org
+
+- name: Create the mirror org (public)
+  ansible.builtin.uri:
+    url: "{{ gitea_url }}/api/v1/orgs"
+    method: POST
+    headers:
+      Authorization: "token {{ gitea_token }}"
+    body_format: json
+    body:
+      username: "{{ gitea_mirror_org }}"
+      visibility: public
+      description: Pull mirrors of upstream GitHub repos for cluster builds
+    status_code: [201]
+  when: _mirror_org.status == 404
+
+- name: Check which mirrors already exist
+  ansible.builtin.uri:
+    url: "{{ gitea_url }}/api/v1/repos/{{ gitea_mirror_org }}/{{ item.repo }}"
+    method: GET
+    headers:
+      Authorization: "token {{ gitea_token }}"
+    status_code: [200, 404]
+  register: _existing_mirrors
+  loop: "{{ gitea_mirror_repos }}"
+  loop_control:
+    label: "{{ item.owner }}/{{ item.repo }}"
+
+- name: Create missing mirrors via the Gitea migrate API
+  ansible.builtin.uri:
+    url: "{{ gitea_url }}/api/v1/repos/migrate"
+    method: POST
+    headers:
+      Authorization: "token {{ gitea_token }}"
+    body_format: json
+    body:
+      clone_addr: "https://github.com/{{ item.item.owner }}/{{ item.item.repo }}.git"
+      repo_owner: "{{ gitea_mirror_org }}"
+      repo_name: "{{ item.item.repo }}"
+      service: github
+      mirror: true
+      releases: true
+      wiki: false
+      lfs: false
+      private: false
+      mirror_interval: "{{ gitea_mirror_interval }}"
+      auth_token: "{{ gitea_mirror_github_token }}"
+    # 201 created; 409 conflict if a race recreated it between check and create.
+    status_code: [201, 409]
+    # Migration clones the repo synchronously; give it room on large repos.
+    timeout: 600
+  loop: "{{ _existing_mirrors.results }}"
+  loop_control:
+    label: "{{ item.item.owner }}/{{ item.item.repo }}"
+  when: item.status == 404
+
+- name: Trigger an immediate mirror sync
+  ansible.builtin.uri:
+    url: "{{ gitea_url }}/api/v1/repos/{{ gitea_mirror_org }}/{{ item.repo }}/mirror-sync"
+    method: POST
+    headers:
+      Authorization: "token {{ gitea_token }}"
+    status_code: [200]
+  loop: "{{ gitea_mirror_repos }}"
+  loop_control:
+    label: "{{ item.repo }}"
+  when: gitea_mirror_sync_now | bool
+
+- name: Show mirror org URL
+  ansible.builtin.debug:
+    msg: "Mirrors ensured under {{ gitea_url }}/{{ gitea_mirror_org }} ({{ gitea_mirror_repos | length }} repos)"
+
+# ---------------------------------------------------------------------------
+# Republish release-only assets (k9s binary, metrics-server components.yaml)
+# into Gitea generic packages. Gitea mirrors git data + tags but not release
+# assets, so these files are fetched from GitHub here (server-side, daily) and
+# served to the build from Gitea. See gitea_mirror_assets in defaults/main.yml.
+# ---------------------------------------------------------------------------
+- name: Resolve latest tag for each release-asset repo
+  ansible.builtin.uri:
+    url: "{{ gitea_url }}/api/v1/repos/{{ gitea_mirror_org }}/{{ item.repo }}/tags?limit=100"
+    headers:
+      Authorization: "token {{ gitea_token }}"
+    return_content: true
+  register: _asset_tags
+  loop: "{{ gitea_mirror_assets }}"
+  loop_control:
+    label: "{{ item.repo }}"
+  when: gitea_mirror_assets | length > 0
+
+- name: Attach resolved version to each release-asset spec
+  ansible.builtin.set_fact:
+    _asset_specs: >-
+      {{
+        _asset_specs | default([]) + [
+          item.0 | combine({
+            'version': (
+              item.1.json
+              | map(attribute='name')
+              | select('match', item.0.match)
+              | map('regex_replace', item.0.strip, '')
+              | community.general.version_sort
+              | last
+            )
+          })
+        ]
+      }}
+  loop: "{{ gitea_mirror_assets | zip(_asset_tags.results | default([])) | list }}"
+  loop_control:
+    label: "{{ item.0.repo }}"
+  when: gitea_mirror_assets | length > 0
+
+- name: Check which release assets already exist in Gitea packages
+  ansible.builtin.uri:
+    url: "{{ gitea_url }}/api/packages/{{ gitea_mirror_org }}/generic/{{ item.0.repo }}/{{ item.0.version }}/{{ item.1 }}"
+    method: HEAD
+    status_code: [200, 404]
+  register: _asset_present
+  loop: "{{ _asset_specs | default([]) | subelements('files') }}"
+  loop_control:
+    label: "{{ item.0.repo }}/{{ item.0.version }}/{{ item.1 }}"
+
+- name: Download missing release assets from GitHub
+  ansible.builtin.get_url:
+    url: "https://github.com/{{ item.item.0.owner }}/{{ item.item.0.repo }}/releases/download/{{ item.item.0.version }}/{{ item.item.1 }}"
+    dest: "/tmp/gitea-mirror-{{ item.item.0.repo }}-{{ item.item.1 }}"
+    mode: "0644"
+    force: true
+  register: _asset_dl
+  until: _asset_dl is success
+  retries: 5
+  delay: 10
+  loop: "{{ _asset_present.results }}"
+  loop_control:
+    label: "{{ item.item.0.repo }}/{{ item.item.1 }}"
+  when: item.status == 404
+
+- name: Republish missing release assets to Gitea generic packages
+  ansible.builtin.uri:
+    url: "{{ gitea_url }}/api/packages/{{ gitea_mirror_org }}/generic/{{ item.item.0.repo }}/{{ item.item.0.version }}/{{ item.item.1 }}"
+    method: PUT
+    headers:
+      Authorization: "token {{ gitea_token }}"
+      Content-Type: application/octet-stream
+    src: "/tmp/gitea-mirror-{{ item.item.0.repo }}-{{ item.item.1 }}"
+    remote_src: true
+    status_code: [201, 409]
+  loop: "{{ _asset_present.results }}"
+  loop_control:
+    label: "{{ item.item.0.repo }}/{{ item.item.0.version }}/{{ item.item.1 }}"
+  when: item.status == 404
+
+- name: Clean up downloaded asset temp files
+  ansible.builtin.file:
+    path: "/tmp/gitea-mirror-{{ item.item.0.repo }}-{{ item.item.1 }}"
+    state: absent
+  loop: "{{ _asset_present.results }}"
+  loop_control:
+    label: "{{ item.item.0.repo }}/{{ item.item.1 }}"
+  when: item.status == 404

@@ -1,0 +1,29 @@
+---
+# =============================================================================
+# mirror-github-repos.yml — Pull-mirror upstream GitHub repos into local Gitea
+# =============================================================================
+# Cluster builds depend on ~15 reads from api.github.com / github.com /
+# raw.githubusercontent.com (addon version discovery, manifests, binaries).
+# Unauthenticated GitHub throttles to 60 req/hr and serves transient 504s that
+# abort whole builds. This playbook mirrors every upstream dependency into the
+# local Gitea github-mirror org (pull mirror + releases), so the build reads
+# from a reliable local source. Gitea re-pulls each mirror from upstream on its
+# own schedule (gitea_mirror_interval), so versions stay current.
+#
+# Run once to create the mirrors; safe to re-run (idempotent — only missing
+# mirrors are created) and to add new repos in
+# roles/gitea_mirrors/defaults/main.yml.
+#
+# Usage:
+#   ansible-playbook mirror-github-repos.yml
+# =============================================================================
+
+- name: Mirror upstream GitHub repos into local Gitea
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars/vault.yml
+    - vars/gitea.yml
+  roles:
+    - gitea_mirrors
