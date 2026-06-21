@@ -205,6 +205,7 @@
     password: "{{ foreman_password }}"
     force_basic_auth: true
     validate_certs: "{{ foreman_validate_certs }}"
+    timeout: "{{ foreman_create_timeout_seconds }}"
     body_format: json
     status_code: 201
     headers:
