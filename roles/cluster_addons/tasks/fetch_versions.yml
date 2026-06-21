@@ -13,8 +13,8 @@
     return_content: true
   register: _flannel_job
   until: _flannel_job.status == 200
-  retries: 5
-  delay: 5
+  retries: 8
+  delay: 15
 
 - name: Fetch Longhorn release from GitHub
   ansible.builtin.uri:
@@ -22,8 +22,8 @@
     return_content: true
   register: _longhorn_job
   until: _longhorn_job.status == 200
-  retries: 5
-  delay: 5
+  retries: 8
+  delay: 15
 
 - name: Fetch Traefik Helm chart release from GitHub
   ansible.builtin.uri:
@@ -31,8 +31,8 @@
     return_content: true
   register: _traefik_job
   until: _traefik_job.status == 200
-  retries: 5
-  delay: 5
+  retries: 8
+  delay: 15
 
 - name: Fetch cert-manager release from GitHub
   ansible.builtin.uri:
@@ -40,8 +40,8 @@
     return_content: true
   register: _certmgr_job
   until: _certmgr_job.status == 200
-  retries: 5
-  delay: 5
+  retries: 8
+  delay: 15
 
 - name: Fetch Headlamp releases from GitHub
   ansible.builtin.uri:
@@ -49,8 +49,8 @@
     return_content: true
   register: _headlamp_job
   until: _headlamp_job.status == 200
-  retries: 5
-  delay: 5
+  retries: 8
+  delay: 15
 
 - name: Fetch reflector release from GitHub
   ansible.builtin.uri:
@@ -58,8 +58,8 @@
     return_content: true
   register: _reflector_job
   until: _reflector_job.status == 200
-  retries: 5
-  delay: 5
+  retries: 8
+  delay: 15
 
 - name: Fetch ArgoCD Helm chart releases from GitHub
   ansible.builtin.uri:
@@ -67,8 +67,8 @@
     return_content: true
   register: _argocd_job
   until: _argocd_job.status == 200
-  retries: 5
-  delay: 5
+  retries: 8
+  delay: 15
 
 - name: Fetch descheduler release from GitHub
   ansible.builtin.uri:
@@ -76,8 +76,8 @@
     return_content: true
   register: _descheduler_job
   until: _descheduler_job.status == 200
-  retries: 5
-  delay: 5
+  retries: 8
+  delay: 15
 
 - name: Fetch kube-prometheus-stack Helm chart releases from GitHub
   ansible.builtin.uri:
@@ -85,8 +85,8 @@
     return_content: true
   register: _prometheus_job
   until: _prometheus_job.status == 200
-  retries: 5
-  delay: 5
+  retries: 8
+  delay: 15
 
 - name: Fetch kube-router release from GitHub
   ansible.builtin.uri:
@@ -94,8 +94,8 @@
     return_content: true
   register: _kube_router_job
   until: _kube_router_job.status == 200
-  retries: 5
-  delay: 5
+  retries: 8
+  delay: 15
 
 - name: Fetch MetalLB release from GitHub
   ansible.builtin.uri:
@@ -103,8 +103,8 @@
     return_content: true
   register: _metallb_job
   until: _metallb_job.status == 200
-  retries: 5
-  delay: 5
+  retries: 8
+  delay: 15
 
 - name: Fetch metrics-server release from GitHub
   ansible.builtin.uri:
@@ -112,8 +112,8 @@
     return_content: true
   register: _metrics_server_job
   until: _metrics_server_job.status == 200
-  retries: 5
-  delay: 5
+  retries: 8
+  delay: 15
 
 - name: Set resolved addon versions
   ansible.builtin.set_fact:
