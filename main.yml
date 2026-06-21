@@ -391,6 +391,7 @@
   vars_files:
     - vars/vault.yml
     - vars/vms.yml
+    - vars/gitea.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
@@ -459,6 +460,7 @@
   tags: [bootstrap]
   vars_files:
     - vars/vms.yml
+    - vars/gitea.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
@@ -482,6 +484,7 @@
   tags: [bootstrap]
   vars_files:
     - vars/vms.yml
+    - vars/gitea.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play
@@ -578,10 +581,11 @@
   vars_files:
     - vars/vault.yml
     - vars/vms.yml
+    - vars/gitea.yml
   environment:
     PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   tasks:
-    - name: Fetch latest addon versions from GitHub
+    - name: Fetch latest addon versions from the Gitea mirror
       ansible.builtin.include_role:
         name: cluster_addons
         tasks_from: fetch_versions

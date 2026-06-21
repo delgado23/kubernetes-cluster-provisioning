@@ -129,29 +129,32 @@
     mode: '0600'
   when: not kubelet_conf.stat.exists
 
-- name: Fetch latest Flannel release from GitHub
+- name: Fetch latest Flannel version from Gitea mirror
   ansible.builtin.uri:
-    url: https://api.github.com/repos/flannel-io/flannel/releases/latest
+    url: "{{ mirror_api_base }}/{{ gitea_mirror_org }}/flannel/tags?limit=100"
     return_content: true
-  register: flannel_release
+  register: flannel_tags
   delegate_to: localhost
   become: false
-  # Retry: this runs on the Ascender execution node, whose DNS/egress to
-  # api.github.com can transiently fail ("Name or service not known") and would
-  # otherwise abort the whole build before the CNI is installed.
-  retries: 5
-  delay: 10
-  until: flannel_release is success
+  # Retry: this runs on the Ascender execution node; give the mirror API room.
+  retries: 8
+  delay: 15
+  until: flannel_tags.status == 200
   when: flannel_version is not defined
 
 - name: Set Flannel version fact
   ansible.builtin.set_fact:
-    flannel_version: "{{ flannel_release.json.tag_name }}"
+    flannel_version: >-
+      {{ flannel_tags.json | map(attribute='name')
+         | select('match', '^v\d+\.\d+\.\d+$')
+         | community.general.version_sort | last }}
   when: flannel_version is not defined
 
 - name: Install Flannel CNI
+  # kube-flannel.yml lives in the repo tree (Documentation/), so it is served by
+  # the git mirror directly -- no dependency on Gitea mirroring release assets.
   ansible.builtin.command:
-    cmd: kubectl apply -f https://github.com/flannel-io/flannel/releases/download/{{ flannel_version }}/kube-flannel.yml
+    cmd: kubectl apply -f {{ mirror_raw_base }}/flannel/raw/tag/{{ flannel_version }}/Documentation/kube-flannel.yml
   environment:
     KUBECONFIG: /root/.kube/config
   register: flannel_output

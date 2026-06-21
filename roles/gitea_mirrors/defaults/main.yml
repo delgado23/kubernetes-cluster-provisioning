@@ -1,0 +1,48 @@
+---
+# roles/gitea_mirrors
+# Upstream GitHub repos pull-mirrored into the local Gitea github-mirror org.
+# Every repo the cluster build reads from GitHub (for a version, a manifest, or
+# a binary) must appear here. Add a line to mirror a new dependency.
+
+gitea_mirror_repos:
+  - {owner: flannel-io,         repo: flannel}
+  - {owner: longhorn,           repo: longhorn}
+  - {owner: traefik,            repo: traefik-helm-chart}
+  - {owner: cert-manager,       repo: cert-manager}
+  - {owner: kubernetes-sigs,    repo: headlamp}
+  - {owner: emberstack,         repo: kubernetes-reflector}
+  - {owner: argoproj,           repo: argo-helm}
+  - {owner: kubernetes-sigs,    repo: descheduler}
+  - {owner: prometheus-community, repo: helm-charts}
+  - {owner: cloudnativelabs,    repo: kube-router}
+  - {owner: metallb,            repo: metallb}
+  - {owner: kubernetes-sigs,    repo: metrics-server}
+  - {owner: alex1989hu,         repo: kubelet-serving-cert-approver}
+  - {owner: derailed,           repo: k9s}
+
+# How often Gitea re-pulls each mirror from upstream GitHub.
+gitea_mirror_interval: "24h"
+
+# Force an immediate sync of each mirror right after (re-)ensuring it exists.
+gitea_mirror_sync_now: true
+
+# Release *assets* are not mirrored by Gitea (only git data + tags). These few
+# files exist only as GitHub release downloads, so we resolve the latest stable
+# tag, fetch the asset from GitHub here (server-side, out of the cluster-build
+# hot path) and republish to the Gitea generic package registry, which the build
+# then reads anonymously. `match`/`strip` mirror the tag-selection in
+# cluster_addons/tasks/fetch_versions.yml.
+gitea_mirror_assets:
+  - owner: derailed
+    repo: k9s
+    match: '^v\d+\.\d+\.\d+$'
+    strip: '^$'
+    files:
+      - checksums.sha256
+      - k9s_Linux_amd64.tar.gz
+  - owner: kubernetes-sigs
+    repo: metrics-server
+    match: '^v\d+\.\d+\.\d+$'
+    strip: '^$'
+    files:
+      - components.yaml

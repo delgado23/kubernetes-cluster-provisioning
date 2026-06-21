@@ -50,6 +50,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ├── autoscale-horizontal.yml       # Horizontal autoscaler — adds or removes worker nodes via AWX based on average utilisation
 ├── maintenance.yml       # Rolling OS maintenance (drain/update/reboot/uncordon)
 ├── wipe.yml              # Remove all nodes from Foreman and FreeIPA
+├── mirror-github-repos.yml # Pull-mirror upstream GitHub deps into local Gitea
 ├── handlers/
 │   └── main.yml          # Shared handlers (e.g. Reload ssh)
 ├── templates/
@@ -60,8 +61,10 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 │   ├── freeipa.yml       # FreeIPA ipaclient vars (sensitive values sourced from vault)
 │   ├── vault.yml         # Ansible Vault: API tokens and passwords
 │   ├── vms.yml           # VM definitions (names, hostgroups, Foreman parameters)
-│   └── vm_defaults.yml   # Default VM hardware specs
+│   ├── vm_defaults.yml   # Default VM hardware specs
+│   └── gitea.yml         # Local Gitea mirror bases (version/raw/package fetch)
 └── roles/
+    ├── gitea_mirrors/        # Create/refresh GitHub pull-mirrors + republish release assets in Gitea
     ├── vm_provisioning/       # Create VMs in Foreman/Proxmox, filters by node counts
     ├── proxmox_postconfig/    # EFI disk, rename, tags, CPU/memory hotplug via Proxmox API
     ├── enterprise_linux/      # Base OS provisioning: repos, packages, atop, DUO install
@@ -102,6 +105,31 @@ Each node detects its own mode early in the prep phase by checking for `/run/ost
 
 Package-mode nodes are unaffected — `image_mode` is `false` and every dnf/package task runs as before. A cluster can even mix the two modes; detection is per-node.
 
+## Upstream Dependency Mirrors (Gitea)
+
+The build never reads from `api.github.com` / `github.com` directly. GitHub's
+unauthenticated release API throttles to 60 req/hr and serves transient `504`s
+that abort whole builds. Instead, every upstream dependency is **pull-mirrored
+into the local Gitea** (`git.garaventaville.com`, org `github-mirror`) and the
+build reads from there (anonymously — no token on the nodes).
+
+Run once to set up; re-runnable any time and self-refreshing (each mirror
+re-pulls from upstream on a 24h interval):
+
+```bash
+ansible-playbook mirror-github-repos.yml   # needs vault_gitea_token
+```
+
+How each dependency is served (see `roles/gitea_mirrors`, `vars/gitea.yml`):
+
+- **Versions** — resolved from the mirror's **git tags** (`/api/v1/repos/github-mirror/<repo>/tags`), picking the highest stable semver (`community.general.version_sort`). Gitea reliably mirrors tags; it does **not** import GitHub *releases*, so tags (not the releases API) are the source of truth.
+- **Manifests in the repo tree** (metallb, cert-approver, flannel `Documentation/kube-flannel.yml`) — served from `…/github-mirror/<repo>/raw/tag/<tag>/<path>`.
+- **Release-only assets** (k9s binary + checksums, metrics-server `components.yaml`) — Gitea doesn't mirror release assets, so `mirror-github-repos.yml` downloads them from GitHub server-side and republishes to Gitea's **generic package registry** (`/api/packages/github-mirror/generic/<repo>/<version>/<file>`), which the build then reads.
+
+Add a new mirrored dependency by appending to `gitea_mirror_repos` (and, if it's
+a release-only asset, `gitea_mirror_assets`) in
+`roles/gitea_mirrors/defaults/main.yml` and re-running the playbook.
+
 ## Vault Variables
 
 Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required keys:
@@ -134,6 +162,9 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_keepalived_password` | Keepalived VRRP authentication password |
 | `vault_awx_url` | AWX/Ascender base URL (e.g. `https://ascender.example.com`) |
 | `vault_awx_token` | AWX API token — used to enable/disable autoscale schedules after build/wipe |
+| `vault_gitea_token` | Gitea token with org+repo create rights — used **only** by `mirror-github-repos.yml` to create/refresh the upstream mirrors (the cluster build reads the mirrors anonymously) |
+| `vault_gitea_url` | (optional) Gitea base URL; defaults to `https://git.garaventaville.com` |
+| `vault_github_token` | (optional) GitHub PAT handed to Gitea so its own upstream sync is not rate-limited; empty is fine for public repos |
 
 Generate the secretbox key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
 
