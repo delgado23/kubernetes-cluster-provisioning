@@ -112,11 +112,13 @@
         dashboard: true
         insecure: false
 
-      logs:
-        general:
-          level: INFO
-        access:
-          enabled: true
+      # Traefik Helm chart v41 replaced the top-level `logs:` block
+      # (logs.general/logs.access) with separate `log:` and `accessLog:` keys.
+      log:
+        level: INFO
+
+      accessLog:
+        enabled: true
 
       resources:
         requests:
