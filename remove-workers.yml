@@ -311,7 +311,11 @@
         validate_certs: true
         status_code: 200
       when:
-        - _zabbix_hosts.json.error is none
+        # Unlike FreeIPA's JSON-RPC (which always includes "error": null on
+        # success), Zabbix's strict JSON-RPC 2.0 response omits the "error"
+        # key entirely when the call succeeds -- default(none) avoids an
+        # AttributeError on that missing key.
+        - (_zabbix_hosts.json.error | default(none)) is none
         - (_zabbix_hosts.json.result | default([])) | length > 0
       no_log: "{{ 'debug' not in ansible_run_tags }}"
 
