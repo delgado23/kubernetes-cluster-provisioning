@@ -49,7 +49,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ├── autoscale.yml                  # Vertical autoscaler — scales CPU/RAM up and down via Proxmox based on utilisation
 ├── autoscale-horizontal.yml       # Horizontal autoscaler — adds or removes worker nodes via AWX based on average utilisation
 ├── maintenance.yml       # Rolling OS maintenance (drain/update/reboot/uncordon)
-├── wipe.yml              # Remove all nodes from Foreman and FreeIPA
+├── wipe.yml              # Remove all nodes from Foreman, FreeIPA, and Zabbix
 ├── mirror-github-repos.yml # Pull-mirror upstream GitHub deps into local Gitea
 ├── handlers/
 │   └── main.yml          # Shared handlers (e.g. Reload ssh)
@@ -165,6 +165,8 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_gitea_token` | Gitea token with org+repo create rights — used **only** by `mirror-github-repos.yml` to create/refresh the upstream mirrors (the cluster build reads the mirrors anonymously) |
 | `vault_gitea_url` | (optional) Gitea base URL; defaults to `https://git.garaventaville.com` |
 | `vault_github_token` | (optional) GitHub PAT handed to Gitea so its own upstream sync is not rate-limited; empty is fine for public repos |
+| `vault_zabbix_url` | (optional) Zabbix base URL; defaults to `https://zabbix.garaventaville.com` |
+| `vault_zabbix_api_token` | Zabbix API token used to deregister a node's host entry on wipe/scale-in (`host.get`/`host.delete` only) — use a dedicated user/role scoped to just those two methods and read-write on the `Linux servers` host group, not a Super Admin token |
 
 Generate the secretbox key once and store it in the vault — **do not change it after the cluster is provisioned** (doing so requires a full secret re-encryption rotation):
 
@@ -176,7 +178,7 @@ head -c 32 /dev/urandom | base64
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `wipe_cluster` | Boolean | `false` | When `true`, removes all existing cluster nodes from Foreman and FreeIPA first, then provisions a fresh cluster using the current `controlplane_node_count` and `worker_node_count` values. |
+| `wipe_cluster` | Boolean | `false` | When `true`, removes all existing cluster nodes from Foreman, FreeIPA, and Zabbix first, then provisions a fresh cluster using the current `controlplane_node_count` and `worker_node_count` values. |
 | `controlplane_node_count` | Integer | 1 | Number of control plane nodes to provision this run. Set to `0` when only adding worker nodes — this skips the bootstrap and cluster add-ons phases entirely. Max 3. |
 | `worker_node_count` | Integer | 1 | Number of worker nodes to add this run. The provisioning role queries Foreman for existing workers with the configured prefix and starts numbering from the next available index. Running with `worker_node_count=3` twice produces 6 workers total. |
 | `cluster_env` | String | `prod` | `prod` or `test`. Controls node naming prefixes, API endpoint hostname, ingress domain, FreeIPA wildcard DNS record, and ACME endpoint. `prod` → `k8s-cp` / `k8s-worker`, `k8s-api.<domain>`, `k8s.<domain>`, Let's Encrypt production. `test` → `k8s-test-cp` / `k8s-test-worker`, `k8s-test-api.<domain>`, `k8s-test.<domain>`, Let's Encrypt staging. Both clusters can run side-by-side — they use separate DNS records and name prefixes. |
@@ -187,7 +189,7 @@ head -c 32 /dev/urandom | base64
 | `k8s_pod_cidr` | String | `10.244.0.0/16` | Pod network CIDR passed to kubeadm and used in firewall rules. Must not overlap with your node or service networks. Change only if the default conflicts with your infrastructure. |
 | `k8s_service_cidr` | String | `10.96.0.0/12` | Kubernetes service network CIDR passed to kubeadm and used in firewall rules and NetworkPolicies. Must not overlap with your node or pod networks. Change only if the default conflicts with your infrastructure. |
 
-`wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman and FreeIPA, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
+`wipe_cluster=true` runs a full rebuild: existing nodes are removed from Foreman, FreeIPA, and Zabbix, then provisioning continues immediately with the rest of the survey values (`controlplane_node_count`, `worker_node_count`). The Foreman queries in the provisioning role will see zero existing nodes after the wipe, so numbering restarts from `01`.
 
 Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. The prefix is derived from `cluster_env`: `prod` produces `k8s-cp` / `k8s-worker`; `test` produces `k8s-test-cp` / `k8s-test-worker`. Foreman hostgroup strings are configured in `vars/vms.yml`.
 
@@ -211,7 +213,7 @@ ansible-playbook main.yml --ask-vault-pass -e "controlplane_node_count=3 worker_
 
 ### Removing Worker Nodes (Scale Down)
 
-Drains the node, removes it from Kubernetes, resets kubeadm state on the VM itself, then deletes the host from Foreman and FreeIPA. Pass one or more short hostnames (without the domain suffix):
+Drains the node, removes it from Kubernetes, resets kubeadm state on the VM itself, then deletes the host from Foreman, FreeIPA, and Zabbix. Pass one or more short hostnames (without the domain suffix):
 
 ```bash
 # Remove a single worker

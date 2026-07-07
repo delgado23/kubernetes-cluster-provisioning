@@ -1,0 +1,9 @@
+---
+# vars/zabbix.yml
+# Zabbix connection for host-removal API calls (host.get/host.delete only).
+# The agent-side Server/ServerActive/Hostname config is hardcoded literally in
+# roles/enterprise_linux (matches linux-provisioning) and does not use these
+# vars — only cluster_cleanup and remove-workers.yml need this file.
+
+zabbix_url: "{{ vault_zabbix_url | default('https://zabbix.garaventaville.com') }}"
+zabbix_api_token: "{{ vault_zabbix_api_token }}"

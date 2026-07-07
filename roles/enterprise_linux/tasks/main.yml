@@ -45,11 +45,29 @@
       - katello-host-tools-tracer
       - yum-utils
       - duo_unix
+      - zabbix-agent2
   when: not (image_mode | default(false))
 
 # --- Runtime configuration --------------------------------------------------
 # Writes only to /etc, /var and /opt and toggles services — all writable on an
 # ostree system, so these run on both package-mode and image-mode hosts.
+#
+# zabbix-agent2 itself is installed above (package-mode) or baked into the
+# bootc image (image-mode, see foreman-bootc's kubernetes/common Containerfile)
+# — either way the config file already exists at this point, so this just
+# points it at the fleet's Zabbix server and sets Hostname to the host's own
+# FQDN. No API call/host-group setup needed on this side — an existing
+# autoregistration action picks up any host with an active agent automatically.
+- name: Configure zabbix-agent2
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_agent2.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - { regexp: '^Server=', line: 'Server=zabbix.garaventaville.com' }
+    - { regexp: '^ServerActive=', line: 'ServerActive=zabbix.garaventaville.com' }
+    - { regexp: '^Hostname=', line: "Hostname={{ ansible_facts['fqdn'] }}" }
+
 - name: Enable services and timers
   ansible.builtin.systemd_service:
     name: "{{ item }}"
@@ -58,6 +76,7 @@
   loop:
     - atop-rotate.timer
     - atop.service
+    - zabbix-agent2.service
 
 - name: Ensure /home/nfs exists
   ansible.builtin.file:

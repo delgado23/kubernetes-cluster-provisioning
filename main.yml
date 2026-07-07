@@ -74,6 +74,7 @@
     - vars/vms.yml
     - vars/foreman.yml
     - vars/freeipa.yml
+    - vars/zabbix.yml
   pre_tasks:
     - name: Skip wipe — wipe_cluster is not set
       ansible.builtin.meta: end_play
