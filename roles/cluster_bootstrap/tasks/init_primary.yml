@@ -142,11 +142,43 @@
   until: flannel_tags.status == 200
   when: flannel_version is not defined
 
+# A git tag existing upstream doesn't guarantee a matching container image was
+# published (confirmed live: flannel-io/flannel's v0.28.6 git tag has no
+# ghcr.io/flannel-io/flannel:v0.28.6 image, so kube-flannel's install-cni init
+# container ImagePullBackOffs forever and every node sits NotReady
+# indefinitely). Cross-check the registry's own published tags and only pick
+# a version present in both lists.
+- name: Get an anonymous pull token for the Flannel image registry
+  ansible.builtin.uri:
+    url: "https://ghcr.io/token?scope=repository:flannel-io/flannel:pull"
+    return_content: true
+  register: _flannel_registry_token
+  delegate_to: localhost
+  become: false
+  retries: 3
+  delay: 5
+  until: _flannel_registry_token.status == 200
+  when: flannel_version is not defined
+
+- name: Fetch published Flannel image tags from the registry
+  ansible.builtin.uri:
+    url: "https://ghcr.io/v2/flannel-io/flannel/tags/list"
+    headers:
+      Authorization: "Bearer {{ _flannel_registry_token.json.token }}"
+    return_content: true
+  register: _flannel_image_tags
+  delegate_to: localhost
+  become: false
+  retries: 3
+  delay: 5
+  until: _flannel_image_tags.status == 200
+  when: flannel_version is not defined
+
 - name: Set Flannel version fact
   ansible.builtin.set_fact:
     flannel_version: >-
-      {{ flannel_tags.json | map(attribute='name')
-         | select('match', '^v\d+\.\d+\.\d+$')
+      {{ (flannel_tags.json | map(attribute='name') | select('match', '^v\d+\.\d+\.\d+$') | list)
+         | intersect(_flannel_image_tags.json.tags | select('match', '^v\d+\.\d+\.\d+$') | list)
          | community.general.version_sort | last }}
   when: flannel_version is not defined
 
