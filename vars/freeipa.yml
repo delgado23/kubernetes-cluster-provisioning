@@ -7,6 +7,15 @@ ipadomain: "{{ vault_ipadomain }}"
 iparealm: "{{ vault_ipadomain | upper }}"
 
 ipaclient_ntp_servers: "{{ vault_ntp_servers }}"
+# Pin BOTH replicas explicitly rather than relying on what DNS discovery happens
+# to return. ipa-client-install writes the discovered server into sssd.conf as
+# the fallback used when _srv_ lookup fails, and discovery typically returns only
+# ONE — leaving no fallback if that server is the unreachable one. Deliberately
+# not reusing vault_ntp_servers: they coincide today, but conflating "where we
+# get time" with "where we authenticate" would break silently if either moved.
+ipaclient_servers:
+  - vek-lor.garaventaville.com
+  - vek-nilash.garaventaville.com
 ipaclient_mkhomedir: true
 ipaclient_automount_location: default
 ipaclient_force_join: true
