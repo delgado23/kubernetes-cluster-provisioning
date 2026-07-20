@@ -232,6 +232,7 @@
     - vars/vault.yml
     - vars/foreman.yml
     - vars/freeipa.yml
+    - vars/zabbix.yml
   tasks:
     - name: Normalise remove_workers to a list
       ansible.builtin.set_fact:
@@ -269,8 +270,57 @@
       loop_control:
         label: "{{ item }}"
 
+    # Zabbix's host.get/host.delete natively accept arrays, so this is one
+    # bulk lookup + one bulk delete for the whole _target_workers list rather
+    # than a per-item loop (unlike the Foreman/FreeIPA tasks above).
+    - name: Look up Zabbix hosts for departing workers
+      ansible.builtin.uri:
+        url: "{{ zabbix_url }}/api_jsonrpc.php"
+        method: POST
+        headers:
+          Content-Type: application/json-rpc
+          Authorization: "Bearer {{ zabbix_api_token }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: host.get
+          params:
+            output: ["hostid", "host"]
+            filter:
+              host: "{{ _target_workers | map('regex_replace', '$', '.' ~ foreman_domain) | list }}"
+          id: 1
+        validate_certs: true
+        status_code: 200
+      register: _zabbix_hosts
+      failed_when: false
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Remove departing workers from Zabbix
+      ansible.builtin.uri:
+        url: "{{ zabbix_url }}/api_jsonrpc.php"
+        method: POST
+        headers:
+          Content-Type: application/json-rpc
+          Authorization: "Bearer {{ zabbix_api_token }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: host.delete
+          params: "{{ _zabbix_hosts.json.result | map(attribute='hostid') | list }}"
+          id: 1
+        validate_certs: true
+        status_code: 200
+      when:
+        # Unlike FreeIPA's JSON-RPC (which always includes "error": null on
+        # success), Zabbix's strict JSON-RPC 2.0 response omits the "error"
+        # key entirely when the call succeeds -- default(none) avoids an
+        # AttributeError on that missing key.
+        - (_zabbix_hosts.json.error | default(none)) is none
+        - (_zabbix_hosts.json.result | default([])) | length > 0
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
     - name: Summary
       ansible.builtin.debug:
         msg: >-
           Removed {{ _target_workers | length }} worker(s): {{ _target_workers | join(', ') }}.
-          Drained from Kubernetes, reset kubeadm, deleted from Foreman and FreeIPA.
+          Drained from Kubernetes, reset kubeadm, deleted from Foreman, FreeIPA, and Zabbix.

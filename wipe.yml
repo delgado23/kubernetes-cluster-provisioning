@@ -19,6 +19,7 @@
     - vars/vms.yml
     - vars/foreman.yml
     - vars/freeipa.yml
+    - vars/zabbix.yml
   pre_tasks:
     - name: Query Foreman for existing control plane nodes
       ansible.builtin.uri:

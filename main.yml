@@ -74,6 +74,7 @@
     - vars/vms.yml
     - vars/foreman.yml
     - vars/freeipa.yml
+    - vars/zabbix.yml
   pre_tasks:
     - name: Skip wipe — wipe_cluster is not set
       ansible.builtin.meta: end_play
@@ -255,6 +256,36 @@
       ansible.builtin.include_role:
         name: freeipa.ansible_freeipa.ipaclient
 
+    # Must be in place BEFORE the reboot in the next play. sssd.service ships
+    # with no ordering against the network, so it can start before DNS is
+    # usable, fail to reach any IPA server, and exit — leaving the node with no
+    # central authentication. Provisioning reboots immediately after enrolling,
+    # which is exactly when that race bites.
+    - name: Ensure the sssd.service drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/system/sssd.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Order SSSD after the network is actually usable
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/sssd.service.d/10-wait-for-network.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # See main.yml — sssd.service has no network ordering by default and
+          # will exit at boot if DNS is not yet up.
+          [Unit]
+          After=network-online.target nss-lookup.target
+          Wants=network-online.target
+
+    - name: Reload systemd so the drop-in applies
+      ansible.builtin.systemd:
+        daemon_reload: true
+
 - name: Post-enrollment configuration
   hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
   become: true
@@ -277,6 +308,21 @@
   tasks:
     - name: Reboot the system
       ansible.builtin.reboot:
+
+    # The reboot is the moment the sssd boot race would bite. Assert central
+    # auth survived it rather than handing over a node only root can log into.
+    - name: SSSD must be running after the reboot
+      ansible.builtin.command: systemctl is-active sssd
+      register: sssd_state
+      changed_when: false
+      failed_when: sssd_state.stdout != "active"
+
+    - name: An IPA user must resolve after the reboot
+      ansible.builtin.command: id admin
+      register: ipa_id
+      changed_when: false
+      failed_when: ipa_id.rc != 0
+
     - name: Deploy DUO config
       ansible.builtin.template:
         src: templates/login_duo.conf.j2

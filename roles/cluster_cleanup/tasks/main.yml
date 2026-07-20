@@ -139,3 +139,52 @@
   loop: "{{ vms }}"
   loop_control:
     label: "{{ item.name }}"
+
+# Unlike FreeIPA above, Zabbix's host.get/host.delete natively accept arrays,
+# so this is one bulk lookup + one bulk delete for the whole vms list rather
+# than a per-item loop.
+- name: Look up Zabbix hosts for cluster nodes
+  ansible.builtin.uri:
+    url: "{{ zabbix_url }}/api_jsonrpc.php"
+    method: POST
+    headers:
+      Content-Type: application/json-rpc
+      Authorization: "Bearer {{ zabbix_api_token }}"
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: host.get
+      params:
+        output: ["hostid", "host"]
+        filter:
+          host: "{{ vms | map(attribute='name') | map('regex_replace', '$', '.' ~ foreman_domain) | list }}"
+      id: 1
+    validate_certs: true
+    status_code: 200
+  register: _zabbix_hosts
+  failed_when: false
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+- name: Remove cluster nodes from Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_url }}/api_jsonrpc.php"
+    method: POST
+    headers:
+      Content-Type: application/json-rpc
+      Authorization: "Bearer {{ zabbix_api_token }}"
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: host.delete
+      params: "{{ _zabbix_hosts.json.result | map(attribute='hostid') | list }}"
+      id: 1
+    validate_certs: true
+    status_code: 200
+  when:
+    # Unlike FreeIPA's JSON-RPC (which always includes "error": null on
+    # success), Zabbix's strict JSON-RPC 2.0 response omits the "error" key
+    # entirely when the call succeeds -- default(none) avoids an
+    # AttributeError on that missing key.
+    - (_zabbix_hosts.json.error | default(none)) is none
+    - (_zabbix_hosts.json.result | default([])) | length > 0
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
