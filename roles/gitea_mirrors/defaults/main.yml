@@ -39,9 +39,10 @@ gitea_mirror_repos:
   - {owner: DustinHendrickson,  repo: mod-player-bot-level-brackets}
   - {owner: DustinHendrickson,  repo: mod-ollama-chat}
   - {owner: azerothcore,        repo: azerothcore-wotlk}
-  # client-data's git tree is only LICENSE + README; all its content ships as
-  # release assets, so the mirror below is near-empty and the value is entirely
-  # in the Data.zip entries under gitea_mirror_assets.
+  # ~3 GB. client-data's master tree is only LICENSE + README, but the bulk of
+  # the client data lives in non-master refs, which a --mirror clone fetches.
+  # Note that this still does NOT cover the Data.zip release assets, which are
+  # preserved separately via gitea_mirror_assets below.
   - {owner: wowgaming,          repo: client-data}
 
 # How often Gitea re-pulls each mirror from upstream GitHub.
