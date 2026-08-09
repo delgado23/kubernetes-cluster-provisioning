@@ -38,6 +38,9 @@ gitea_mirror_repos:
   - {owner: azerothcore,        repo: mod-autobalance}
   - {owner: DustinHendrickson,  repo: mod-player-bot-level-brackets}
   - {owner: DustinHendrickson,  repo: mod-ollama-chat}
+  - {owner: heyitsbench,        repo: mod-arac}
+  - {owner: PMZFX,              repo: mod-homebrew-nourishment}
+  - {owner: PMZFX,              repo: mod-homebrew-vendors}
   - {owner: azerothcore,        repo: azerothcore-wotlk}
   # ~3 GB. client-data's master tree is only LICENSE + README, but the bulk of
   # the client data lives in non-master refs, which a --mirror clone fetches.
