@@ -2,6 +2,12 @@
 # Create/maintain pull mirrors of upstream GitHub repos in the local Gitea.
 # Idempotent: existing org/repos are left in place; only missing ones are created.
 # Requires gitea_token (a Gitea token with org+repo create rights).
+#
+# The token is sent as the HTTP basic-auth password (url_password), never in
+# an Authorization header. The uri module always redacts url_password, even at
+# -vvv. Headers are logged in invocation.module_args at high verbosity, and
+# Ascender stores those in its job events. Gitea accepts a token as the
+# basic-auth password and ignores the username (gitea_basic_auth_user).
 
 - name: Assert Gitea token is available
   ansible.builtin.assert:
@@ -17,8 +23,9 @@
   ansible.builtin.uri:
     url: "{{ gitea_url }}/api/v1/orgs/{{ gitea_mirror_org }}"
     method: GET
-    headers:
-      Authorization: "token {{ gitea_token }}"
+    url_username: "{{ gitea_basic_auth_user }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
     status_code: [200, 404]
   register: _mirror_org
 
@@ -26,8 +33,9 @@
   ansible.builtin.uri:
     url: "{{ gitea_url }}/api/v1/orgs"
     method: POST
-    headers:
-      Authorization: "token {{ gitea_token }}"
+    url_username: "{{ gitea_basic_auth_user }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
     body_format: json
     body:
       username: "{{ gitea_mirror_org }}"
@@ -40,8 +48,9 @@
   ansible.builtin.uri:
     url: "{{ gitea_url }}/api/v1/repos/{{ gitea_mirror_org }}/{{ item.name | default(item.repo) }}"
     method: GET
-    headers:
-      Authorization: "token {{ gitea_token }}"
+    url_username: "{{ gitea_basic_auth_user }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
     status_code: [200, 404]
   register: _existing_mirrors
   loop: "{{ gitea_mirror_repos }}"
@@ -52,8 +61,9 @@
   ansible.builtin.uri:
     url: "{{ gitea_url }}/api/v1/repos/migrate"
     method: POST
-    headers:
-      Authorization: "token {{ gitea_token }}"
+    url_username: "{{ gitea_basic_auth_user }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
     body_format: json
     body:
       clone_addr: "https://github.com/{{ item.item.owner }}/{{ item.item.repo }}.git"
@@ -101,8 +111,9 @@
   ansible.builtin.uri:
     url: "{{ gitea_url }}/api/v1/repos/{{ gitea_mirror_org }}/{{ item.name | default(item.repo) }}/mirror-sync"
     method: POST
-    headers:
-      Authorization: "token {{ gitea_token }}"
+    url_username: "{{ gitea_basic_auth_user }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
     status_code: [200]
   loop: "{{ gitea_mirror_repos }}"
   loop_control:
@@ -124,8 +135,9 @@
 - name: Resolve latest tag for each release-asset repo
   ansible.builtin.uri:
     url: "{{ gitea_url }}/api/v1/repos/{{ gitea_mirror_org }}/{{ item.name | default(item.repo) }}/tags?limit=100"
-    headers:
-      Authorization: "token {{ gitea_token }}"
+    url_username: "{{ gitea_basic_auth_user }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
     return_content: true
   register: _asset_tags
   loop: "{{ gitea_mirror_assets }}"
@@ -205,8 +217,10 @@
       ansible.builtin.uri:
         url: "{{ gitea_url }}/api/packages/{{ gitea_mirror_org }}/generic/{{ item.item.0.repo }}/{{ item.item.0.version }}/{{ item.item.1 }}"
         method: PUT
+        url_username: "{{ gitea_basic_auth_user }}"
+        url_password: "{{ gitea_token }}"
+        force_basic_auth: true
         headers:
-          Authorization: "token {{ gitea_token }}"
           Content-Type: application/octet-stream
         src: "{{ gitea_mirror_asset_tmp }}/{{ item.item.0.repo }}-{{ item.item.0.version }}-{{ item.item.1 }}"
         remote_src: true

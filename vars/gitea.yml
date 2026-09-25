@@ -16,6 +16,9 @@ gitea_mirror_org: github-mirror
 # github-mirror/mirror-automation). vault_gitea_token still takes precedence
 # if it is ever set.
 gitea_token:      "{{ vault_gitea_token | default(lookup('ansible.builtin.env', 'GITEA_MIRROR_TOKEN'), true) }}"
+# Basic-auth username sent with the token (see roles/gitea_mirrors). Gitea
+# authenticates on the token and ignores this value.
+gitea_basic_auth_user: token
 
 # Optional GitHub PAT handed to Gitea so its own upstream sync is not subject to
 # GitHub's unauthenticated rate limit. Empty is fine for public repos.
