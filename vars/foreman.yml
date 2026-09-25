@@ -24,6 +24,20 @@ foreman_compute_resource_id: 1
 foreman_compute_profile_controlplane: 8   # Kubernetes Controlplane Node
 foreman_compute_profile_worker: 6         # Kubernetes Worker Node
 
+# Proxmox nodes that new cluster VMs are spread across, round-robin by the
+# number in the VM name: k8s-cp-02 lands on the 2nd entry, k8s-worker-04 wraps
+# back to the 1st. This keeps the control planes on separate hosts, so losing
+# one node doesn't take etcd quorum with it. Both compute profiles pin
+# node_id=pve-01, which used to put every VM on one host; the node_id sent
+# per host at create time overrides that.
+# Only list nodes that hold LINSTOR replicas of the VM disks. pve-04 is
+# excluded (CPU incompatibility breaks live migration). pve-05 has no LINSTOR
+# storage pool.
+proxmox_placement_nodes:
+  - pve-01
+  - pve-02
+  - pve-03
+
 # Proxmox storage pool for VM disks
 proxmox_storage: "linstor"
 proxmox_disk_cache: "none"   # none | writeback | writethrough | unsafe

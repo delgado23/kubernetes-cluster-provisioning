@@ -139,7 +139,6 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_proxmox_api_token` | Proxmox API token secret |
 | `vault_proxmox_host` | Proxmox host and port (e.g. `pve-01.example.com:8006`) |
 | `vault_proxmox_user` | Proxmox user for API auth (e.g. `user@Authentik`) |
-| `vault_proxmox_node` | Proxmox node name (e.g. `pve-01`) |
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
 | `vault_cloudflare_email` | Cloudflare account email |
 | `vault_domain` | Base domain (e.g. `example.com`) — drives `k8s_api_endpoint`, `ingress_domain`, `foreman_domain`, `wildcard_secret_name`, and FreeIPA realm |
@@ -356,6 +355,12 @@ ansible-playbook wipe.yml --ask-vault-pass -e "cluster_env=test"
 ```
 
 ## VM Definitions
+
+### Proxmox Node Placement
+
+Each VM is created on a node from `proxmox_placement_nodes` in `vars/foreman.yml`, round-robin by the number in its name: `k8s-cp-01` goes on the first node, `k8s-cp-02` on the second, `k8s-worker-04` wraps back to the first. The compute profiles pin a single `node_id`, so the node is sent per host at create time to override it. Without this, every VM landed on one host, and losing that host took etcd quorum with it. List only nodes that hold LINSTOR replicas of the VM disks.
+
+`proxmox_postconfig` and `autoscale.yml` look up each VM's current node through `/cluster/resources`, so VMs can also be live-migrated after the build without breaking either one.
 
 Edit `vars/vms.yml` to configure nodes. There are no hardcoded hostnames — both control plane and worker names are generated at runtime from a prefix and a counter. The prefix is derived from the `cluster_env` survey var:
 
