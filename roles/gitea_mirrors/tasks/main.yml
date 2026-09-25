@@ -8,8 +8,10 @@
     that:
       - gitea_token | length > 0
     fail_msg: >-
-      gitea_token is empty. Set vault_gitea_token in vars/vault.yml (a Gitea
-      access token with permission to create the github-mirror org and repos).
+      gitea_token is empty. In Ascender, attach the "Gitea mirror bot"
+      credential to the mirror job template (it injects GITEA_MIRROR_TOKEN).
+      Outside Ascender, export GITEA_MIRROR_TOKEN (the token is in OpenBao at
+      secret/automation/gitea-mirror-bot) or set vault_gitea_token.
 
 - name: Check whether the mirror org exists
   ansible.builtin.uri:
