@@ -1,13 +1,14 @@
 ---
-- name: Build Proxmox auth header and base URL
+- name: Build Proxmox auth header
   ansible.builtin.set_fact:
     _auth: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_api_token }}"
-    _base: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}"
   no_log: "{{ 'debug' not in ansible_run_tags }}"
 
-- name: Get full VM list from Proxmox node
+# Cluster-wide, not per node: VMs are spread across proxmox_placement_nodes
+# and may be migrated later, so the node is looked up rather than assumed.
+- name: Get full VM list from the Proxmox cluster
   ansible.builtin.uri:
-    url: "{{ _base }}/qemu"
+    url: "https://{{ proxmox_host }}/api2/json/cluster/resources?type=vm"
     method: GET
     headers:
       Authorization: "{{ _auth }}"
@@ -25,6 +26,7 @@
     vm_info: >-
       {{
         proxmox_vm_list.json.data
+        | selectattr('type', 'equalto', 'qemu')
         | selectattr('name', 'defined')
         | selectattr('name', 'search', short_hostname)
         | list
@@ -34,19 +36,20 @@
 - name: Fail clearly if VM not found in Proxmox
   ansible.builtin.fail:
     msg: >
-      Could not find a VM on node '{{ proxmox_node }}' whose name
-      contains '{{ short_hostname }}'. Verify proxmox_node and that
-      the VM exists.
+      Could not find a VM anywhere in the Proxmox cluster whose name
+      contains '{{ short_hostname }}'. Verify the VM exists.
   when: vm_info is not defined or vm_info | length == 0
 
-- name: Set VMID and current name as facts
+- name: Set VMID, node, current name and node-scoped base URL as facts
   ansible.builtin.set_fact:
     vmid: "{{ vm_info.vmid }}"
+    vm_node: "{{ vm_info.node }}"
     vm_current_name: "{{ vm_info.name }}"
+    _base: "https://{{ proxmox_host }}/api2/json/nodes/{{ vm_info.node }}"
 
 - name: Display discovered VM
   ansible.builtin.debug:
-    msg: "Matched '{{ inventory_hostname }}' → '{{ vm_current_name }}' (VMID {{ vmid }})"
+    msg: "Matched '{{ inventory_hostname }}' → '{{ vm_current_name }}' (VMID {{ vmid }}, node {{ vm_node }})"
 
 - name: Send ACPI shutdown signal
   # forceStop: 1 — fall back to a hard stop if the guest doesn't ACPI-shut-down

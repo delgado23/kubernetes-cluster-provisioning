@@ -222,6 +222,10 @@
           {{ foreman_compute_profile_controlplane
              if 'Controlplane' in item.0.hostgroup
              else foreman_compute_profile_worker }}
+        # Overrides the compute profile's node_id; Foreman merges the rest of
+        # the profile's VM attributes underneath. See proxmox_placement_nodes.
+        compute_attributes:
+          node_id: "{{ proxmox_placement_nodes[((item.0.name.split('-') | last | int) - 1) % (proxmox_placement_nodes | length)] }}"
         build: true
         managed: true
   loop: "{{ vms | zip(existing_hosts.results) | list }}"
@@ -270,6 +274,7 @@
       CREATED — {{ item.item.0.name }}
       (Group: {{ item.item.0.hostgroup }})
       (Compute profile: {{ 'Controlplane (id=8)' if 'Controlplane' in item.item.0.hostgroup else 'Worker (id=6)' }})
+      (Proxmox node: {{ item.json.compute_attributes.node_id | default('unknown') }})
       Foreman ID: {{ item.json.id | default('unknown') }}
   loop: "{{ created_hosts.results }}"
   loop_control:

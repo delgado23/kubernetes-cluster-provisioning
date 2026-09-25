@@ -83,8 +83,9 @@
     proxmox_host:     "{{ vault_proxmox_host }}"
     proxmox_user:     "{{ vault_proxmox_user }}"
     proxmox_token_id: "foreman"
-    proxmox_node:     "{{ vault_proxmox_node }}"
-    _pve_base: "https://{{ proxmox_host }}/api2/json/nodes/{{ proxmox_node }}"
+    # Cluster VMs live on several Proxmox nodes (proxmox_placement_nodes) and
+    # can be migrated, so each VM's node comes from /cluster/resources.
+    _pve_api: "https://{{ proxmox_host }}/api2/json"
     _pve_auth: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ vault_proxmox_api_token }}"
 
   tasks:
@@ -157,9 +158,9 @@
 
     # ── 3. Fetch Proxmox VM inventory ───────────────────────────────────────
 
-    - name: Get Proxmox VM list
+    - name: Get Proxmox VM list (cluster-wide)
       ansible.builtin.uri:
-        url: "{{ _pve_base }}/qemu"
+        url: "{{ _pve_api }}/cluster/resources?type=vm"
         method: GET
         headers:
           Authorization: "{{ _pve_auth }}"
@@ -168,12 +169,12 @@
       register: _pve_vms
       no_log: "{{ 'debug' not in ansible_run_tags }}"
 
-    - name: Build short-hostname → VMID map
+    - name: Build short-hostname → {VMID, Proxmox node} map
       ansible.builtin.set_fact:
-        _vmid_map: >-
+        _vm_map: >-
           {%- set result = {} -%}
-          {%- for vm in _pve_vms.json.data if vm.name is defined -%}
-            {%- set _ = result.update({vm.name: vm.vmid | string}) -%}
+          {%- for vm in _pve_vms.json.data if vm.type == 'qemu' and vm.name is defined -%}
+            {%- set _ = result.update({vm.name: {'vmid': vm.vmid | string, 'pve_node': vm.node}}) -%}
           {%- endfor -%}
           {{ result }}
 
@@ -181,7 +182,7 @@
 
     - name: Fetch Proxmox VM config for each node
       ansible.builtin.uri:
-        url: "{{ _pve_base }}/qemu/{{ _vmid_map[item.short] }}/config"
+        url: "{{ _pve_api }}/nodes/{{ _vm_map[item.short].pve_node }}/qemu/{{ _vm_map[item.short].vmid }}/config"
         method: GET
         headers:
           Authorization: "{{ _pve_auth }}"
@@ -191,7 +192,7 @@
       loop: "{{ _node_list }}"
       loop_control:
         label: "{{ item.short }}"
-      when: item.short in _vmid_map
+      when: item.short in _vm_map
       no_log: "{{ 'debug' not in ansible_run_tags }}"
 
     # ── 5. Combine utilisation + Proxmox config into scale decision list ────
@@ -206,7 +207,8 @@
             {%- if not (res.skipped | default(false)) -%}
               {%- set cfg = res.json.data -%}
               {%- set _ = result.append(node | combine({
-                'vmid':       _vmid_map[node.short],
+                'vmid':       _vm_map[node.short].vmid,
+                'pve_node':   _vm_map[node.short].pve_node,
                 'cur_cores':  (cfg.vcpus | default(cfg.cores)) | int,
                 'cur_mem_mb': cfg.memory | int
               })) -%}
@@ -218,7 +220,7 @@
 
     - name: Scale up CPU cores
       ansible.builtin.uri:
-        url: "{{ _pve_base }}/qemu/{{ item.vmid }}/config"
+        url: "{{ _pve_api }}/nodes/{{ item.pve_node }}/qemu/{{ item.vmid }}/config"
         method: PUT
         headers:
           Authorization: "{{ _pve_auth }}"
@@ -252,7 +254,7 @@
 
     - name: Scale up memory
       ansible.builtin.uri:
-        url: "{{ _pve_base }}/qemu/{{ item.vmid }}/config"
+        url: "{{ _pve_api }}/nodes/{{ item.pve_node }}/qemu/{{ item.vmid }}/config"
         method: PUT
         headers:
           Authorization: "{{ _pve_auth }}"
@@ -272,7 +274,7 @@
 
     - name: Scale up balloon to match new memory
       ansible.builtin.uri:
-        url: "{{ _pve_base }}/qemu/{{ item.vmid }}/config"
+        url: "{{ _pve_api }}/nodes/{{ item.pve_node }}/qemu/{{ item.vmid }}/config"
         method: PUT
         headers:
           Authorization: "{{ _pve_auth }}"
@@ -304,7 +306,7 @@
 
     - name: Scale down CPU cores
       ansible.builtin.uri:
-        url: "{{ _pve_base }}/qemu/{{ item.vmid }}/config"
+        url: "{{ _pve_api }}/nodes/{{ item.pve_node }}/qemu/{{ item.vmid }}/config"
         method: PUT
         headers:
           Authorization: "{{ _pve_auth }}"
@@ -338,7 +340,7 @@
 
     - name: Scale down balloon before memory
       ansible.builtin.uri:
-        url: "{{ _pve_base }}/qemu/{{ item.vmid }}/config"
+        url: "{{ _pve_api }}/nodes/{{ item.pve_node }}/qemu/{{ item.vmid }}/config"
         method: PUT
         headers:
           Authorization: "{{ _pve_auth }}"
@@ -357,7 +359,7 @@
 
     - name: Scale down memory
       ansible.builtin.uri:
-        url: "{{ _pve_base }}/qemu/{{ item.vmid }}/config"
+        url: "{{ _pve_api }}/nodes/{{ item.pve_node }}/qemu/{{ item.vmid }}/config"
         method: PUT
         headers:
           Authorization: "{{ _pve_auth }}"
