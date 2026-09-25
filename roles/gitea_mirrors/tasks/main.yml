@@ -2,21 +2,30 @@
 # Create/maintain pull mirrors of upstream GitHub repos in the local Gitea.
 # Idempotent: existing org/repos are left in place; only missing ones are created.
 # Requires gitea_token (a Gitea token with org+repo create rights).
+#
+# The token is sent as the HTTP basic-auth password (url_password), never in
+# an Authorization header. The uri module always redacts url_password, even at
+# -vvv. Headers are logged in invocation.module_args at high verbosity, and
+# Ascender stores those in its job events. Gitea accepts a token as the
+# basic-auth password and ignores the username (gitea_basic_auth_user).
 
 - name: Assert Gitea token is available
   ansible.builtin.assert:
     that:
       - gitea_token | length > 0
     fail_msg: >-
-      gitea_token is empty. Set vault_gitea_token in vars/vault.yml (a Gitea
-      access token with permission to create the github-mirror org and repos).
+      gitea_token is empty. In Ascender, attach the "Gitea mirror bot"
+      credential to the mirror job template (it injects GITEA_MIRROR_TOKEN).
+      Outside Ascender, export GITEA_MIRROR_TOKEN (the token is in OpenBao at
+      secret/automation/gitea-mirror-bot) or set vault_gitea_token.
 
 - name: Check whether the mirror org exists
   ansible.builtin.uri:
     url: "{{ gitea_url }}/api/v1/orgs/{{ gitea_mirror_org }}"
     method: GET
-    headers:
-      Authorization: "token {{ gitea_token }}"
+    url_username: "{{ gitea_basic_auth_user }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
     status_code: [200, 404]
   register: _mirror_org
 
@@ -24,8 +33,9 @@
   ansible.builtin.uri:
     url: "{{ gitea_url }}/api/v1/orgs"
     method: POST
-    headers:
-      Authorization: "token {{ gitea_token }}"
+    url_username: "{{ gitea_basic_auth_user }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
     body_format: json
     body:
       username: "{{ gitea_mirror_org }}"
@@ -38,8 +48,9 @@
   ansible.builtin.uri:
     url: "{{ gitea_url }}/api/v1/repos/{{ gitea_mirror_org }}/{{ item.name | default(item.repo) }}"
     method: GET
-    headers:
-      Authorization: "token {{ gitea_token }}"
+    url_username: "{{ gitea_basic_auth_user }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
     status_code: [200, 404]
   register: _existing_mirrors
   loop: "{{ gitea_mirror_repos }}"
@@ -50,8 +61,9 @@
   ansible.builtin.uri:
     url: "{{ gitea_url }}/api/v1/repos/migrate"
     method: POST
-    headers:
-      Authorization: "token {{ gitea_token }}"
+    url_username: "{{ gitea_basic_auth_user }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
     body_format: json
     body:
       clone_addr: "https://github.com/{{ item.item.owner }}/{{ item.item.repo }}.git"
@@ -66,25 +78,49 @@
       mirror_interval: "{{ gitea_mirror_interval }}"
       auth_token: "{{ gitea_mirror_github_token }}"
     # 201 created; 409 conflict if a race recreated it between check and create.
-    status_code: [201, 409]
+    # 403 "not owner of organization": Gitea's migrate API requires an org
+    # OWNER, and the Ascender token (svc-gitea-mirror) is deliberately only in
+    # a write team, so it cannot delete the preservation mirrors or packages.
+    # That one 403 is reported at the end of the role instead of failing, so
+    # syncs and release-asset republishing still run. Any other error fails.
+    status_code: [201, 403, 409]
     # Migration clones the repo synchronously; give it room on large repos.
     timeout: "{{ gitea_mirror_migrate_timeout }}"
+  register: _created_mirrors
+  failed_when: >-
+    _created_mirrors.status | default(-1) not in [201, 403, 409]
+    or (_created_mirrors.status == 403
+        and 'not owner of organization' not in (_created_mirrors.json.message | default('')))
   loop: "{{ _existing_mirrors.results }}"
   loop_control:
     label: "{{ item.item.owner }}/{{ item.item.repo }}"
   when: item.status == 404
 
+- name: Record mirrors that could not be created (token is not an org owner)
+  ansible.builtin.set_fact:
+    _uncreated_mirrors: >-
+      {{
+        _created_mirrors.results
+        | selectattr('status', 'defined')
+        | selectattr('status', 'equalto', 403)
+        | map(attribute='item.item')
+        | list
+      }}
+
 - name: Trigger an immediate mirror sync
   ansible.builtin.uri:
     url: "{{ gitea_url }}/api/v1/repos/{{ gitea_mirror_org }}/{{ item.name | default(item.repo) }}/mirror-sync"
     method: POST
-    headers:
-      Authorization: "token {{ gitea_token }}"
+    url_username: "{{ gitea_basic_auth_user }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
     status_code: [200]
   loop: "{{ gitea_mirror_repos }}"
   loop_control:
     label: "{{ item.name | default(item.repo) }}"
-  when: gitea_mirror_sync_now | bool
+  when:
+    - gitea_mirror_sync_now | bool
+    - item not in _uncreated_mirrors
 
 - name: Show mirror org URL
   ansible.builtin.debug:
@@ -99,8 +135,9 @@
 - name: Resolve latest tag for each release-asset repo
   ansible.builtin.uri:
     url: "{{ gitea_url }}/api/v1/repos/{{ gitea_mirror_org }}/{{ item.name | default(item.repo) }}/tags?limit=100"
-    headers:
-      Authorization: "token {{ gitea_token }}"
+    url_username: "{{ gitea_basic_auth_user }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
     return_content: true
   register: _asset_tags
   loop: "{{ gitea_mirror_assets }}"
@@ -180,8 +217,10 @@
       ansible.builtin.uri:
         url: "{{ gitea_url }}/api/packages/{{ gitea_mirror_org }}/generic/{{ item.item.0.repo }}/{{ item.item.0.version }}/{{ item.item.1 }}"
         method: PUT
+        url_username: "{{ gitea_basic_auth_user }}"
+        url_password: "{{ gitea_token }}"
+        force_basic_auth: true
         headers:
-          Authorization: "token {{ gitea_token }}"
           Content-Type: application/octet-stream
         src: "{{ gitea_mirror_asset_tmp }}/{{ item.item.0.repo }}-{{ item.item.0.version }}-{{ item.item.1 }}"
         remote_src: true
@@ -202,3 +241,15 @@
       loop_control:
         label: "{{ item.item.0.repo }}/{{ item.item.0.version }}/{{ item.item.1 }}"
       when: item.status == 404
+
+- name: Report mirrors that still need creating by an org owner
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ _uncreated_mirrors | length }} declared mirror(s) do not exist
+      and could not be created, because Gitea's migrate API requires an owner
+      of the {{ gitea_mirror_org }} org and this token (svc-gitea-mirror) is
+      deliberately not one: {{ _uncreated_mirrors | map(attribute='repo') | join(', ') }}.
+      Create them once as an org owner, either by running this playbook with
+      an owner's token in GITEA_MIRROR_TOKEN or through Gitea's
+      New Migration page. Later runs will then sync them.
+  when: _uncreated_mirrors | length > 0

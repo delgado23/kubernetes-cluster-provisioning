@@ -117,7 +117,7 @@ Run once to set up; re-runnable any time and self-refreshing (each mirror
 re-pulls from upstream on a 24h interval):
 
 ```bash
-ansible-playbook mirror-github-repos.yml   # needs vault_gitea_token
+GITEA_MIRROR_TOKEN=... ansible-playbook mirror-github-repos.yml   # or vault_gitea_token
 ```
 
 How each dependency is served (see `roles/gitea_mirrors`, `vars/gitea.yml`):
@@ -161,7 +161,7 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_keepalived_password` | Keepalived VRRP authentication password |
 | `vault_awx_url` | AWX/Ascender base URL (e.g. `https://ascender.example.com`) |
 | `vault_awx_token` | AWX API token — used to enable/disable autoscale schedules after build/wipe |
-| `vault_gitea_token` | Gitea token with org+repo create rights — used **only** by `mirror-github-repos.yml` to create/refresh the upstream mirrors (the cluster build reads the mirrors anonymously) |
+| `vault_gitea_token` | (optional) Gitea token used **only** by `mirror-github-repos.yml` to create and refresh the upstream mirrors (the cluster build reads the mirrors anonymously). Usually unset: the token normally comes from `GITEA_MIRROR_TOKEN`, injected by the Ascender "Gitea mirror bot" credential for Gitea user `svc-gitea-mirror`. That user is in the `github-mirror` org's `mirror-automation` team (write on code/releases/packages, can create org repos, not owner), and its token has scopes `write:repository`, `write:package` and `read:organization`. The token is also stored in OpenBao at `secret/automation/gitea-mirror-bot`. |
 | `vault_gitea_url` | (optional) Gitea base URL; defaults to `https://git.garaventaville.com` |
 | `vault_github_token` | (optional) GitHub PAT handed to Gitea so its own upstream sync is not rate-limited; empty is fine for public repos |
 | `vault_zabbix_url` | (optional) Zabbix base URL; defaults to `https://zabbix.garaventaville.com` |
