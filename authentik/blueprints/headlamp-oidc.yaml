@@ -1,0 +1,56 @@
+# authentik blueprint: Headlamp OIDC email claim for kube-apiserver
+#
+# kube-apiserver maps the OIDC username from the `email` claim (see
+# roles/cluster_bootstrap/templates/apiserver-auth-config.yaml.j2), and with
+# that mapping it requires `email_verified: true`. authentik's built-in
+# "OpenID 'email'" scope mapping always returns email_verified=False, so every
+# Headlamp login fails with "oidc: email not verified". This blueprint adds a
+# scope mapping that asserts verified for LDAP-sourced (FreeIPA) users and
+# swaps it in on the Headlamp provider in place of the built-in one.
+#
+# Only safe while users cannot change their own email in authentik
+# (System > Settings > "Allow users to change email" off). Otherwise a user
+# could set another user's address and authenticate to Kubernetes as them.
+#
+# APPLIED BY HAND, NOT BY THE BUILD. Applying a blueprint needs rights to edit
+# scope mappings, and mapping expressions run as Python inside authentik, so
+# that would put an admin-equivalent token in Ascender. The build only checks
+# the live config against this file (roles/cluster_addons/tasks/
+# headlamp_authentik_check.yml) using a read-only token.
+# To apply: authentik admin > Customization > Blueprints > Import, then
+# upload this file.
+version: 1
+metadata:
+  name: k8s - Headlamp verified email mapping
+entries:
+  - model: authentik_providers_oauth2.scopemapping
+    id: headlamp-email
+    identifiers:
+      name: "Headlamp: OpenID email (verified for LDAP users)"
+    attrs:
+      scope_name: email
+      description: Email address (verified for FreeIPA-synced users)
+      expression: |
+        # Emails for LDAP-sourced users are synced from FreeIPA and users cannot
+        # change them in authentik (default_user_change_email=false), so they are
+        # asserted as verified. kube-apiserver rejects OIDC tokens whose email claim
+        # is used as the username unless email_verified is true.
+        attrs = request.user.attributes or {}
+        from_ldap = "distinguishedName" in attrs or "ldap_uniq" in attrs
+        return {
+            "email": request.user.email,
+            "email_verified": bool(from_ldap and request.user.email),
+        }
+
+  # Updates the existing provider in place and touches only its scope mappings.
+  # The provider itself (client ID/secret, flows, redirect URIs) is created by
+  # hand in authentik and is not managed here.
+  - model: authentik_providers_oauth2.oauth2provider
+    identifiers:
+      name: Provider for Headlamp
+    attrs:
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
+        - !KeyOf headlamp-email
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-offline_access]]

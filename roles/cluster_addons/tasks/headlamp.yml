@@ -11,6 +11,9 @@
         vault_authentik_headlamp_client_id: "<client id from Authentik>"
         vault_authentik_headlamp_client_secret: "<client secret from Authentik>"
 
+- name: Verify authentik issues a verified email claim to Headlamp
+  ansible.builtin.include_tasks: headlamp_authentik_check.yml
+
 - name: Add Headlamp Helm repo
   ansible.builtin.command:
     cmd: /usr/local/bin/helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/
