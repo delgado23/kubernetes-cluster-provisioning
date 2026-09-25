@@ -1,0 +1,88 @@
+---
+# Fails the build if the authentik side of Headlamp's OIDC login has drifted
+# from authentik/blueprints/headlamp-oidc.yaml. Without this, a drift only
+# surfaces when someone tries to log in: kube-apiserver rejects every Headlamp
+# token with "oidc: email not verified".
+#
+# Read-only. AUTHENTIK_READONLY_TOKEN is injected by the Ascender credential
+# "Authentik k8s-build read-only" (authentik service account
+# svc-k8s-build-readonly). That account has object-level view on the Headlamp
+# provider and the two email scope mappings, and nothing else. Drift is
+# reported here, not repaired; to fix it, import the blueprint by hand as
+# described in its header.
+
+- name: Load the expected Headlamp email mapping from the blueprint
+  ansible.builtin.set_fact:
+    # authentik's custom YAML tags (!Find, !KeyOf) are stripped so the file
+    # parses as plain YAML. Only the tag-free scope-mapping entry is used.
+    _headlamp_bp_mapping: >-
+      {{
+        (lookup('ansible.builtin.file', playbook_dir ~ '/authentik/blueprints/headlamp-oidc.yaml')
+         | regex_replace('!(Find|KeyOf) ', '')
+         | from_yaml).entries
+        | selectattr('model', 'equalto', 'authentik_providers_oauth2.scopemapping')
+        | first
+      }}
+
+- name: Assert the read-only authentik token is available
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.env', 'AUTHENTIK_READONLY_TOKEN') | length > 0
+    fail_msg: >-
+      AUTHENTIK_READONLY_TOKEN is not set. In Ascender, attach the
+      "Authentik k8s-build read-only" credential to this job template.
+      Outside Ascender, export an API token for authentik's
+      svc-k8s-build-readonly service account.
+    quiet: true
+
+- name: Look up the Headlamp OAuth2 provider by client ID
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}/api/v3/providers/oauth2/?client_id={{ vault_authentik_headlamp_client_id | urlencode }}"
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.env', 'AUTHENTIK_READONLY_TOKEN') }}"
+      Accept: application/json
+    return_content: true
+  register: _headlamp_ak_provider
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+- name: Look up the Headlamp and built-in email scope mappings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}/api/v3/propertymappings/provider/scope/?{{ item.value }}"
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.env', 'AUTHENTIK_READONLY_TOKEN') }}"
+      Accept: application/json
+    return_content: true
+  register: _headlamp_ak_mappings
+  loop: "{{ {'headlamp': 'name=' ~ (_headlamp_bp_mapping.identifiers.name | urlencode),
+             'builtin': 'managed=' ~ ('goauthentik.io/providers/oauth2/scope-email' | urlencode)} | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+- name: Collect the authentik lookup results
+  ansible.builtin.set_fact:
+    _headlamp_ak_provider_list: "{{ _headlamp_ak_provider.json.results }}"
+    _headlamp_ak_custom: "{{ (_headlamp_ak_mappings.results | selectattr('item.key', 'equalto', 'headlamp') | first).json.results }}"
+    _headlamp_ak_builtin: "{{ (_headlamp_ak_mappings.results | selectattr('item.key', 'equalto', 'builtin') | first).json.results }}"
+
+- name: Fail if Headlamp's authentik email mapping is missing or has drifted
+  ansible.builtin.assert:
+    that:
+      - _headlamp_ak_provider_list | length == 1
+      - _headlamp_ak_custom | length == 1
+      - _headlamp_ak_custom[0].scope_name == 'email'
+      - _headlamp_ak_custom[0].expression | trim == _headlamp_bp_mapping.attrs.expression | trim
+      - _headlamp_ak_custom[0].pk in _headlamp_ak_provider_list[0].property_mappings
+      - (_headlamp_ak_builtin | map(attribute='pk') | intersect(_headlamp_ak_provider_list[0].property_mappings)) | length == 0
+    fail_msg: >-
+      authentik's Headlamp OIDC config does not match
+      authentik/blueprints/headlamp-oidc.yaml. Expected: exactly one OAuth2
+      provider with client ID vault_authentik_headlamp_client_id; the scope
+      mapping "{{ _headlamp_bp_mapping.identifiers.name }}" existing with the
+      blueprint's expression and attached to that provider; and the built-in
+      "OpenID 'email'" mapping NOT attached. Found {{ _headlamp_ak_provider_list | length }}
+      provider(s) and {{ _headlamp_ak_custom | length }} matching mapping(s).
+      Without this, kube-apiserver rejects every Headlamp login with
+      "oidc: email not verified". Fix: import the blueprint in authentik
+      (Customization > Blueprints > Import).
+    success_msg: "authentik Headlamp email mapping matches the blueprint"
