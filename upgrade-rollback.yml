@@ -65,11 +65,19 @@
     # k8s_rollback_nodes=auto (used by upgrade-dr-restore.yml): every worker
     # whose kubelet is a newer minor than the control plane, i.e. the workers
     # an etcd-snapshot restore left on an unsupported skew.
-    - name: Read the cluster's nodes and kubeadm config (auto selection)
+    - name: Read the cluster's nodes (auto selection)
+      ansible.builtin.command: "{{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get nodes -o json"
+      register: _rb_auto_nodes
+      changed_when: false
+      delegate_to: "{{ k8s_primary_cp }}"
+      run_once: true
+      when: k8s_rollback_nodes == 'auto'
+
+    - name: Read the cluster's kubeadm config (auto selection)
       ansible.builtin.command: >
         {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system
-        get nodes,configmap/kubeadm-config -o json
-      register: _rb_auto
+        get configmap kubeadm-config -o json
+      register: _rb_auto_cm
       changed_when: false
       delegate_to: "{{ k8s_primary_cp }}"
       run_once: true
@@ -77,14 +85,14 @@
 
     - name: Pick the workers ahead of the control plane (auto selection)
       vars:
-        _items: "{{ (_rb_auto.stdout | from_json)['items'] }}"
+        _items: "{{ (_rb_auto_nodes.stdout | from_json)['items'] }}"
         _cluster_minor: >-
-          {{ ((_items | selectattr('kind', 'equalto', 'ConfigMap') | first).data.ClusterConfiguration
+          {{ ((_rb_auto_cm.stdout | from_json).data.ClusterConfiguration
               | from_yaml).kubernetesVersion.split('.')[1] | int }}
       ansible.builtin.set_fact:
         _rollback_nodes_auto: >-
           {%- set out = [] -%}
-          {%- for n in _items | selectattr('kind', 'equalto', 'Node') -%}
+          {%- for n in _items -%}
             {%- if n.metadata.name in k8s_cluster_workers
                   and (n.status.nodeInfo.kubeletVersion.split('.')[1] | int) > (_cluster_minor | int) -%}
               {%- set _ = out.append(n.metadata.name) -%}

@@ -373,21 +373,24 @@
       ansible.builtin.meta: end_host
       when: foreman_params.cluster_env | default('') != cluster_env
   tasks:
-    - name: Read the restored cluster
+    - name: Read the restored cluster's nodes
+      ansible.builtin.command: "{{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get nodes -o json"
+      register: _dr_post_nodes
+      changed_when: false
+      run_once: true
+
+    - name: Read the restored cluster's kubeadm config
       ansible.builtin.command: >
         {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system
-        get nodes,configmap/kubeadm-config -o json
-      register: _dr_post
+        get configmap kubeadm-config -o json
+      register: _dr_post_cm
       changed_when: false
       run_once: true
 
     - name: Require the old version everywhere
       vars:
-        _items: "{{ (_dr_post.stdout | from_json)['items'] }}"
-        _cluster: >-
-          {{ ((_items | selectattr('kind', 'equalto', 'ConfigMap') | first).data.ClusterConfiguration
-              | from_yaml).kubernetesVersion }}
-        _kubelets: "{{ _items | selectattr('kind', 'equalto', 'Node') | map(attribute='status.nodeInfo.kubeletVersion') | list }}"
+        _cluster: "{{ ((_dr_post_cm.stdout | from_json).data.ClusterConfiguration | from_yaml).kubernetesVersion }}"
+        _kubelets: "{{ (_dr_post_nodes.stdout | from_json)['items'] | map(attribute='status.nodeInfo.kubeletVersion') | list }}"
       ansible.builtin.assert:
         that:
           - _cluster == 'v' ~ _dr_from
