@@ -2,13 +2,21 @@
 # =============================================================================
 # mirror-github-repos.yml — Pull-mirror upstream GitHub repos into local Gitea
 # =============================================================================
-# Cluster builds depend on ~15 reads from api.github.com / github.com /
-# raw.githubusercontent.com (addon version discovery, manifests, binaries).
-# Unauthenticated GitHub throttles to 60 req/hr and serves transient 504s that
-# abort whole builds. This playbook mirrors every upstream dependency into the
-# local Gitea github-mirror org (pull mirror + releases), so the build reads
-# from a reliable local source. Gitea re-pulls each mirror from upstream on its
-# own schedule (gitea_mirror_interval), so versions stay current.
+# This playbook maintains pull mirrors in the local Gitea github-mirror org,
+# serving two unrelated consumers:
+#
+#   1. Reliability for cluster builds. Builds depend on ~15 reads from
+#      api.github.com / github.com / raw.githubusercontent.com (addon version
+#      discovery, manifests, binaries). Unauthenticated GitHub throttles to
+#      60 req/hr and serves transient 504s that abort whole builds, so the build
+#      reads from the mirrors instead. Gitea re-pulls each mirror on its own
+#      schedule (gitea_mirror_interval), so versions stay current.
+#
+#   2. Preservation for pantheon-of-order (AzerothCore WotLK). Its core fork and
+#      modules live only on GitHub; mirroring keeps the realm rebuildable if an
+#      upstream is deleted, renamed or force-pushed. Note that Gitea mirrors git
+#      data and tags but NOT release assets — the client-data Data.zip is
+#      preserved separately via gitea_mirror_assets.
 #
 # Run once to create the mirrors; safe to re-run (idempotent — only missing
 # mirrors are created) and to add new repos in

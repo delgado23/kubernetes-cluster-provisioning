@@ -1,54 +1,6 @@
 ---
-- name: Confirm kubectl is available
-  ansible.builtin.command: "{{ kubectl_bin }} version --client --output=json"
-  register: kubectl_check
-  changed_when: false
-  failed_when: kubectl_check.rc != 0
-
-- name: Verify node is registered in the cluster
-  ansible.builtin.command: >
-    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
-    get node {{ inventory_hostname }}
-    --output=jsonpath='{.metadata.name}'
-  register: node_check
-  changed_when: false
-  failed_when: node_check.stdout != inventory_hostname
-  when: not delegate_kubectl | default(false)
-
-- name: Cordon node (mark unschedulable)
-  ansible.builtin.command: >
-    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
-    cordon {{ inventory_hostname }}
-  delegate_to: "{{ control_plane_host | default(omit) }}"
-  register: cordon_result
-  changed_when: "'cordoned' in cordon_result.stdout"
-
-- name: Verify node is cordoned
-  ansible.builtin.command: >
-    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
-    get node {{ inventory_hostname }}
-    --output=jsonpath='{.spec.unschedulable}'
-  delegate_to: "{{ control_plane_host | default(omit) }}"
-  register: cordon_check
-  changed_when: false
-  failed_when: cordon_check.stdout != "true"
-
-- name: Drain node (evict pods)
-  ansible.builtin.command: >
-    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
-    drain {{ inventory_hostname }}
-    --ignore-daemonsets
-    --delete-emptydir-data
-    --grace-period={{ drain_grace_period }}
-    --timeout={{ drain_timeout }}s
-    --force
-  delegate_to: "{{ control_plane_host | default(omit) }}"
-  register: drain_result
-  changed_when: true
-
-- name: Show drain output
-  ansible.builtin.debug:
-    var: drain_result.stdout_lines
+- name: Cordon and drain
+  ansible.builtin.include_tasks: drain.yml
 
 # OS update. Package-mode hosts patch in place with dnf. Image-mode (bootc)
 # hosts have an immutable /usr — dnf fails (pkg_mgr=atomic_container) and in-place
@@ -97,43 +49,11 @@
     post_reboot_delay: 30
   when: reboot_required
 
-- name: Wait for kubelet service to be active
-  ansible.builtin.systemd:
-    name: kubelet
-  register: kubelet_status
-  until: kubelet_status.status.ActiveState == "active"
-  retries: 20
-  delay: 15
+- name: Wait for the node to come back Ready
+  ansible.builtin.include_tasks: wait_ready.yml
 
-- name: Wait for node to become Ready in the cluster
-  ansible.builtin.command: >
-    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
-    get node {{ inventory_hostname }}
-    --output=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
-  delegate_to: "{{ control_plane_host | default(omit) }}"
-  register: node_ready
-  until: node_ready.stdout == "True"
-  retries: 30
-  delay: 15
-  changed_when: false
-
-- name: Uncordon node (mark schedulable)
-  ansible.builtin.command: >
-    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
-    uncordon {{ inventory_hostname }}
-  delegate_to: "{{ control_plane_host | default(omit) }}"
-  register: uncordon_result
-  changed_when: "'uncordoned' in uncordon_result.stdout"
-
-- name: Verify node is uncordoned and Ready
-  ansible.builtin.command: >
-    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
-    get node {{ inventory_hostname }}
-    --output=jsonpath='{.spec.unschedulable}'
-  delegate_to: "{{ control_plane_host | default(omit) }}"
-  register: uncordon_check
-  changed_when: false
-  failed_when: uncordon_check.stdout == "true"
+- name: Uncordon
+  ansible.builtin.include_tasks: uncordon.yml
 
 - name: Node maintenance summary
   ansible.builtin.debug:

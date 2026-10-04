@@ -138,6 +138,33 @@
     - vars/vault.yml
     - vars/foreman.yml
     - vars/vms.yml
+  pre_tasks:
+    # A brand-new cluster must not come up on a VIP something already answers
+    # on -- that is another cluster's API server, and keepalived would contend
+    # for it. (Adding nodes to an existing cluster skips this.)
+    - name: Query Foreman for this cluster's existing control planes
+      ansible.builtin.uri:
+        url: "{{ foreman_url }}/api/hosts?search=name+%7E+%22{{ (controlplane_name_prefix + '-') | urlencode }}%22&per_page=250"
+        method: GET
+        user: "{{ foreman_user }}"
+        password: "{{ foreman_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ foreman_validate_certs }}"
+        headers:
+          Accept: application/json
+      register: _vip_guard_cps
+
+    - name: Refuse to build a new cluster on a VIP that is already in use
+      ansible.builtin.wait_for:
+        host: "{{ k8s_api_endpoint_ip }}"
+        port: 6443
+        state: stopped
+        timeout: 10
+        msg: >-
+          {{ k8s_api_endpoint_ip }}:6443 already answers, but {{ cluster_env }} has no
+          control planes yet -- it belongs to another cluster. Pick a free
+          k8s_api_endpoint_ip (and metallb_pool) for {{ cluster_env }}.
+      when: _vip_guard_cps.json.results | length == 0
   roles:
     - role: vm_provisioning
 
@@ -346,6 +373,7 @@
   tags: [prep]
   vars_files:
     - vars/vms.yml
+    - vars/kubernetes.yml
   pre_tasks:
     - name: Check if node is already in the cluster
       ansible.builtin.stat:
@@ -438,6 +466,7 @@
     - vars/vault.yml
     - vars/vms.yml
     - vars/gitea.yml
+    - vars/kubernetes.yml
   pre_tasks:
     - name: Skip bootstrap when only adding workers
       ansible.builtin.meta: end_play

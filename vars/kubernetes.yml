@@ -1,0 +1,37 @@
+---
+# Kubernetes image sources. Loaded by every play that renders kubeadm or
+# containerd config, and by upgrade.yml / upgrade-rollback.yml.
+#
+# Core images (kube-apiserver/-controller-manager/-scheduler/-proxy, etcd,
+# coredns, pause) are mirrored from registry.k8s.io into Katello by
+# foreman-content-views (tasks/kubernetes_content.yml): product + content view
+# "Kubernetes Images", promoted to Production, unauthenticated pull. Repo labels
+# are kubeadm's image names, so this one prefix is kubeadm's imageRepository.
+k8s_image_repository: foreman.garaventaville.com/garaventaville/production/kubernetes-images/kubernetes-images
+
+# containerd's sandbox image. 3.10.2 is what kubeadm 1.36/1.37 expect; 1.35's
+# kubeadm expects 3.10.1 and only warns about the difference.
+k8s_pause_image: "{{ k8s_image_repository }}/pause:3.10.2"
+
+# Image-mode node images built by foreman-bootc (build-push-k8s.sh) and promoted
+# to Production through the 'bootc' content view. The tag is the k8s version.
+k8s_node_image_base: foreman.garaventaville.com/garaventaville/production/bootc/bootc
+k8s_node_image_cp: "{{ k8s_node_image_base }}/kubernetes-controlplane"
+k8s_node_image_worker: "{{ k8s_node_image_base }}/kubernetes-worker"
+
+# This cluster's nodes (the Foreman host groups hold every cluster's nodes).
+k8s_cluster_cps: >-
+  {{ groups['foreman_almalinux10_kubernetescontrolplanenode'] | default([])
+     | map('extract', hostvars) | selectattr('foreman_params', 'defined')
+     | selectattr('foreman_params.cluster_env', 'defined')
+     | selectattr('foreman_params.cluster_env', 'equalto', cluster_env)
+     | map(attribute='inventory_hostname') | sort | list }}
+k8s_cluster_workers: >-
+  {{ groups['foreman_almalinux10_kubernetesworkernode'] | default([])
+     | map('extract', hostvars) | selectattr('foreman_params', 'defined')
+     | selectattr('foreman_params.cluster_env', 'defined')
+     | selectattr('foreman_params.cluster_env', 'equalto', cluster_env)
+     | map(attribute='inventory_hostname') | sort | list }}
+# kubectl for cluster-wide checks and for workers runs here (upgrade.yml); it is
+# upgraded first, so by the time workers roll it is on the target version.
+k8s_primary_cp: "{{ k8s_cluster_cps | first }}"

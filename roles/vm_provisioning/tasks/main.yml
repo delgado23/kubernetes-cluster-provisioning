@@ -100,6 +100,17 @@
   ansible.builtin.set_fact:
     vms: "{{ (_generated_cps | default([])) + (_generated_workers | default([])) }}"
 
+# Round-robin by the number in the VM name (see proxmox_placement_nodes).
+- name: Assign each VM a Proxmox node
+  ansible.builtin.set_fact:
+    _vm_node_map: >-
+      {{ _vm_node_map | default({}) | combine({
+           item.name: proxmox_placement_nodes[((item.name.split('-') | last | int) - 1) % (proxmox_placement_nodes | length)]
+         }) }}
+  loop: "{{ vms }}"
+  loop_control:
+    label: "{{ item.name }}"
+
 - name: Validate VM definitions
   ansible.builtin.assert:
     that:
@@ -222,6 +233,10 @@
           {{ foreman_compute_profile_controlplane
              if 'Controlplane' in item.0.hostgroup
              else foreman_compute_profile_worker }}
+        # Overrides the compute profile's node_id; Foreman merges the rest of
+        # the profile's VM attributes underneath. See proxmox_placement_nodes.
+        compute_attributes:
+          node_id: "{{ _vm_node_map[item.0.name] }}"
         build: true
         managed: true
   loop: "{{ vms | zip(existing_hosts.results) | list }}"
@@ -270,6 +285,7 @@
       CREATED — {{ item.item.0.name }}
       (Group: {{ item.item.0.hostgroup }})
       (Compute profile: {{ 'Controlplane (id=8)' if 'Controlplane' in item.item.0.hostgroup else 'Worker (id=6)' }})
+      (Proxmox node: {{ _vm_node_map[item.item.0.name] }})
       Foreman ID: {{ item.json.id | default('unknown') }}
   loop: "{{ created_hosts.results }}"
   loop_control:

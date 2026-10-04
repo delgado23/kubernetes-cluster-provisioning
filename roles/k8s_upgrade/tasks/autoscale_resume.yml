@@ -1,0 +1,15 @@
+---
+# Only reached when every play above succeeded. After a failure the
+# schedules stay paused on purpose: re-enable them by hand once the
+# cluster is whole again (the pause play's output lists their IDs).
+- name: Re-enable the schedules this run paused
+  ansible.builtin.uri:
+    url: "{{ awx_url }}/api/v2/schedules/{{ item }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ awx_token }}"
+    body_format: json
+    body:
+      enabled: true
+  loop: "{{ k8s_paused_schedules | default([]) }}"
+  when: k8s_upgrade_manage_autoscale | bool

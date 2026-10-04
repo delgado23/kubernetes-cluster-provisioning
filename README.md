@@ -49,6 +49,9 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ├── autoscale.yml                  # Vertical autoscaler — scales CPU/RAM up and down via Proxmox based on utilisation
 ├── autoscale-horizontal.yml       # Horizontal autoscaler — adds or removes worker nodes via AWX based on average utilisation
 ├── maintenance.yml       # Rolling OS maintenance (drain/update/reboot/uncordon)
+├── upgrade.yml           # Rolling Kubernetes minor upgrade (image-mode, kubeadm + bootc switch)
+├── upgrade-rollback.yml  # Roll named nodes back to their previous bootc image
+├── upgrade-dr-restore.yml # After `kubeadm upgrade apply`: restore the pre-upgrade etcd snapshot
 ├── wipe.yml              # Remove all nodes from Foreman, FreeIPA, and Zabbix
 ├── mirror-github-repos.yml # Pull-mirror upstream GitHub deps into local Gitea
 ├── handlers/
@@ -61,6 +64,8 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 │   ├── freeipa.yml       # FreeIPA ipaclient vars (sensitive values sourced from vault)
 │   ├── vault.yml         # Ansible Vault: API tokens and passwords
 │   ├── vms.yml           # VM definitions (names, hostgroups, Foreman parameters)
+│   ├── kubernetes.yml    # Image sources (Katello core-image mirror, node images) + cluster node lists
+│   ├── upgrade.yml       # Play settings for upgrade.yml / upgrade-rollback.yml
 │   ├── vm_defaults.yml   # Default VM hardware specs
 │   └── gitea.yml         # Local Gitea mirror bases (version/raw/package fetch)
 └── roles/
@@ -74,7 +79,8 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
     ├── cluster_bootstrap/     # kubeadm init/join, Flannel, kubelet-serving-cert-approver, tooling
     ├── worker_join/           # Join worker nodes to the cluster
     ├── cluster_addons/        # MetalLB, Traefik, Longhorn, reflector, cert-manager, Prometheus, Headlamp, ArgoCD, Descheduler
-    ├── node_maintenance/      # Drain, update, reboot, uncordon
+    ├── node_maintenance/      # Drain, update, reboot, uncordon (drain/wait_ready/uncordon reused by k8s_upgrade)
+    ├── k8s_upgrade/           # Preflight, per-node upgrade, etcd snapshot, gates, postflight
     └── cluster_cleanup/       # Remove hosts from Foreman and FreeIPA
 ```
 
@@ -102,6 +108,8 @@ Each node detects its own mode early in the prep phase by checking for `/run/ost
 - **Config and unit management still run.** Tasks that only write under `/etc` or toggle systemd units work unchanged — those paths stay writable on an ostree system.
 - **Tooling installs to `/usr/local/bin`.** Helm and k9s are installed from upstream release tarballs into `/usr/local/bin` (a writable symlink to `/var/usrlocal` in the bootc image) rather than via dnf, so they work identically on both modes.
 - **OS updates use `bootc upgrade`, not dnf.** See [Node Maintenance](#node-maintenance-rolling-os-updates) below.
+- **The image is the Kubernetes version pin.** foreman-bootc tags the node images with the Kubernetes version (`kubernetes-controlplane:1.35.5`), and `kubeadm-config.yml.j2` renders `kubernetesVersion` from the node's own `kubeadm version`, so a new cluster runs exactly the image's version. (Unpinned, `kubeadm init` asked dl.k8s.io for the newest patch: a 1.35.5 image ran a v1.35.9 control plane.) Moving to a new minor is [Kubernetes Upgrade](#kubernetes-upgrade-rolling), not maintenance.
+- **Core images come from Foreman.** `imageRepository` and containerd's sandbox (pause) image point at the Katello mirror of registry.k8s.io (`vars/kubernetes.yml`), maintained by foreman-content-views.
 
 Package-mode nodes are unaffected — `image_mode` is `false` and every dnf/package task runs as before. A cluster can even mix the two modes; detection is per-node.
 
@@ -117,7 +125,7 @@ Run once to set up; re-runnable any time and self-refreshing (each mirror
 re-pulls from upstream on a 24h interval):
 
 ```bash
-ansible-playbook mirror-github-repos.yml   # needs vault_gitea_token
+GITEA_MIRROR_TOKEN=... ansible-playbook mirror-github-repos.yml   # or vault_gitea_token
 ```
 
 How each dependency is served (see `roles/gitea_mirrors`, `vars/gitea.yml`):
@@ -139,7 +147,6 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_proxmox_api_token` | Proxmox API token secret |
 | `vault_proxmox_host` | Proxmox host and port (e.g. `pve-01.example.com:8006`) |
 | `vault_proxmox_user` | Proxmox user for API auth (e.g. `user@Authentik`) |
-| `vault_proxmox_node` | Proxmox node name (e.g. `pve-01`) |
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
 | `vault_cloudflare_email` | Cloudflare account email |
 | `vault_domain` | Base domain (e.g. `example.com`) — drives `k8s_api_endpoint`, `ingress_domain`, `foreman_domain`, `wildcard_secret_name`, and FreeIPA realm |
@@ -162,7 +169,7 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 | `vault_keepalived_password` | Keepalived VRRP authentication password |
 | `vault_awx_url` | AWX/Ascender base URL (e.g. `https://ascender.example.com`) |
 | `vault_awx_token` | AWX API token — used to enable/disable autoscale schedules after build/wipe |
-| `vault_gitea_token` | Gitea token with org+repo create rights — used **only** by `mirror-github-repos.yml` to create/refresh the upstream mirrors (the cluster build reads the mirrors anonymously) |
+| `vault_gitea_token` | (optional) Gitea token used **only** by `mirror-github-repos.yml` to create and refresh the upstream mirrors (the cluster build reads the mirrors anonymously). Usually unset: the token normally comes from `GITEA_MIRROR_TOKEN`, injected by the Ascender "Gitea mirror bot" credential for Gitea user `svc-gitea-mirror`. That user is in the `github-mirror` org's `mirror-automation` team (write on code/releases/packages, can create org repos, not owner), and its token has scopes `write:repository`, `write:package` and `read:organization`. The token is also stored in OpenBao at `secret/automation/gitea-mirror-bot`. |
 | `vault_gitea_url` | (optional) Gitea base URL; defaults to `https://git.garaventaville.com` |
 | `vault_github_token` | (optional) GitHub PAT handed to Gitea so its own upstream sync is not rate-limited; empty is fine for public repos |
 | `vault_zabbix_url` | (optional) Zabbix base URL; defaults to `https://zabbix.garaventaville.com` |
@@ -184,8 +191,8 @@ head -c 32 /dev/urandom | base64
 | `cluster_env` | String | `prod` | `prod` or `test`. Controls node naming prefixes, API endpoint hostname, ingress domain, FreeIPA wildcard DNS record, and ACME endpoint. `prod` → `k8s-cp` / `k8s-worker`, `k8s-api.<domain>`, `k8s.<domain>`, Let's Encrypt production. `test` → `k8s-test-cp` / `k8s-test-worker`, `k8s-test-api.<domain>`, `k8s-test.<domain>`, Let's Encrypt staging. Both clusters can run side-by-side — they use separate DNS records and name prefixes. |
 | `letsencrypt_staging` | Boolean | derived | Auto-derived from `cluster_env` (`true` when `test`, `false` when `prod`). When `true`, uses the Let's Encrypt **staging** ACME endpoint — certs are not browser-trusted but have no rate limits. Only set this directly if you need to decouple it from `cluster_env`. |
 | `k8s_api_endpoint` | String | derived | Auto-derived from `cluster_env` — `k8s-api.<vault_domain>` for prod, `k8s-test-api.<vault_domain>` for test. An A record pointing to `k8s_api_endpoint_ip` is created in FreeIPA during provision and removed on wipe. |
-| `k8s_api_endpoint_ip` | String | `172.16.0.29` | IP address of the keepalived VIP. Also used as `keepalived_vip` — only set this here, do not update them separately. |
-| `metallb_pool` | String | `172.16.0.50-172.16.0.60` | MetalLB L2 address pool range for LoadBalancer services. Traefik automatically claims the first free IP from this pool. |
+| `k8s_api_endpoint_ip` | String | derived | Keepalived VIP, derived from `cluster_env`: prod `172.16.0.30`, test `172.16.0.29`. Also used as `keepalived_vip`. Don't override it unless you have checked that the new IP is free. A brand-new cluster refuses to provision on a VIP that already answers on :6443. |
+| `metallb_pool` | String | derived | MetalLB L2 pool, derived from `cluster_env`: prod `172.16.0.61-172.16.0.71`, test `172.16.0.50-172.16.0.60`. Traefik claims the first free IP from it. Must never overlap the other cluster's pool. |
 | `k8s_pod_cidr` | String | `10.244.0.0/16` | Pod network CIDR passed to kubeadm and used in firewall rules. Must not overlap with your node or service networks. Change only if the default conflicts with your infrastructure. |
 | `k8s_service_cidr` | String | `10.96.0.0/12` | Kubernetes service network CIDR passed to kubeadm and used in firewall rules and NetworkPolicies. Must not overlap with your node or pod networks. Change only if the default conflicts with your infrastructure. |
 
@@ -193,7 +200,7 @@ head -c 32 /dev/urandom | base64
 
 Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. The prefix is derived from `cluster_env`: `prod` produces `k8s-cp` / `k8s-worker`; `test` produces `k8s-test-cp` / `k8s-test-worker`. Foreman hostgroup strings are configured in `vars/vms.yml`.
 
-Prod and test clusters can run side-by-side. Each has its own FreeIPA DNS wildcard (`*.k8s` vs `*.k8s-test`), so wiping one does not affect the other's ingress. You must set non-overlapping values for `k8s_api_endpoint_ip` and `metallb_pool` in each cluster's AWX survey — those IP ranges cannot be shared.
+Prod and test clusters can run side-by-side. Each has its own FreeIPA DNS wildcard (`*.k8s` vs `*.k8s-test`), so wiping one doesn't affect the other's ingress. Their API VIP, MetalLB pool and keepalived `virtual_router_id` (prod 51, test 52) all share one L2 network, so `vars/vms.yml` derives all three from `cluster_env`. They are **not** survey questions; overriding them with extra vars is only for a deliberate, checked change. (On 2026-10-04 a survey default put a test build on prod's live VIP, and the shared VRRP id let it contend for that VIP.)
 
 ## Usage
 
@@ -343,6 +350,102 @@ ansible-playbook maintenance.yml --limit foreman_almalinux10_kubernetesworkernod
 ansible-playbook maintenance.yml -e "drain_timeout=600"
 ```
 
+### Kubernetes Upgrade (Rolling)
+
+`upgrade.yml` moves one image-mode cluster **one minor up** (kubeadm can't skip
+minors, so 1.35 -> 1.37 is two runs), or to a later patch of its minor, a node
+at a time, with no rebuild and no data movement.
+
+```bash
+# cluster_env has no default here -- the playbook never assumes prod
+ansible-playbook upgrade.yml -e cluster_env=test -e k8s_target_version=1.36.5 --ask-vault-pass
+```
+
+**Before a run:**
+
+1. foreman-content-views (JT 33) carries the target minor: the `AlmaLinux 10 - Kubernetes 1.NN` RPM repo and the `Kubernetes Images` core-image mirror.
+2. foreman-bootc has built and promoted `kubernetes-{controlplane,worker}:<target>`. Its Containerfiles pin the kube* NVRs.
+3. Disable this cluster's autoscale schedules and the maintenance job (JT 49), and silence node alerts.
+4. Don't run the bootc image build (Ascender JT 62 / "OS Update Workflow") during the upgrade. It re-pushes the tag, and the run refuses any image whose digest differs from the one preflight resolved.
+5. Check that the deployed add-ons support the target minor.
+
+**What it does** (`roles/k8s_upgrade`):
+
+| Phase | |
+|---|---|
+| Preflight (read-only) | Checks the inputs:<br>- the target is one minor up (or a later patch)<br>- every node is Ready, schedulable and no newer than the target<br>- no Pending pods; every Deployment/StatefulSet/DaemonSet is fully available (this covers the Kyverno and cert-manager webhooks)<br>- all etcd members are healthy; certs aren't expiring within 7 days; `/sysroot` has room<br>- a server-side drain dry run passes on every node (Longhorn `instance-manager` PDBs are expected to block it until a node is really cordoned)<br>- the node-image digests resolve<br>- the target kube-apiserver is in the mirror<br><br>It also pulls the *current* version's core images through Katello, which caches them for a rollback. |
+| Control planes, one at a time | 1. `bootc switch` stages the target image, with its digest checked.<br>2. Pre-pull the target core images.<br>3. **First CP only:** take an etcd snapshot (verified, sha256'd, copied to every CP).<br>4. Drain.<br>5. **First CP only:** a one-time switch of `imageRepository` to the Katello mirror.<br>6. Run `kubeadm upgrade apply` (first CP) or `upgrade node` (the others), **using kubeadm from the staged deployment**, with `--patches /etc/kubernetes/kubeadm-patches`.<br>7. Render the containerd config, then reboot into the new image (new kubelet).<br>8. Wait for Ready, the static pods and etcd health, then uncordon. |
+| Gate | Runs after the first CP:<br>- `/readyz` through the VIP<br>- all nodes Ready, all workloads available, Argo CD apps Healthy<br>- `k8s_upgrade_smoke_urls` answering |
+| Workers, one at a time | Wait until every Longhorn volume is healthy, then stage, pre-pull, drain, `kubeadm upgrade node`, reboot, Ready, uncordon. The same gate runs after the first worker. |
+| Settle (after **every** node) | Pause `k8s_upgrade_settle_seconds` (60s) so evicted pods can reschedule. Then wait, up to `k8s_upgrade_settle_retries` × 15s (10 min), for no Pending pods, every workload fully available and every Longhorn volume healthy. Only then is the next node drained. A node that never settles stops the roll. |
+| Postflight | Longhorn volumes are healthy again (the last node's replicas have rebuilt), every node is on the target digest, the kubeadm config is at the target with the mirror `imageRepository`, every control-plane/kube-proxy/CoreDNS image comes from the mirror, etcd is healthy, and the final gate passes. |
+
+kubeadm upgrades the node's control plane and kubelet config **before** the node
+boots the new kubelet, so the kubelet is never newer than the API server.
+
+- **Failure handling:** any failure before a node's reboot discards the staged
+  image (`rpm-ostree cleanup --pending`), so the node keeps booting its current
+  image. The node is left cordoned and the run stops; later nodes are untouched.
+- **Re-runs are safe:**
+  - nodes already on the target digest are only uncordoned
+  - `upgrade apply` runs only while the cluster's kubeadm config is still on the old version
+- **Backups:** every node keeps backups in `/var/lib/k8s-upgrade-backups`
+  (root-only). `/var` survives both the switch and a rollback, and nightly
+  vzdump → PBS takes the backups off-cluster. They are:
+  - `node-state-<ts>-v<old>.tgz`: `/etc/kubernetes`, the kubelet config and the containerd config
+  - on every control plane, the etcd snapshot
+
+  They include the cluster CA and the Secret encryption config.
+
+After the run, point the host groups at the new tag (foreman-bootc
+`setup_kubernetes_image_mode.rb` with `K8S_TAG=<target>`), so scale-out builds
+new nodes on it, and re-enable the schedules.
+
+#### Rolling back
+
+Which rollback applies depends on how far the run got:
+
+| Point | Rollback |
+|---|---|
+| A worker, any time during a hop | `upgrade-rollback.yml` with `k8s_rollback_nodes=<fqdn>`. It drains the node, restores the kubelet config from its node-state backup, runs `bootc rollback` (or `bootc switch` to `-e k8s_rollback_image=<repo>:<tag>` if JT 49 has since replaced the rollback slot), reboots and uncordons. It refuses to go more than one minor back, or to break the kubelet/API-server version skew. |
+| A control plane, before the first `kubeadm upgrade apply` | The same playbook. Nothing has changed in the cluster yet. |
+| A control plane, after the first `kubeadm upgrade apply` | This is the **point of no return**. Rolling back the image only brings back the old kubelet: the new control-plane static pods and the cluster state stay, and the 1.37 hop also moves etcd 3.6 → 3.7. The only way back is restoring the pre-apply etcd snapshot on **all** members. |
+
+For that last case, run **`upgrade-dr-restore.yml`**. It is destructive: every
+cluster write after the snapshot is lost, and the API is down while it runs.
+
+```bash
+ansible-playbook upgrade-dr-restore.yml -e cluster_env=test -e k8s_dr_confirm=restore-test
+#   -e k8s_dr_snapshot=<file>   (default: the newest etcd-<env>-*.db on the primary CP)
+#   -e k8s_dr_image=<repo>:<old tag>  (if a CP's rollback slot no longer holds the old version)
+```
+
+It encodes the procedure rehearsed on the test cluster on 2026-10-04 (1.36.5 → 1.35.9):
+
+1. Pause autoscaling. During the rehearsal the horizontal autoscaler added a worker mid-restore.
+2. Check that every CP holds the same snapshot (sha256), its pre-upgrade node-state backup, and a bootc deployment of the old version.
+3. Stop the control plane on **all** CPs by moving their manifests aside.
+4. On every member, restore the snapshot with that member's own identity:
+   - `etcdutl` from the **old** etcd image in the mirror
+   - a new cluster token
+   - `--bump-revision --mark-compacted`, so controllers and kubelets re-list
+   - the data dir owned like the original (`etcd:etcd 0700` on these images)
+5. Stage the old manifests from the **node-state backup** in `/var` (images repointed at the mirror), restore the old kubelet config, and point its `staticPodPath` at the staged manifests. kubeadm's own `/etc/kubernetes/tmp/kubeadm-backup-*` can't be used: kubeadm deletes it after a successful upgrade.
+6. `bootc rollback` and reboot all CPs.
+7. Once etcd has quorum, one CP at a time: copy the old manifests into the booted deployment's `/etc` and point `staticPodPath` back.
+8. Roll back every worker now ahead of the control plane (`upgrade-rollback.yml` with `k8s_rollback_nodes=auto`), check that everything is on the old version, let the cluster settle, and resume autoscaling.
+
+**Why the `staticPodPath` detour:** on bootc, `/etc` belongs to each deployment,
+but `/var` is shared. `kubeadm upgrade` writes the *new* manifests while the node
+still runs the old deployment, so `bootc rollback` boots an `/etc` that still
+holds the new control plane. It would start that on the restored data, and for
+1.37 that means etcd 3.7 on 3.6 data, which can't be undone. The kubelet reads
+its config from `/var`, so pointing it at manifests staged in `/var` means it
+only ever starts the old control plane, whatever the booted `/etc` holds.
+
+Everything written to the cluster after the snapshot is lost (Argo CD
+re-syncs what's in Git).
+
 ### Wipe Cluster
 
 Queries Foreman for all hosts matching the CP and worker name prefixes for the selected `cluster_env` and removes them from Foreman and FreeIPA, along with the keepalived VIP and wildcard DNS records for that environment. Finds everything regardless of how many scale-out runs were done. Does not touch the Proxmox VMs themselves.
@@ -356,6 +459,12 @@ ansible-playbook wipe.yml --ask-vault-pass -e "cluster_env=test"
 ```
 
 ## VM Definitions
+
+### Proxmox Node Placement
+
+Each VM is created on a node from `proxmox_placement_nodes` in `vars/foreman.yml`, round-robin by the number in its name: `k8s-cp-01` goes on the first node, `k8s-cp-02` on the second, `k8s-worker-04` wraps back to the first. The compute profiles pin a single `node_id`, so the node is sent per host at create time to override it. Without this, every VM landed on one host, and losing that host took etcd quorum with it. List only nodes that hold LINSTOR replicas of the VM disks.
+
+`proxmox_postconfig` and `autoscale.yml` look up each VM's current node through `/cluster/resources`, so VMs can also be live-migrated after the build without breaking either one.
 
 Edit `vars/vms.yml` to configure nodes. There are no hardcoded hostnames — both control plane and worker names are generated at runtime from a prefix and a counter. The prefix is derived from the `cluster_env` survey var:
 
@@ -375,9 +484,9 @@ worker_hostgroup:       "AlmaLinux 10/Kubernetes Worker Node"
 
 controlplane_configs:
   # Index 0 — primary, always provisioned
-  # k8s_api_endpoint, k8s_api_endpoint_ip, metallb_pool, k8s_pod_cidr, and
-  # k8s_service_cidr are AWX survey vars injected at runtime — set them in
-  # your job template survey rather than hardcoding them here.
+  # k8s_api_endpoint, k8s_api_endpoint_ip and metallb_pool are derived from
+  # cluster_env in vars/vms.yml (never survey questions); k8s_pod_cidr and
+  # k8s_service_cidr are AWX survey vars injected at runtime.
   - host_parameters:
       - { name: k8s_role,            value: primary }
       - { name: keepalived_state,    value: MASTER }
@@ -445,7 +554,8 @@ The Traefik and Longhorn IngressRoutes include a dedicated route for `/outpost.g
    - Scopes: `openid`, `profile`, `email`, `groups`, `offline_access` (`offline_access` is required for refresh tokens — without it Headlamp will loop back to the login page when the access token expires)
 2. Create an **Application** with slug matching `authentik_headlamp_client_id` (default: `headlamp`)
 3. Note the Client ID and Client Secret — add the secret to vault as `vault_authentik_headlamp_client_secret`
-4. In Authentik, ensure the user's email is marked as **verified** — kube-apiserver rejects OIDC tokens where `email_verified: false` when `--oidc-username-claim=email` is set
+4. Import [`authentik/blueprints/headlamp-oidc.yaml`](authentik/blueprints/headlamp-oidc.yaml) (Customization > Blueprints > Import). kube-apiserver takes the username from the `email` claim, so it rejects any token without `email_verified: true` ("oidc: email not verified"). authentik has no per-user "verified" flag, and its built-in `email` scope mapping always sends `false`. The blueprint adds a mapping that sends `true` for LDAP-sourced users and swaps it in on the Headlamp provider. It is only safe while users cannot change their own email in authentik.
+5. Attach the **Authentik k8s-build read-only** credential to the build job template. It injects `AUTHENTIK_READONLY_TOKEN` for authentik service account `svc-k8s-build-readonly`, which has object-level view on the Headlamp provider and the two email mappings only. The addons phase uses it to check the live config against the blueprint and fails with instructions if it has drifted. The build does not apply the blueprint itself: that needs rights to edit mappings, and mapping expressions run as Python inside authentik, so it would amount to an admin token.
 
 The kube-apiserver is configured via a structured `AuthenticationConfiguration` file (`apiserver-auth.yaml`) that enables OIDC for Headlamp (issuer URL, client ID, username/groups claims) and restricts anonymous access to health endpoints only (`/livez`, `/readyz`, `/healthz`). This replaces individual `--oidc-*` flags, which are mutually exclusive with `--authentication-config`. The configuration is applied automatically during bootstrap and updated during the addons phase via the `patch_apiserver_oidc` task. The `headlamp_admin_group` default (`"authentik Admins"`) is bound to `cluster-admin` via a ClusterRoleBinding that covers both the Headlamp service account and OIDC group subjects.
 

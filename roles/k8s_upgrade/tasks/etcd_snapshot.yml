@@ -1,0 +1,112 @@
+---
+# Snapshot etcd once, right before the first control plane's
+# `kubeadm upgrade apply`. That apply (and, for 1.37, the etcd 3.6 -> 3.7 bump)
+# cannot be undone without restoring this snapshot on all members (README).
+# The snapshot is verified, checksummed and copied to every control plane's
+# backup dir, so losing one node doesn't lose it; nightly vzdump -> PBS takes it
+# off-cluster. It holds the cluster's data (Secrets are encrypted at rest with
+# /etc/kubernetes/enc, which is in the node-state backup): root-only 0600.
+- name: Name the etcd snapshot
+  ansible.builtin.set_fact:
+    k8s_etcd_snapshot: >-
+      etcd-{{ cluster_env }}-{{ _k8s_cc_doc.kubernetesVersion }}-to-v{{ k8s_target_version }}-{{ _k8s_ts }}.db
+
+# etcd's data dir is a hostPath, so a snapshot written there by etcdctl inside
+# the pod lands on this node's disk.
+- name: Save the etcd snapshot
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system
+    exec etcd-{{ inventory_hostname }} --
+    etcdctl --endpoints=https://127.0.0.1:2379
+    --cacert=/etc/kubernetes/pki/etcd/ca.crt
+    --cert=/etc/kubernetes/pki/etcd/healthcheck-client.crt
+    --key=/etc/kubernetes/pki/etcd/healthcheck-client.key
+    snapshot save /var/lib/etcd/{{ k8s_etcd_snapshot }}
+  changed_when: true
+
+- name: Verify the etcd snapshot
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system
+    exec etcd-{{ inventory_hostname }} --
+    etcdutl snapshot status /var/lib/etcd/{{ k8s_etcd_snapshot }} -w json
+  register: _k8s_snap_status
+  changed_when: false
+  failed_when: (_k8s_snap_status.stdout | from_json).totalKey | int == 0
+
+- name: Move the snapshot into the backup dir
+  ansible.builtin.command: >
+    mv /var/lib/etcd/{{ k8s_etcd_snapshot }} {{ k8s_upgrade_backup_dir }}/{{ k8s_etcd_snapshot }}
+  changed_when: true
+
+- name: Lock down the snapshot
+  ansible.builtin.file:
+    path: "{{ k8s_upgrade_backup_dir }}/{{ k8s_etcd_snapshot }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Checksum the snapshot
+  ansible.builtin.stat:
+    path: "{{ k8s_upgrade_backup_dir }}/{{ k8s_etcd_snapshot }}"
+    checksum_algorithm: sha256
+  register: _k8s_snap_stat
+
+- name: Stage a copy on the controller
+  ansible.builtin.tempfile:
+    state: directory
+  register: _k8s_snap_tmp
+  delegate_to: localhost
+  become: false
+
+- name: Copy the snapshot to every control plane
+  block:
+    - name: Fetch the snapshot
+      ansible.builtin.fetch:
+        src: "{{ k8s_upgrade_backup_dir }}/{{ k8s_etcd_snapshot }}"
+        dest: "{{ _k8s_snap_tmp.path }}/{{ k8s_etcd_snapshot }}"
+        flat: true
+        validate_checksum: true
+
+    - name: Ensure the backup dir on the other control planes
+      ansible.builtin.file:
+        path: "{{ k8s_upgrade_backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      delegate_to: "{{ item }}"
+      loop: "{{ k8s_cluster_cps | difference([inventory_hostname]) }}"
+
+    - name: Copy the snapshot to the other control planes
+      ansible.builtin.copy:
+        src: "{{ _k8s_snap_tmp.path }}/{{ k8s_etcd_snapshot }}"
+        dest: "{{ k8s_upgrade_backup_dir }}/{{ k8s_etcd_snapshot }}"
+        owner: root
+        group: root
+        mode: "0600"
+      delegate_to: "{{ item }}"
+      loop: "{{ k8s_cluster_cps | difference([inventory_hostname]) }}"
+
+    - name: Verify the copies
+      ansible.builtin.stat:
+        path: "{{ k8s_upgrade_backup_dir }}/{{ k8s_etcd_snapshot }}"
+        checksum_algorithm: sha256
+      register: _k8s_snap_copies
+      delegate_to: "{{ item }}"
+      loop: "{{ k8s_cluster_cps | difference([inventory_hostname]) }}"
+      # Inside a loop the registered name is the current item's result.
+      failed_when: _k8s_snap_copies.stat.checksum | default('') != _k8s_snap_stat.stat.checksum
+  always:
+    - name: Remove the controller's copy
+      ansible.builtin.file:
+        path: "{{ _k8s_snap_tmp.path }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+
+- name: etcd snapshot summary
+  ansible.builtin.debug:
+    msg:
+      - "Snapshot : {{ k8s_upgrade_backup_dir }}/{{ k8s_etcd_snapshot }} (on every control plane)"
+      - "sha256   : {{ _k8s_snap_stat.stat.checksum }}"
+      - "Keys     : {{ (_k8s_snap_status.stdout | from_json).totalKey }}, revision {{ (_k8s_snap_status.stdout | from_json).revision }}"

@@ -1,0 +1,426 @@
+---
+# =============================================================================
+# upgrade-dr-restore.yml — undo a minor upgrade AFTER `kubeadm upgrade apply`
+# =============================================================================
+# Puts the control plane back on the version it ran before the upgrade, from
+# the etcd snapshot upgrade.yml took right before the first control plane's
+# `kubeadm upgrade apply`, then rolls back every worker that is now ahead of it.
+#
+#   ⚠ DESTRUCTIVE: everything written to the cluster after that snapshot is
+#   lost (Argo CD re-syncs what's in Git). The API is down from the first step
+#   until the restored control plane is up.
+#
+# What it does (rehearsed on the test cluster, 2026-10-04):
+#   1. pause autoscaling (an autoscaler grew a node mid-restore in rehearsal)
+#   2. preflight: the same snapshot (sha256) on every control plane, each
+#      node's pre-upgrade node-state backup, and a bootc deployment of the old
+#      version to return to
+#   3. stop the control plane on ALL control planes (manifests moved aside)
+#   4. restore the snapshot on every member with its own identity
+#      (etcdutl from the OLD etcd image, new cluster token, revision bump +
+#      mark-compacted so watchers re-list), data dir owned like the original
+#   5. old manifests (from the node-state backup, images repointed at the
+#      Katello mirror) into /var, and the old kubelet config with
+#      staticPodPath pointing at them. /etc is PER bootc deployment: the
+#      deployment being returned to still carries the NEW manifests that
+#      `kubeadm upgrade` wrote before its reboot, and it would start them on
+#      the restored data (for 1.37 that is etcd 3.7 on 3.6 data -- one way).
+#      /var is shared, so the kubelet only ever sees the old manifests.
+#   6. `bootc rollback` (or switch to k8s_dr_image) and reboot all of them
+#   7. once etcd has quorum: one at a time, copy the old manifests into the
+#      booted deployment's /etc and point staticPodPath back there
+#   8. roll back every worker newer than the control plane (upgrade-rollback.yml
+#      with k8s_rollback_nodes=auto), postflight, settle, resume autoscaling
+#
+# Usage:
+#   ansible-playbook upgrade-dr-restore.yml -e cluster_env=test -e k8s_dr_confirm=restore-test
+#   # a specific snapshot (default: the newest etcd-<env>-*.db on the primary CP):
+#   ... -e k8s_dr_snapshot=etcd-test-v1.36.5-to-v1.37.1-20261004T170000Z.db
+#   # if a control plane's bootc rollback slot no longer holds the old version:
+#   ... -e k8s_dr_image=<registry>/kubernetes-controlplane:1.36.5
+# =============================================================================
+
+- name: DR restore — confirm and pause autoscaling
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Require an explicit confirmation for this cluster
+      ansible.builtin.assert:
+        that:
+          - cluster_env is defined and cluster_env in ['test', 'prod']
+          - k8s_dr_confirm | default('') == 'restore-' ~ cluster_env
+        fail_msg: >-
+          This discards every cluster write since the pre-upgrade etcd snapshot.
+          Pass -e cluster_env=<env> -e k8s_dr_confirm=restore-<env> to proceed.
+
+    - name: Pause this cluster's autoscale schedules
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: autoscale_pause.yml
+
+- name: DR restore — control planes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  vars_files:
+    - vars/kubernetes.yml
+    - vars/upgrade.yml
+  vars:
+    k8s_upgrade_backup_dir: /var/lib/k8s-upgrade-backups
+    k8s_dr_manifests: /var/lib/k8s-upgrade-backups/dr-manifests
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+  tasks:
+    # --- Preflight (read-only) ------------------------------------------------
+    - name: Find the etcd snapshots
+      ansible.builtin.find:
+        paths: "{{ k8s_upgrade_backup_dir }}"
+        patterns: "etcd-{{ cluster_env }}-v*-to-v*.db"
+      register: _dr_snaps
+
+    - name: Choose the snapshot
+      ansible.builtin.set_fact:
+        _dr_snapshot: >-
+          {{ k8s_dr_snapshot | default((hostvars[k8s_primary_cp]._dr_snaps.files
+             | sort(attribute='mtime') | last).path | basename) }}
+
+    # etcd-<env>-v<from>-to-v<to>-<ts>.db
+    - name: Read the versions from the snapshot name
+      ansible.builtin.set_fact:
+        _dr_from: "{{ _dr_snapshot.split('-')[2][1:] }}"
+        _dr_to: "{{ _dr_snapshot.split('-')[4][1:] }}"
+        _dr_ts: "{{ now(utc=true, fmt='%Y%m%dT%H%M%SZ') }}"
+
+    - name: Checksum this node's copy of the snapshot
+      ansible.builtin.stat:
+        path: "{{ k8s_upgrade_backup_dir }}/{{ _dr_snapshot }}"
+        checksum_algorithm: sha256
+      register: _dr_snap_stat
+
+    - name: Require the same snapshot on every control plane
+      ansible.builtin.assert:
+        that:
+          - _dr_snap_stat.stat.exists
+          - _dr_snap_stat.stat.checksum == hostvars[k8s_primary_cp]._dr_snap_stat.stat.checksum
+        fail_msg: "{{ inventory_hostname }} lacks {{ _dr_snapshot }} or holds a different copy."
+
+    - name: Find this node's pre-upgrade node-state backup
+      ansible.builtin.find:
+        paths: "{{ k8s_upgrade_backup_dir }}"
+        patterns: "node-state-*-v{{ _dr_from.split('.')[0] }}.{{ _dr_from.split('.')[1] }}.*.tgz"
+      register: _dr_states
+
+    - name: Pick the newest one
+      ansible.builtin.set_fact:
+        _dr_state: "{{ (_dr_states.files | sort(attribute='mtime') | last).path }}"
+      failed_when: _dr_states.files | length == 0
+
+    - name: Read the old etcd manifest
+      ansible.builtin.command: "tar -xzOf {{ _dr_state }} etc/kubernetes/manifests/etcd.yaml"
+      register: _dr_old_etcd
+      changed_when: false
+
+    - name: Read this member's identity and the old etcd image
+      vars:
+        _cmd: "{{ (_dr_old_etcd.stdout | from_yaml).spec.containers[0].command }}"
+      ansible.builtin.set_fact:
+        _dr_peer_url: "{{ _cmd | select('match', '--initial-advertise-peer-urls=') | first | split('=') | last }}"
+        _dr_name: "{{ _cmd | select('match', '--name=') | first | split('=') | last }}"
+        _dr_etcd_image: >-
+          {{ k8s_image_repository }}/{{ (_dr_old_etcd.stdout | from_yaml).spec.containers[0].image | split('/') | last }}
+
+    - name: Read this node's bootc deployments
+      ansible.builtin.command: bootc status --json
+      register: _dr_bootc
+      changed_when: false
+
+    # Re-runs after the reboot find the old version already booted.
+    - name: Work out the deployment to return to
+      vars:
+        _status: "{{ (_dr_bootc.stdout | from_json).status }}"
+      ansible.builtin.set_fact:
+        _dr_booted_version: "{{ _status.booted.image.image.image.split(':')[-1].split('-')[0] }}"
+        _dr_rollback_version: >-
+          {{ (_status.rollback.image.image.image.split(':')[-1].split('-')[0]) if _status.rollback else '' }}
+
+    - name: Require a deployment of the old minor to return to
+      vars:
+        _minor: "{{ _dr_from.split('.')[0] }}.{{ _dr_from.split('.')[1] }}"
+      ansible.builtin.assert:
+        that: >-
+          k8s_dr_image is defined
+          or _dr_booted_version is match(_minor | regex_escape ~ '\.')
+          or _dr_rollback_version is match(_minor | regex_escape ~ '\.')
+        fail_msg: >-
+          {{ inventory_hostname }} boots v{{ _dr_booted_version }} and its rollback slot holds
+          v{{ _dr_rollback_version | default('-') }}; neither is {{ _minor }}. Pass
+          -e k8s_dr_image={{ k8s_node_image_cp }}:<old tag>.
+
+    - name: Build the restored cluster's member list
+      ansible.builtin.set_fact:
+        _dr_initial_cluster: >-
+          {%- set out = [] -%}
+          {%- for h in k8s_cluster_cps -%}
+            {%- set _ = out.append(hostvars[h]._dr_name ~ '=' ~ hostvars[h]._dr_peer_url) -%}
+          {%- endfor -%}
+          {{ out | join(',') }}
+
+    - name: DR plan
+      ansible.builtin.debug:
+        msg:
+          - "Cluster   : {{ cluster_env }}  v{{ _dr_to }} -> v{{ _dr_from }}"
+          - "Snapshot  : {{ _dr_snapshot }} (sha256 {{ _dr_snap_stat.stat.checksum[:16] }}…)"
+          - "Member    : {{ _dr_name }} {{ _dr_peer_url }} from {{ _dr_state | basename }}"
+          - "etcdutl   : {{ _dr_etcd_image }}"
+          - "Boot into : {{ k8s_dr_image | default('bootc rollback (v' ~ _dr_rollback_version ~ ')') if _dr_booted_version != _dr_from else 'already booted (v' ~ _dr_booted_version ~ ')' }}"
+
+    - name: Done-marker for this restore (re-runs skip finished steps)
+      ansible.builtin.stat:
+        path: "{{ k8s_upgrade_backup_dir }}/dr-{{ _dr_snapshot }}.restored"
+      register: _dr_marker
+
+    # --- Stop the control plane everywhere ------------------------------------
+    - name: Stop the control plane (move the static pod manifests aside)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -n "$(ls -A /etc/kubernetes/manifests 2>/dev/null)" ]; then
+          mv /etc/kubernetes/manifests /etc/kubernetes/manifests.pre-dr-{{ _dr_ts }}
+          mkdir -m 0700 /etc/kubernetes/manifests
+          echo moved
+        fi
+      args:
+        executable: /bin/bash
+      register: _dr_stop
+      changed_when: "'moved' in _dr_stop.stdout"
+      when: not _dr_marker.stat.exists and _dr_booted_version == _dr_to
+
+    - name: Wait for etcd and kube-apiserver to stop
+      ansible.builtin.shell: "crictl ps -q --name '^(etcd|kube-apiserver)$' 2>/dev/null | wc -l"
+      register: _dr_running
+      changed_when: false
+      until: _dr_running.stdout | trim == '0'
+      retries: 30
+      delay: 5
+      when: not _dr_marker.stat.exists and _dr_booted_version == _dr_to
+
+    # --- Restore the snapshot on every member ---------------------------------
+    - name: Read the current etcd data dir owner
+      ansible.builtin.stat:
+        path: /var/lib/etcd
+      register: _dr_etcd_dir
+
+    - name: Restore the snapshot into a fresh data dir
+      ansible.builtin.shell: |
+        set -euo pipefail
+        [ -d /var/lib/etcd ] && mv /var/lib/etcd /var/lib/etcd.pre-dr-{{ _dr_ts }}
+        podman run --rm --network none --security-opt label=disable -v /var/lib:/var/lib \
+          {{ _dr_etcd_image }} etcdutl snapshot restore {{ k8s_upgrade_backup_dir }}/{{ _dr_snapshot }} \
+          --name {{ _dr_name }} \
+          --initial-cluster {{ _dr_initial_cluster }} \
+          --initial-cluster-token {{ cluster_env }}-dr-{{ _dr_snapshot.split('-')[5].split('.')[0] }} \
+          --initial-advertise-peer-urls {{ _dr_peer_url }} \
+          --bump-revision 1000000000 --mark-compacted \
+          --data-dir /var/lib/etcd
+        chown -R {{ _dr_etcd_dir.stat.pw_name | default('root') }}:{{ _dr_etcd_dir.stat.gr_name | default('root') }} /var/lib/etcd
+        chmod 0700 /var/lib/etcd
+      args:
+        executable: /bin/bash
+      when: not _dr_marker.stat.exists and _dr_booted_version == _dr_to
+
+    # --- Old manifests + kubelet config, via /var -----------------------------
+    - name: Unpack the old manifests and kubelet config
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf {{ k8s_dr_manifests }} /tmp/k8s-dr && mkdir -p /tmp/k8s-dr {{ k8s_dr_manifests }}
+        tar -xzf {{ _dr_state }} -C /tmp/k8s-dr etc/kubernetes/manifests var/lib/kubelet/config.yaml var/lib/kubelet/kubeadm-flags.env
+        cp /tmp/k8s-dr/etc/kubernetes/manifests/*.yaml {{ k8s_dr_manifests }}/
+        sed -i 's#image: [^ ]*/\([a-z-]*:[^ ]*\)$#image: {{ k8s_image_repository }}/\1#' {{ k8s_dr_manifests }}/*.yaml
+        chmod 0700 {{ k8s_dr_manifests }}; chmod 0600 {{ k8s_dr_manifests }}/*.yaml
+        cp /tmp/k8s-dr/var/lib/kubelet/kubeadm-flags.env /var/lib/kubelet/kubeadm-flags.env
+        cp /tmp/k8s-dr/var/lib/kubelet/config.yaml /var/lib/kubelet/config.yaml
+        rm -rf /tmp/k8s-dr
+      args:
+        executable: /bin/bash
+      when: not _dr_marker.stat.exists and _dr_booted_version == _dr_to
+
+    - name: Point the kubelet at the old manifests in /var
+      ansible.builtin.lineinfile:
+        path: /var/lib/kubelet/config.yaml
+        regexp: '^staticPodPath:'
+        line: "staticPodPath: {{ k8s_dr_manifests }}"
+      when: not _dr_marker.stat.exists and _dr_booted_version == _dr_to
+
+    # --- Back to the old image ------------------------------------------------
+    - name: Queue the old deployment
+      ansible.builtin.command: "{{ ('bootc switch ' ~ k8s_dr_image) if k8s_dr_image is defined else 'bootc rollback' }}"
+      changed_when: true
+      when: not _dr_marker.stat.exists and _dr_booted_version == _dr_to
+
+    - name: Reboot into it (all control planes together; the API is down anyway)
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ reboot_timeout }}"
+        msg: "DR restore to v{{ _dr_from }}"
+        post_reboot_delay: 30
+      when: not _dr_marker.stat.exists and _dr_booted_version == _dr_to
+
+    - name: Wait for the local API server
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} --server=https://127.0.0.1:6443 get --raw /readyz
+      register: _dr_readyz
+      changed_when: false
+      until: _dr_readyz.rc == 0 and _dr_readyz.stdout == 'ok'
+      retries: 60
+      delay: 10
+
+    - name: Check etcd member health
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: etcd_health.yml
+      when: inventory_hostname == k8s_primary_cp
+
+- name: DR restore — static pods back under /etc, one control plane at a time
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  serial: 1
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  vars_files:
+    - vars/kubernetes.yml
+    - vars/upgrade.yml
+  vars:
+    k8s_upgrade_backup_dir: /var/lib/k8s-upgrade-backups
+    k8s_dr_manifests: /var/lib/k8s-upgrade-backups/dr-manifests
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+  tasks:
+    - name: Check the old manifests are still staged in /var
+      ansible.builtin.stat:
+        path: "{{ k8s_dr_manifests }}/etcd.yaml"
+      register: _dr_staged_manifests
+
+    # The booted deployment's /etc may still hold the NEWER manifests; the same
+    # files the kubelet already runs (identical content = same static pod, so
+    # nothing restarts) replace them.
+    - name: Put the old manifests into this deployment's /etc
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -f /etc/kubernetes/manifests/*.yaml
+        cp -p {{ k8s_dr_manifests }}/*.yaml /etc/kubernetes/manifests/
+      args:
+        executable: /bin/bash
+      when: _dr_staged_manifests.stat.exists
+
+    - name: Point the kubelet back at /etc/kubernetes/manifests
+      ansible.builtin.lineinfile:
+        path: /var/lib/kubelet/config.yaml
+        regexp: '^staticPodPath:'
+        line: "staticPodPath: /etc/kubernetes/manifests"
+      register: _dr_static_path
+
+    - name: Restart the kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        state: restarted
+      when: _dr_static_path.changed
+
+    - name: Wait for this control plane's static pods
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system wait
+        --for=condition=Ready --timeout=300s
+        pod/kube-apiserver-{{ inventory_hostname }}
+        pod/kube-controller-manager-{{ inventory_hostname }}
+        pod/kube-scheduler-{{ inventory_hostname }}
+        pod/etcd-{{ inventory_hostname }}
+      changed_when: false
+
+    - name: Check etcd member health
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: etcd_health.yml
+
+    - name: Mark this restore done on this node
+      ansible.builtin.copy:
+        dest: "{{ k8s_upgrade_backup_dir }}/dr-{{ _dr_snapshot }}.restored"
+        content: "restored {{ _dr_snapshot }} on {{ now(utc=true) }}\n"
+        mode: "0600"
+
+    - name: Remove the staged manifests
+      ansible.builtin.file:
+        path: "{{ k8s_dr_manifests }}"
+        state: absent
+
+- name: DR restore — roll back the workers now ahead of the control plane
+  ansible.builtin.import_playbook: upgrade-rollback.yml
+  vars:
+    k8s_rollback_nodes: auto
+
+- name: DR restore — postflight
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  vars_files:
+    - vars/kubernetes.yml
+    - vars/upgrade.yml
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+  tasks:
+    - name: Read the restored cluster's nodes
+      ansible.builtin.command: "{{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get nodes -o json"
+      register: _dr_post_nodes
+      changed_when: false
+      run_once: true
+
+    - name: Read the restored cluster's kubeadm config
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system
+        get configmap kubeadm-config -o json
+      register: _dr_post_cm
+      changed_when: false
+      run_once: true
+
+    - name: Require the old version everywhere
+      vars:
+        _cluster: "{{ ((_dr_post_cm.stdout | from_json).data.ClusterConfiguration | from_yaml).kubernetesVersion }}"
+        _kubelets: "{{ (_dr_post_nodes.stdout | from_json)['items'] | map(attribute='status.nodeInfo.kubeletVersion') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _cluster == 'v' ~ _dr_from
+          - _kubelets | map('regex_search', '^v\d+\.\d+\.') | unique | list
+            == ['v' ~ _dr_from.split('.')[0] ~ '.' ~ _dr_from.split('.')[1] ~ '.']
+        fail_msg: "Cluster {{ _cluster }}, kubelets {{ _kubelets }} -- expected everything on {{ _dr_from }}."
+      run_once: true
+
+    - name: Let the cluster settle
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: settle.yml
+      vars:
+        k8s_upgrade_settle_seconds: 0
+      when: inventory_hostname == k8s_primary_cp
+
+    - name: DR summary
+      ansible.builtin.debug:
+        msg:
+          - "Cluster   : {{ cluster_env }} restored to v{{ _dr_from }} from {{ _dr_snapshot }}"
+          - "Kept      : /var/lib/etcd.pre-dr-*, /etc/kubernetes/manifests.pre-dr-* on each control plane"
+          - "Next      : point the host groups back at :{{ _dr_from }} if they were moved"
+      run_once: true
+
+- name: DR restore — resume autoscaling
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Re-enable the schedules this run paused
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: autoscale_resume.yml
