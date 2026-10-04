@@ -301,6 +301,9 @@
     name: node_maintenance
     tasks_from: uncordon.yml
 
+- name: Let the cluster settle before the next node
+  ansible.builtin.include_tasks: settle.yml
+
 - name: Node upgrade summary
   ansible.builtin.debug:
     msg:

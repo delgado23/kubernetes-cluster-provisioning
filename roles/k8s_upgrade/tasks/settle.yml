@@ -1,0 +1,35 @@
+---
+# After a node is back and uncordoned: give the pods evicted from it time to
+# reschedule, then wait until the cluster has actually absorbed the node
+# before the next one is drained (or the run reports success):
+#   no Pending pods, every workload fully available, every Longhorn volume
+#   healthy again (replicas rebuilt after the node's reboot).
+# A node that never settles fails the run here and the roll stops, with the
+# next node still untouched.
+- name: Let pods settle
+  ansible.builtin.pause:
+    seconds: "{{ k8s_upgrade_settle_seconds }}"
+  when: k8s_upgrade_settle_seconds | int > 0
+
+- name: Wait for no Pending pods
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get pods -A
+    --field-selector=status.phase=Pending -o name
+  register: _k8s_settle_pending
+  changed_when: false
+  until: _k8s_settle_pending.rc == 0 and _k8s_settle_pending.stdout | length == 0
+  retries: "{{ k8s_upgrade_settle_retries }}"
+  delay: 15
+  delegate_to: "{{ k8s_primary_cp }}"
+
+- name: Wait for every workload to be fully available
+  ansible.builtin.include_tasks: check_workloads.yml
+  vars:
+    k8s_workload_retries: "{{ k8s_upgrade_settle_retries }}"
+
+- name: Wait for Longhorn volumes to be healthy
+  ansible.builtin.include_tasks: longhorn_healthy.yml
+
+- name: Settled
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} settled: no Pending pods, workloads available, Longhorn healthy."

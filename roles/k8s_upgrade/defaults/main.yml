@@ -17,7 +17,12 @@ k8s_upgrade_backup_dir: /var/lib/k8s-upgrade-backups
 
 k8s_upgrade_min_sysroot_free_gb: 5     # staged image + ostree objects
 k8s_upgrade_cert_min_days: 7           # refuse to start with certs this close to expiry
-k8s_upgrade_allow_cordoned: false      # a cordoned node normally means a previous run stopped there
+k8s_upgrade_allow_cordoned: false
+# After each node is back and uncordoned: pause this long, then wait (up to
+# settle_retries x 15s) for no Pending pods, every workload available and every
+# Longhorn volume healthy before the next node is drained.
+k8s_upgrade_settle_seconds: 60
+k8s_upgrade_settle_retries: 40      # a cordoned node normally means a previous run stopped there
 
 # HTTPS endpoints that must answer at every gate (after the first control
 # plane, after the first worker, and at the end). Status 200-399 or 401.
