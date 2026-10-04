@@ -21,5 +21,8 @@ k8s_upgrade_allow_cordoned: false      # a cordoned node normally means a previo
 
 # HTTPS endpoints that must answer at every gate (after the first control
 # plane, after the first worker, and at the end). Status 200-399 or 401.
-k8s_upgrade_smoke_urls:
-  - "https://headlamp.{{ 'k8s-test' if cluster_env == 'test' else 'k8s' }}.garaventaville.com/"
+# Test clusters get none by default: they use Let's Encrypt *staging* certs and
+# their *.k8s-test wildcard isn't necessarily in public DNS.
+k8s_upgrade_smoke_urls: >-
+  {{ ['https://headlamp.k8s.garaventaville.com/'] if cluster_env == 'prod' else [] }}
+k8s_upgrade_smoke_validate_certs: "{{ cluster_env == 'prod' }}"

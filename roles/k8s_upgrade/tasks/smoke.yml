@@ -63,7 +63,7 @@
     url: "{{ item }}"
     method: GET
     follow_redirects: none
-    validate_certs: true
+    validate_certs: "{{ k8s_upgrade_smoke_validate_certs | bool }}"
     status_code: [200, 301, 302, 303, 307, 308, 401]
   loop: "{{ k8s_upgrade_smoke_urls }}"
   register: _k8s_smoke
