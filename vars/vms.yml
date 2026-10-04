@@ -19,8 +19,14 @@ haproxy_port:        7443             # HAProxy frontend port for kube-apiserver
 # ------------------------------------------------------------------
 cluster_env:         "prod"              # prod | test
 letsencrypt_staging: false               # true = LE staging (untrusted cert), false = LE prod
-k8s_api_endpoint_ip: "172.16.0.29"
-metallb_pool:        "172.16.0.50-172.16.0.60"
+# The API VIP, MetalLB pool and VRRP router id MUST differ between clusters:
+# all of them share one L2 network. They are derived from cluster_env so a
+# survey default can't put a test cluster on prod's VIP (2026-10-04: a test
+# build with the survey's .30 contended for prod's live VIP). Prod's values are
+# what the running prod cluster uses; override via extra_vars only deliberately.
+k8s_api_endpoint_ip: "{{ '172.16.0.29' if cluster_env == 'test' else '172.16.0.30' }}"
+metallb_pool:        "{{ '172.16.0.50-172.16.0.60' if cluster_env == 'test' else '172.16.0.61-172.16.0.71' }}"
+keepalived_virtual_router_id: "{{ 52 if cluster_env == 'test' else 51 }}"
 k8s_pod_cidr:        "10.244.0.0/16"    # Flannel pod network
 k8s_service_cidr:    "10.96.0.0/12"     # Kubernetes service network
 k8s_node_cidr:       "172.16.0.0/23"    # Node/VM network (post-DNAT kube-apiserver destination)
