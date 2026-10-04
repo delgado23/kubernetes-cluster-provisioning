@@ -51,6 +51,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ├── maintenance.yml       # Rolling OS maintenance (drain/update/reboot/uncordon)
 ├── upgrade.yml           # Rolling Kubernetes minor upgrade (image-mode, kubeadm + bootc switch)
 ├── upgrade-rollback.yml  # Roll named nodes back to their previous bootc image
+├── upgrade-dr-restore.yml # After `kubeadm upgrade apply`: restore the pre-upgrade etcd snapshot
 ├── wipe.yml              # Remove all nodes from Foreman, FreeIPA, and Zabbix
 ├── mirror-github-repos.yml # Pull-mirror upstream GitHub deps into local Gitea
 ├── handlers/
@@ -410,42 +411,37 @@ Which rollback applies depends on how far the run got:
 | A control plane, before the first `kubeadm upgrade apply` | The same playbook. Nothing has changed in the cluster yet. |
 | A control plane, after the first `kubeadm upgrade apply` | This is the **point of no return**. Rolling back the image only brings back the old kubelet: the new control-plane static pods and the cluster state stay, and the 1.37 hop also moves etcd 3.6 → 3.7. The only way back is restoring the pre-apply etcd snapshot on **all** members. |
 
-To restore the etcd snapshot (stacked etcd, kubeadm). Rehearse this on the test
-cluster before relying on it.
+For that last case, run **`upgrade-dr-restore.yml`**. It is destructive: every
+cluster write after the snapshot is lost, and the API is down while it runs.
 
-1. On **every** control plane, stop the control plane:
-   `mv /etc/kubernetes/manifests /etc/kubernetes/manifests.upgraded`. Wait
-   until `crictl ps` shows no etcd or kube-apiserver.
-2. Put back the pre-upgrade static-pod manifests that kubeadm saved:
-   `cp -a /etc/kubernetes/tmp/kubeadm-backup-manifests-<ts>/*.yaml /etc/kubernetes/manifests/`
-   (the directory nearest the apply time). Keep `/etc/kubernetes/manifests.upgraded`
-   until the cluster is healthy.
-3. On **every** control plane, move the data dir aside
-   (`mv /var/lib/etcd /var/lib/etcd.upgraded`) and restore the **same**
-   snapshot file with that member's own identity:
-   ```bash
-   etcdutl snapshot restore /var/lib/k8s-upgrade-backups/<snapshot>.db \
-     --name <this-node-fqdn> \
-     --initial-cluster <cp1-fqdn>=https://<cp1-ip>:2380,<cp2-fqdn>=https://<cp2-ip>:2380,<cp3-fqdn>=https://<cp3-ip>:2380 \
-     --initial-cluster-token <new-token, same on all members> \
-     --initial-advertise-peer-urls https://<this-node-ip>:2380 \
-     --bump-revision 1000000000 --mark-compacted \
-     --data-dir /var/lib/etcd
-   ```
-   - Take the names and IPs from the `etcd.yaml` manifest restored in step 2.
-   - `--bump-revision` and `--mark-compacted` make watchers (controllers,
-     kubelets) re-list instead of trusting their caches.
-   - `etcdutl` comes from the old etcd image:
-     `crictl pull <mirror>/etcd:<old tag>`, then run it with `ctr` or a
-     throwaway static pod.
-4. Run `bootc rollback` on every control plane and reboot them one at a time.
-   Wait for etcd to form a quorum (`endpoint health --cluster`) and the API
-   server to answer on the VIP.
-5. Restore each control plane's kubelet config from its node-state backup, if
-   it isn't already back to the old one.
-6. Workers that had already moved stay one minor ahead of the API server at
-   this point. Roll them back with `upgrade-rollback.yml`, then check the
-   cluster with the postflight checks.
+```bash
+ansible-playbook upgrade-dr-restore.yml -e cluster_env=test -e k8s_dr_confirm=restore-test
+#   -e k8s_dr_snapshot=<file>   (default: the newest etcd-<env>-*.db on the primary CP)
+#   -e k8s_dr_image=<repo>:<old tag>  (if a CP's rollback slot no longer holds the old version)
+```
+
+It encodes the procedure rehearsed on the test cluster on 2026-10-04 (1.36.5 → 1.35.9):
+
+1. Pause autoscaling. During the rehearsal the horizontal autoscaler added a worker mid-restore.
+2. Check that every CP holds the same snapshot (sha256), its pre-upgrade node-state backup, and a bootc deployment of the old version.
+3. Stop the control plane on **all** CPs by moving their manifests aside.
+4. On every member, restore the snapshot with that member's own identity:
+   - `etcdutl` from the **old** etcd image in the mirror
+   - a new cluster token
+   - `--bump-revision --mark-compacted`, so controllers and kubelets re-list
+   - the data dir owned like the original (`etcd:etcd 0700` on these images)
+5. Stage the old manifests from the **node-state backup** in `/var` (images repointed at the mirror), restore the old kubelet config, and point its `staticPodPath` at the staged manifests. kubeadm's own `/etc/kubernetes/tmp/kubeadm-backup-*` can't be used: kubeadm deletes it after a successful upgrade.
+6. `bootc rollback` and reboot all CPs.
+7. Once etcd has quorum, one CP at a time: copy the old manifests into the booted deployment's `/etc` and point `staticPodPath` back.
+8. Roll back every worker now ahead of the control plane (`upgrade-rollback.yml` with `k8s_rollback_nodes=auto`), check that everything is on the old version, let the cluster settle, and resume autoscaling.
+
+**Why the `staticPodPath` detour:** on bootc, `/etc` belongs to each deployment,
+but `/var` is shared. `kubeadm upgrade` writes the *new* manifests while the node
+still runs the old deployment, so `bootc rollback` boots an `/etc` that still
+holds the new control plane. It would start that on the restored data, and for
+1.37 that means etcd 3.7 on 3.6 data, which can't be undone. The kubelet reads
+its config from `/var`, so pointing it at manifests staged in `/var` means it
+only ever starts the old control plane, whatever the booted `/etc` holds.
 
 Everything written to the cluster after the snapshot is lost (Argo CD
 re-syncs what's in Git).
