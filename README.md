@@ -183,8 +183,8 @@ head -c 32 /dev/urandom | base64
 | `cluster_env` | String | `prod` | `prod` or `test`. Controls node naming prefixes, API endpoint hostname, ingress domain, FreeIPA wildcard DNS record, and ACME endpoint. `prod` → `k8s-cp` / `k8s-worker`, `k8s-api.<domain>`, `k8s.<domain>`, Let's Encrypt production. `test` → `k8s-test-cp` / `k8s-test-worker`, `k8s-test-api.<domain>`, `k8s-test.<domain>`, Let's Encrypt staging. Both clusters can run side-by-side — they use separate DNS records and name prefixes. |
 | `letsencrypt_staging` | Boolean | derived | Auto-derived from `cluster_env` (`true` when `test`, `false` when `prod`). When `true`, uses the Let's Encrypt **staging** ACME endpoint — certs are not browser-trusted but have no rate limits. Only set this directly if you need to decouple it from `cluster_env`. |
 | `k8s_api_endpoint` | String | derived | Auto-derived from `cluster_env` — `k8s-api.<vault_domain>` for prod, `k8s-test-api.<vault_domain>` for test. An A record pointing to `k8s_api_endpoint_ip` is created in FreeIPA during provision and removed on wipe. |
-| `k8s_api_endpoint_ip` | String | `172.16.0.29` | IP address of the keepalived VIP. Also used as `keepalived_vip` — only set this here, do not update them separately. |
-| `metallb_pool` | String | `172.16.0.50-172.16.0.60` | MetalLB L2 address pool range for LoadBalancer services. Traefik automatically claims the first free IP from this pool. |
+| `k8s_api_endpoint_ip` | String | derived | Keepalived VIP, derived from `cluster_env`: prod `172.16.0.30`, test `172.16.0.29`. Also used as `keepalived_vip`. Don't override it unless you have checked that the new IP is free. A brand-new cluster refuses to provision on a VIP that already answers on :6443. |
+| `metallb_pool` | String | derived | MetalLB L2 pool, derived from `cluster_env`: prod `172.16.0.61-172.16.0.71`, test `172.16.0.50-172.16.0.60`. Traefik claims the first free IP from it. Must never overlap the other cluster's pool. |
 | `k8s_pod_cidr` | String | `10.244.0.0/16` | Pod network CIDR passed to kubeadm and used in firewall rules. Must not overlap with your node or service networks. Change only if the default conflicts with your infrastructure. |
 | `k8s_service_cidr` | String | `10.96.0.0/12` | Kubernetes service network CIDR passed to kubeadm and used in firewall rules and NetworkPolicies. Must not overlap with your node or pod networks. Change only if the default conflicts with your infrastructure. |
 
@@ -192,7 +192,7 @@ head -c 32 /dev/urandom | base64
 
 Neither control plane nor worker nodes have hardcoded names. Both are generated at runtime from a prefix and a counter. The prefix is derived from `cluster_env`: `prod` produces `k8s-cp` / `k8s-worker`; `test` produces `k8s-test-cp` / `k8s-test-worker`. Foreman hostgroup strings are configured in `vars/vms.yml`.
 
-Prod and test clusters can run side-by-side. Each has its own FreeIPA DNS wildcard (`*.k8s` vs `*.k8s-test`), so wiping one does not affect the other's ingress. You must set non-overlapping values for `k8s_api_endpoint_ip` and `metallb_pool` in each cluster's AWX survey — those IP ranges cannot be shared.
+Prod and test clusters can run side-by-side. Each has its own FreeIPA DNS wildcard (`*.k8s` vs `*.k8s-test`), so wiping one doesn't affect the other's ingress. Their API VIP, MetalLB pool and keepalived `virtual_router_id` (prod 51, test 52) all share one L2 network, so `vars/vms.yml` derives all three from `cluster_env`. They are **not** survey questions; overriding them with extra vars is only for a deliberate, checked change. (On 2026-10-04 a survey default put a test build on prod's live VIP, and the shared VRRP id let it contend for that VIP.)
 
 ## Usage
 
@@ -380,9 +380,9 @@ worker_hostgroup:       "AlmaLinux 10/Kubernetes Worker Node"
 
 controlplane_configs:
   # Index 0 — primary, always provisioned
-  # k8s_api_endpoint, k8s_api_endpoint_ip, metallb_pool, k8s_pod_cidr, and
-  # k8s_service_cidr are AWX survey vars injected at runtime — set them in
-  # your job template survey rather than hardcoding them here.
+  # k8s_api_endpoint, k8s_api_endpoint_ip and metallb_pool are derived from
+  # cluster_env in vars/vms.yml (never survey questions); k8s_pod_cidr and
+  # k8s_service_cidr are AWX survey vars injected at runtime.
   - host_parameters:
       - { name: k8s_role,            value: primary }
       - { name: keepalived_state,    value: MASTER }
