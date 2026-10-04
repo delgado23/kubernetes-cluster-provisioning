@@ -35,3 +35,10 @@ k8s_upgrade_smoke_validate_certs: "{{ cluster_env == 'prod' }}"
 # Pause this cluster's autoscale schedules for the run (needs vars/vault.yml,
 # i.e. the Ascender vault credential); false for CLI runs without the vault.
 k8s_upgrade_manage_autoscale: true
+
+# Off-cluster Longhorn backup before any node changes (tasks/longhorn_backup.yml).
+# Mandatory on prod; elsewhere it runs only if the cluster has a backup target.
+k8s_upgrade_require_backup: "{{ cluster_env == 'prod' }}"
+k8s_upgrade_backup_recurringjob: backup-daily     # created by cluster_addons
+k8s_upgrade_backup_retries: 80                    # x 15s = 20 min
+
