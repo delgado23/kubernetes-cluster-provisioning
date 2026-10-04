@@ -27,12 +27,12 @@
     content: |
       defaultSettings:
         defaultDataPath: /var/lib/longhorn
-{% if longhorn_backup_target | length > 0 %}
+      {% if longhorn_backup_target | length > 0 %}
 
       defaultBackupStore:
         backupTarget: "{{ longhorn_backup_target }}"
         pollInterval: 300
-{% endif %}
+      {% endif %}
 
       longhornManager:
         resources:
