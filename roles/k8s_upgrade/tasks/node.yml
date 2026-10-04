@@ -70,6 +70,14 @@
   args:
     creates: "{{ k8s_upgrade_backup_dir }}/node-state-{{ _k8s_ts }}-v{{ _k8s_node_state.stdout.split(',')[0] | regex_replace('^v', '') }}.tgz"
 
+# The tarball holds the cluster CA and the Secret encryption config.
+- name: Lock down the node-state backup
+  ansible.builtin.file:
+    path: "{{ k8s_upgrade_backup_dir }}/node-state-{{ _k8s_ts }}-v{{ _k8s_node_state.stdout.split(',')[0] | regex_replace('^v', '') }}.tgz"
+    owner: root
+    group: root
+    mode: "0600"
+
 - name: Upgrade the node (discarding the staged image on failure)
   block:
     # --- Stage the target image --------------------------------------------

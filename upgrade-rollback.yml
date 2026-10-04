@@ -41,6 +41,9 @@
       {{ (k8s_rollback_nodes.split(',') if k8s_rollback_nodes is string else k8s_rollback_nodes)
          | map('trim') | list }}
     node_role: "{{ 'control-plane' if inventory_hostname in k8s_cluster_cps else 'worker' }}"
+    # Workers have no admin.conf: node_maintenance's drain/uncordon must run
+    # their kubectl on a control plane (same flag as maintenance.yml).
+    delegate_kubectl: "{{ inventory_hostname not in k8s_cluster_cps }}"
     control_plane_host: >-
       {{ (k8s_cluster_cps | difference([inventory_hostname]) | first)
          if inventory_hostname in k8s_cluster_cps else k8s_primary_cp }}

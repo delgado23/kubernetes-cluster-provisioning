@@ -97,7 +97,10 @@
     - vars/upgrade.yml
   vars:
     node_role: worker
-    # kubectl for workers runs on this cluster's primary control plane.
+    # kubectl for workers runs on this cluster's primary control plane
+    # (node_maintenance's drain/uncordon key off delegate_kubectl, as in
+    # maintenance.yml -- workers have no admin.conf).
+    delegate_kubectl: true
     control_plane_host: "{{ k8s_primary_cp }}"
   pre_tasks:
     - name: Skip nodes that belong to a different cluster
