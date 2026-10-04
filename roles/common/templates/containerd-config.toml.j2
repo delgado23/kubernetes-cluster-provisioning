@@ -48,7 +48,7 @@ imports = ['/etc/containerd/conf.d/*.toml']
     use_local_image_pull = false
 
     [plugins.'io.containerd.cri.v1.images'.pinned_images]
-      sandbox = 'registry.k8s.io/pause:3.10.1'
+      sandbox = '{{ k8s_pause_image }}'
 
     [plugins.'io.containerd.cri.v1.images'.registry]
       config_path = '/etc/containerd/certs.d:/etc/docker/certs.d'

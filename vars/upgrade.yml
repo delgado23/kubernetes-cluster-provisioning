@@ -1,0 +1,10 @@
+---
+# Play-level settings for upgrade.yml / upgrade-rollback.yml. They're play vars
+# (not k8s_upgrade role defaults) because the node_maintenance task files the
+# upgrade reuses (drain / wait_ready / uncordon) read the same names that
+# maintenance.yml sets.
+kubectl_bin: /usr/bin/kubectl
+kubeconfig: /etc/kubernetes/admin.conf
+drain_timeout: 600
+drain_grace_period: 60
+reboot_timeout: 900

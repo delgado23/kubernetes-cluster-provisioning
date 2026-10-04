@@ -49,6 +49,8 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ├── autoscale.yml                  # Vertical autoscaler — scales CPU/RAM up and down via Proxmox based on utilisation
 ├── autoscale-horizontal.yml       # Horizontal autoscaler — adds or removes worker nodes via AWX based on average utilisation
 ├── maintenance.yml       # Rolling OS maintenance (drain/update/reboot/uncordon)
+├── upgrade.yml           # Rolling Kubernetes minor upgrade (image-mode, kubeadm + bootc switch)
+├── upgrade-rollback.yml  # Roll named nodes back to their previous bootc image
 ├── wipe.yml              # Remove all nodes from Foreman, FreeIPA, and Zabbix
 ├── mirror-github-repos.yml # Pull-mirror upstream GitHub deps into local Gitea
 ├── handlers/
@@ -61,6 +63,8 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 │   ├── freeipa.yml       # FreeIPA ipaclient vars (sensitive values sourced from vault)
 │   ├── vault.yml         # Ansible Vault: API tokens and passwords
 │   ├── vms.yml           # VM definitions (names, hostgroups, Foreman parameters)
+│   ├── kubernetes.yml    # Image sources (Katello core-image mirror, node images) + cluster node lists
+│   ├── upgrade.yml       # Play settings for upgrade.yml / upgrade-rollback.yml
 │   ├── vm_defaults.yml   # Default VM hardware specs
 │   └── gitea.yml         # Local Gitea mirror bases (version/raw/package fetch)
 └── roles/
@@ -74,7 +78,8 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
     ├── cluster_bootstrap/     # kubeadm init/join, Flannel, kubelet-serving-cert-approver, tooling
     ├── worker_join/           # Join worker nodes to the cluster
     ├── cluster_addons/        # MetalLB, Traefik, Longhorn, reflector, cert-manager, Prometheus, Headlamp, ArgoCD, Descheduler
-    ├── node_maintenance/      # Drain, update, reboot, uncordon
+    ├── node_maintenance/      # Drain, update, reboot, uncordon (drain/wait_ready/uncordon reused by k8s_upgrade)
+    ├── k8s_upgrade/           # Preflight, per-node upgrade, etcd snapshot, gates, postflight
     └── cluster_cleanup/       # Remove hosts from Foreman and FreeIPA
 ```
 
@@ -102,6 +107,8 @@ Each node detects its own mode early in the prep phase by checking for `/run/ost
 - **Config and unit management still run.** Tasks that only write under `/etc` or toggle systemd units work unchanged — those paths stay writable on an ostree system.
 - **Tooling installs to `/usr/local/bin`.** Helm and k9s are installed from upstream release tarballs into `/usr/local/bin` (a writable symlink to `/var/usrlocal` in the bootc image) rather than via dnf, so they work identically on both modes.
 - **OS updates use `bootc upgrade`, not dnf.** See [Node Maintenance](#node-maintenance-rolling-os-updates) below.
+- **The image is the Kubernetes version pin.** foreman-bootc tags the node images with the Kubernetes version (`kubernetes-controlplane:1.35.5`), and `kubeadm-config.yml.j2` renders `kubernetesVersion` from the node's own `kubeadm version`, so a new cluster runs exactly the image's version. (Unpinned, `kubeadm init` asked dl.k8s.io for the newest patch: a 1.35.5 image ran a v1.35.9 control plane.) Moving to a new minor is [Kubernetes Upgrade](#kubernetes-upgrade-rolling), not maintenance.
+- **Core images come from Foreman.** `imageRepository` and containerd's sandbox (pause) image point at the Katello mirror of registry.k8s.io (`vars/kubernetes.yml`), maintained by foreman-content-views.
 
 Package-mode nodes are unaffected — `image_mode` is `false` and every dnf/package task runs as before. A cluster can even mix the two modes; detection is per-node.
 
@@ -341,6 +348,106 @@ ansible-playbook maintenance.yml --limit foreman_almalinux10_kubernetesworkernod
 # Override drain timeout
 ansible-playbook maintenance.yml -e "drain_timeout=600"
 ```
+
+### Kubernetes Upgrade (Rolling)
+
+`upgrade.yml` moves one image-mode cluster **one minor up** (kubeadm can't skip
+minors, so 1.35 -> 1.37 is two runs), or to a later patch of its minor, a node
+at a time, with no rebuild and no data movement.
+
+```bash
+# cluster_env has no default here -- the playbook never assumes prod
+ansible-playbook upgrade.yml -e cluster_env=test -e k8s_target_version=1.36.5 --ask-vault-pass
+```
+
+**Before a run:**
+
+1. foreman-content-views (JT 33) carries the target minor: the `AlmaLinux 10 - Kubernetes 1.NN` RPM repo and the `Kubernetes Images` core-image mirror.
+2. foreman-bootc has built and promoted `kubernetes-{controlplane,worker}:<target>`. Its Containerfiles pin the kube* NVRs.
+3. Disable this cluster's autoscale schedules and the maintenance job (JT 49), and silence node alerts.
+4. Stay clear of the weekly bootc build (Sunday 03:00 ET), which re-pushes tags. The run insists on the digest it resolved in preflight.
+5. Check that the deployed add-ons support the target minor.
+
+**What it does** (`roles/k8s_upgrade`):
+
+| Phase | |
+|---|---|
+| Preflight (read-only) | Checks the inputs:<br>- the target is one minor up (or a later patch)<br>- every node is Ready, schedulable and no newer than the target<br>- no Pending pods; every Deployment/StatefulSet/DaemonSet is fully available (this covers the Kyverno and cert-manager webhooks)<br>- all etcd members are healthy; certs aren't expiring within 7 days; `/sysroot` has room<br>- a server-side drain dry run passes on every node (Longhorn `instance-manager` PDBs are expected to block it until a node is really cordoned)<br>- the node-image digests resolve<br>- the target kube-apiserver is in the mirror<br><br>It also pulls the *current* version's core images through Katello, which caches them for a rollback. |
+| Control planes, one at a time | 1. `bootc switch` stages the target image, with its digest checked.<br>2. Pre-pull the target core images.<br>3. **First CP only:** take an etcd snapshot (verified, sha256'd, copied to every CP).<br>4. Drain.<br>5. **First CP only:** a one-time switch of `imageRepository` to the Katello mirror.<br>6. Run `kubeadm upgrade apply` (first CP) or `upgrade node` (the others), **using kubeadm from the staged deployment**, with `--patches /etc/kubernetes/kubeadm-patches`.<br>7. Render the containerd config, then reboot into the new image (new kubelet).<br>8. Wait for Ready, the static pods and etcd health, then uncordon. |
+| Gate | Runs after the first CP:<br>- `/readyz` through the VIP<br>- all nodes Ready, all workloads available, Argo CD apps Healthy<br>- `k8s_upgrade_smoke_urls` answering |
+| Workers, one at a time | Wait until every Longhorn volume is healthy, then stage, pre-pull, drain, `kubeadm upgrade node`, reboot, Ready, uncordon. The same gate runs after the first worker. |
+| Postflight | Every node is on the target digest, the kubeadm config is at the target with the mirror `imageRepository`, every control-plane/kube-proxy/CoreDNS image comes from the mirror, etcd is healthy, and the final gate passes. |
+
+kubeadm upgrades the node's control plane and kubelet config **before** the node
+boots the new kubelet, so the kubelet is never newer than the API server.
+
+- **Failure handling:** any failure before a node's reboot discards the staged
+  image (`rpm-ostree cleanup --pending`), so the node keeps booting its current
+  image. The node is left cordoned and the run stops; later nodes are untouched.
+- **Re-runs are safe:**
+  - nodes already on the target digest are only uncordoned
+  - `upgrade apply` runs only while the cluster's kubeadm config is still on the old version
+- **Backups:** every node keeps backups in `/var/lib/k8s-upgrade-backups`
+  (root-only). `/var` survives both the switch and a rollback, and nightly
+  vzdump → PBS takes the backups off-cluster. They are:
+  - `node-state-<ts>-v<old>.tgz`: `/etc/kubernetes`, the kubelet config and the containerd config
+  - on every control plane, the etcd snapshot
+
+  They include the cluster CA and the Secret encryption config.
+
+After the run, point the host groups at the new tag (foreman-bootc
+`setup_kubernetes_image_mode.rb` with `K8S_TAG=<target>`), so scale-out builds
+new nodes on it, and re-enable the schedules.
+
+#### Rolling back
+
+Which rollback applies depends on how far the run got:
+
+| Point | Rollback |
+|---|---|
+| A worker, any time during a hop | `upgrade-rollback.yml` with `k8s_rollback_nodes=<fqdn>`. It drains the node, restores the kubelet config from its node-state backup, runs `bootc rollback` (or `bootc switch` to `-e k8s_rollback_image=<repo>:<tag>` if JT 49 has since replaced the rollback slot), reboots and uncordons. It refuses to go more than one minor back, or to break the kubelet/API-server version skew. |
+| A control plane, before the first `kubeadm upgrade apply` | The same playbook. Nothing has changed in the cluster yet. |
+| A control plane, after the first `kubeadm upgrade apply` | This is the **point of no return**. Rolling back the image only brings back the old kubelet: the new control-plane static pods and the cluster state stay, and the 1.37 hop also moves etcd 3.6 → 3.7. The only way back is restoring the pre-apply etcd snapshot on **all** members. |
+
+To restore the etcd snapshot (stacked etcd, kubeadm). Rehearse this on the test
+cluster before relying on it.
+
+1. On **every** control plane, stop the control plane:
+   `mv /etc/kubernetes/manifests /etc/kubernetes/manifests.upgraded`. Wait
+   until `crictl ps` shows no etcd or kube-apiserver.
+2. Put back the pre-upgrade static-pod manifests that kubeadm saved:
+   `cp -a /etc/kubernetes/tmp/kubeadm-backup-manifests-<ts>/*.yaml /etc/kubernetes/manifests/`
+   (the directory nearest the apply time). Keep `/etc/kubernetes/manifests.upgraded`
+   until the cluster is healthy.
+3. On **every** control plane, move the data dir aside
+   (`mv /var/lib/etcd /var/lib/etcd.upgraded`) and restore the **same**
+   snapshot file with that member's own identity:
+   ```bash
+   etcdutl snapshot restore /var/lib/k8s-upgrade-backups/<snapshot>.db \
+     --name <this-node-fqdn> \
+     --initial-cluster <cp1-fqdn>=https://<cp1-ip>:2380,<cp2-fqdn>=https://<cp2-ip>:2380,<cp3-fqdn>=https://<cp3-ip>:2380 \
+     --initial-cluster-token <new-token, same on all members> \
+     --initial-advertise-peer-urls https://<this-node-ip>:2380 \
+     --bump-revision 1000000000 --mark-compacted \
+     --data-dir /var/lib/etcd
+   ```
+   - Take the names and IPs from the `etcd.yaml` manifest restored in step 2.
+   - `--bump-revision` and `--mark-compacted` make watchers (controllers,
+     kubelets) re-list instead of trusting their caches.
+   - `etcdutl` comes from the old etcd image:
+     `crictl pull <mirror>/etcd:<old tag>`, then run it with `ctr` or a
+     throwaway static pod.
+4. Run `bootc rollback` on every control plane and reboot them one at a time.
+   Wait for etcd to form a quorum (`endpoint health --cluster`) and the API
+   server to answer on the VIP.
+5. Restore each control plane's kubelet config from its node-state backup, if
+   it isn't already back to the old one.
+6. Workers that had already moved stay one minor ahead of the API server at
+   this point. Roll them back with `upgrade-rollback.yml`, then check the
+   cluster with the postflight checks.
+
+Everything written to the cluster after the snapshot is lost (Argo CD
+re-syncs what's in Git).
 
 ### Wipe Cluster
 

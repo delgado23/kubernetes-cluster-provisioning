@@ -1,0 +1,25 @@
+---
+# Rolling Kubernetes upgrade for image-mode (bootc) clusters. See upgrade.yml.
+#
+# Required (extra vars / Ascender survey):
+#   cluster_env          test | prod -- no default on purpose
+#   k8s_target_version   e.g. 1.36.5 (one minor above the running control
+#                        plane, or a later patch of the same minor)
+
+# Node image tag to switch to; foreman-bootc tags images with the k8s version.
+k8s_image_tag: "{{ k8s_target_version }}"
+
+# Root-only backups on each node. /var is persistent and outside the bootc
+# deployment, so the backups survive both the switch and a rollback. The etcd
+# snapshot is copied to every control plane; nightly vzdump -> PBS takes them
+# off-cluster. They contain the cluster CA and encryption config: 0700/0600.
+k8s_upgrade_backup_dir: /var/lib/k8s-upgrade-backups
+
+k8s_upgrade_min_sysroot_free_gb: 5     # staged image + ostree objects
+k8s_upgrade_cert_min_days: 7           # refuse to start with certs this close to expiry
+k8s_upgrade_allow_cordoned: false      # a cordoned node normally means a previous run stopped there
+
+# HTTPS endpoints that must answer at every gate (after the first control
+# plane, after the first worker, and at the end). Status 200-399 or 401.
+k8s_upgrade_smoke_urls:
+  - "https://headlamp.{{ 'k8s-test' if cluster_env == 'test' else 'k8s' }}.garaventaville.com/"

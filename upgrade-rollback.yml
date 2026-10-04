@@ -1,0 +1,177 @@
+---
+# =============================================================================
+# upgrade-rollback.yml — roll individual nodes back to their previous bootc image
+# =============================================================================
+# The cheap half of the upgrade's rollback model (see the README). Per node,
+# one at a time: drain -> restore the kubelet config `kubeadm upgrade node`
+# rewrote (from the node-state backup upgrade.yml took) -> `bootc rollback`
+# (or `bootc switch` to an explicit image) -> reboot -> Ready -> uncordon.
+#
+# Guard rails:
+#   - only the nodes named in k8s_rollback_nodes are touched
+#   - never more than ONE minor back from what the node runs now
+#   - the kubelet may never end up newer than the control plane, nor more
+#     than one minor older
+#   - a control plane is only rolled back while the cluster's kubeadm config
+#     is still on the old minor (i.e. before `kubeadm upgrade apply`). After
+#     apply, rolling the control plane back is the etcd-snapshot procedure in
+#     the README, not this playbook.
+#
+# Usage:
+#   ansible-playbook upgrade-rollback.yml -e cluster_env=test \
+#     -e k8s_rollback_nodes=k8s-test-worker-01.garaventaville.com
+#   # if the rollback slot was replaced since (e.g. by JT 49 maintenance):
+#   ansible-playbook upgrade-rollback.yml -e cluster_env=test \
+#     -e k8s_rollback_nodes=... -e k8s_rollback_image=<repo>:1.35.5
+# =============================================================================
+
+- name: Roll nodes back to their previous image
+  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
+  serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
+  gather_facts: false
+  become: true
+  vars_files:
+    - vars/kubernetes.yml
+    - vars/upgrade.yml
+  vars:
+    k8s_upgrade_backup_dir: /var/lib/k8s-upgrade-backups
+    _rollback_nodes: >-
+      {{ (k8s_rollback_nodes.split(',') if k8s_rollback_nodes is string else k8s_rollback_nodes)
+         | map('trim') | list }}
+    node_role: "{{ 'control-plane' if inventory_hostname in k8s_cluster_cps else 'worker' }}"
+    control_plane_host: >-
+      {{ (k8s_cluster_cps | difference([inventory_hostname]) | first)
+         if inventory_hostname in k8s_cluster_cps else k8s_primary_cp }}
+  pre_tasks:
+    - name: Require cluster_env and the nodes to roll back
+      ansible.builtin.assert:
+        that:
+          - cluster_env is defined and cluster_env in ['test', 'prod']
+          - k8s_rollback_nodes is defined and k8s_rollback_nodes | length > 0
+        fail_msg: "Pass -e cluster_env=test|prod and -e k8s_rollback_nodes=<fqdn>[,<fqdn>...]"
+      run_once: true
+
+    - name: Skip nodes not being rolled back
+      ansible.builtin.meta: end_host
+      when: >-
+        foreman_params.cluster_env | default('') != cluster_env
+        or inventory_hostname not in _rollback_nodes
+
+  tasks:
+    - name: Read this node's bootc status
+      ansible.builtin.command: bootc status --json
+      register: _rb_bootc
+      changed_when: false
+
+    - name: Read the cluster's kubeadm ClusterConfiguration
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system
+        get configmap kubeadm-config -o jsonpath={.data.ClusterConfiguration}
+      register: _rb_cc
+      changed_when: false
+      delegate_to: "{{ control_plane_host }}"
+
+    # Image tags are the Kubernetes version (1.36.5, or a dated 1.36.5-YYYYMMDD).
+    - name: Work out the versions involved
+      vars:
+        _status: "{{ (_rb_bootc.stdout | from_json).status }}"
+        _target_ref: >-
+          {{ k8s_rollback_image if k8s_rollback_image is defined
+             else (_status.rollback.image.image.image if _status.rollback else '') }}
+      ansible.builtin.set_fact:
+        _rb_target_ref: "{{ _target_ref }}"
+        _rb_booted_version: "{{ _status.booted.image.image.image.split(':')[-1].split('-')[0] }}"
+        _rb_target_version: "{{ _target_ref.split(':')[-1].split('-')[0] }}"
+        _rb_cluster_version: "{{ (_rb_cc.stdout | from_yaml).kubernetesVersion | regex_replace('^v', '') }}"
+
+    - name: Refuse a rollback that breaks the version-skew rules
+      vars:
+        _booted_minor: "{{ _rb_booted_version.split('.')[1] | int }}"
+        _target_minor: "{{ _rb_target_version.split('.')[1] | int }}"
+        _cluster_minor: "{{ _rb_cluster_version.split('.')[1] | int }}"
+      ansible.builtin.assert:
+        that:
+          - _rb_target_ref | length > 0
+          - _rb_target_version is match('^\d+\.\d+\.\d+$')
+          - (_booted_minor | int) - (_target_minor | int) in [0, 1]
+          - (_target_minor | int) <= (_cluster_minor | int)
+          - (_cluster_minor | int) - (_target_minor | int) <= 1
+          - node_role == 'worker' or (_cluster_minor | int) == (_target_minor | int)
+        fail_msg: >-
+          Won't roll {{ inventory_hostname }} ({{ node_role }}) from v{{ _rb_booted_version }} to
+          {{ _rb_target_ref | default('nothing') }} (v{{ _rb_target_version }}) with the control plane on
+          v{{ _rb_cluster_version }}: at most one minor back, the kubelet never newer than the control
+          plane nor more than one minor older, and a control plane only before `kubeadm upgrade apply`.
+          After apply, use the etcd-snapshot procedure in the README.
+
+    - name: Find the node-state backup taken on the version being restored
+      ansible.builtin.find:
+        paths: "{{ k8s_upgrade_backup_dir }}"
+        patterns: "node-state-*-v{{ _rb_target_version.split('.')[0] }}.{{ _rb_target_version.split('.')[1] }}.*.tgz"
+      register: _rb_backups
+
+    - name: Cordon and drain
+      ansible.builtin.include_role:
+        name: node_maintenance
+        tasks_from: drain.yml
+
+    # `kubeadm upgrade node` rewrote these for the newer kubelet, and /var is
+    # not part of the bootc deployment, so the image rollback doesn't undo it.
+    - name: Restore the kubelet config from the backup
+      ansible.builtin.command: >
+        tar -xzf {{ (_rb_backups.files | sort(attribute='mtime') | last).path }} -C /
+        var/lib/kubelet/config.yaml var/lib/kubelet/kubeadm-flags.env
+      when: _rb_backups.files | length > 0
+      changed_when: true
+
+    - name: Note a missing kubelet backup
+      ansible.builtin.debug:
+        msg: >-
+          No node-state backup for v{{ _rb_target_version }} in {{ k8s_upgrade_backup_dir }};
+          keeping the current kubelet config (one-minor-newer KubeletConfiguration is normally accepted).
+      when: _rb_backups.files | length == 0
+
+    - name: Queue the previous deployment
+      ansible.builtin.command: bootc rollback
+      when: k8s_rollback_image is not defined
+      changed_when: true
+
+    - name: Stage the requested image
+      ansible.builtin.command: "bootc switch {{ k8s_rollback_image }}"
+      when: k8s_rollback_image is defined
+      changed_when: true
+
+    - name: Reboot into it
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ reboot_timeout }}"
+        msg: "Rolling back to v{{ _rb_target_version }}"
+        pre_reboot_delay: 5
+        post_reboot_delay: 30
+
+    - name: Wait for the node to come back Ready
+      ansible.builtin.include_role:
+        name: node_maintenance
+        tasks_from: wait_ready.yml
+
+    - name: Require the rolled-back kubelet
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get node {{ inventory_hostname }}
+        -o jsonpath={.status.nodeInfo.kubeletVersion}
+      register: _rb_kubelet
+      changed_when: false
+      delegate_to: "{{ control_plane_host }}"
+      failed_when: (_rb_kubelet.stdout | regex_replace('^v', '')).split('.')[:2] != _rb_target_version.split('.')[:2]
+
+    - name: Uncordon
+      ansible.builtin.include_role:
+        name: node_maintenance
+        tasks_from: uncordon.yml
+
+    - name: Rollback summary
+      ansible.builtin.debug:
+        msg:
+          - "Node    : {{ inventory_hostname }} ({{ node_role }})"
+          - "kubelet : {{ _rb_kubelet.stdout }} (was v{{ _rb_booted_version }})"
+          - "Image   : {{ _rb_target_ref }}"

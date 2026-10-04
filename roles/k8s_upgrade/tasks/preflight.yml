@@ -1,0 +1,201 @@
+---
+# Preflight: everything here is read-only for the cluster. The only side effect
+# is pulling the CURRENT version's core images on the primary control plane,
+# which proves the Katello mirror serves them and caches their blobs there (the
+# mirror is on_demand) so a rollback never depends on registry.k8s.io.
+# Any failure stops the run before a node is cordoned.
+
+- name: Require the upgrade inputs
+  ansible.builtin.assert:
+    that:
+      - cluster_env is defined
+      - cluster_env in ['test', 'prod']
+      - k8s_target_version is defined
+      - (k8s_target_version | string) is match('^1\.\d+\.\d+$')
+      - k8s_cluster_cps | length > 0
+    fail_msg: >-
+      Pass -e cluster_env=test|prod and -e k8s_target_version=1.NN.P
+      (no leading v). Found control planes: {{ k8s_cluster_cps }}
+  run_once: true
+
+- name: Require an image-mode node
+  ansible.builtin.stat:
+    path: /run/ostree-booted
+  register: _ostree_booted
+  failed_when: not _ostree_booted.stat.exists
+
+# --- Cluster version + skew -------------------------------------------------
+- name: Read the cluster's kubeadm ClusterConfiguration
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system
+    get configmap kubeadm-config -o jsonpath={.data.ClusterConfiguration}
+  register: _k8s_cc
+  changed_when: false
+  delegate_to: "{{ k8s_primary_cp }}"
+  run_once: true
+
+- name: Work out the current and target versions
+  ansible.builtin.set_fact:
+    k8s_cluster_version: "{{ (_k8s_cc.stdout | from_yaml).kubernetesVersion | regex_replace('^v', '') }}"
+    k8s_cluster_image_repository: "{{ (_k8s_cc.stdout | from_yaml).imageRepository | default('registry.k8s.io') }}"
+
+- name: Refuse anything but one minor up, or a later patch of the same minor
+  vars:
+    _cur_minor: "{{ k8s_cluster_version.split('.')[1] | int }}"
+    _tgt_minor: "{{ (k8s_target_version | string).split('.')[1] | int }}"
+  ansible.builtin.assert:
+    that: >-
+      (_tgt_minor | int == (_cur_minor | int) + 1) or
+      (_tgt_minor | int == _cur_minor | int and (k8s_target_version | string) is version(k8s_cluster_version, '>='))
+    fail_msg: >-
+      Control plane is v{{ k8s_cluster_version }}; kubeadm can only go one minor at
+      a time, so v{{ k8s_target_version }} is not a valid next step.
+  run_once: true
+
+- name: Read the cluster's nodes
+  ansible.builtin.command: "{{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get nodes -o json"
+  register: _k8s_nodes
+  changed_when: false
+  delegate_to: "{{ k8s_primary_cp }}"
+  run_once: true
+
+- name: Require every node Ready, schedulable and not newer than the target
+  vars:
+    _items: "{{ (_k8s_nodes.stdout | from_json)['items'] }}"
+    _not_ready: >-
+      {%- set out = [] -%}
+      {%- for n in _items -%}
+        {%- if n.status.conditions | selectattr('type', 'equalto', 'Ready')
+               | selectattr('status', 'equalto', 'True') | list | length == 0 -%}
+          {%- set _ = out.append(n.metadata.name) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  ansible.builtin.assert:
+    that:
+      - _items | length == (k8s_cluster_cps | length) + (k8s_cluster_workers | length)
+      - _not_ready | length == 0
+      - k8s_upgrade_allow_cordoned or (_items | selectattr('spec.unschedulable', 'defined')
+          | selectattr('spec.unschedulable') | list | length == 0)
+      - _items | map(attribute='status.nodeInfo.kubeletVersion') | map('regex_replace', '^v', '')
+          | select('version', k8s_target_version | string, '>') | list | length == 0
+    fail_msg: >-
+      Cluster nodes are not in a state to upgrade (expected
+      {{ (k8s_cluster_cps | length) + (k8s_cluster_workers | length) }} nodes, all Ready and
+      schedulable). Not Ready: {{ _not_ready }}. Kubelets:
+      {{ _items | map(attribute='status.nodeInfo.kubeletVersion') | list }}
+  run_once: true
+
+# --- Workload health --------------------------------------------------------
+- name: Read Pending pods
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get pods -A
+    --field-selector=status.phase=Pending -o name
+  register: _k8s_pending
+  changed_when: false
+  failed_when: _k8s_pending.stdout | length > 0
+  delegate_to: "{{ k8s_primary_cp }}"
+  run_once: true
+
+# Covers the admission webhooks (Kyverno, cert-manager) too: a webhook whose
+# backing Deployment isn't fully available can block every drain and apply.
+- name: Require every workload fully available
+  ansible.builtin.include_tasks: check_workloads.yml
+  vars:
+    k8s_workload_retries: 0
+  when: inventory_hostname == k8s_cluster_cps[0]
+
+# --- etcd -------------------------------------------------------------------
+- name: Check etcd member health
+  ansible.builtin.include_tasks: etcd_health.yml
+  when: inventory_hostname == k8s_cluster_cps[0]
+
+# --- Per node ---------------------------------------------------------------
+- name: Check free space for the staged image
+  ansible.builtin.command: df --output=avail -BG /sysroot
+  register: _k8s_sysroot
+  changed_when: false
+  failed_when: (_k8s_sysroot.stdout_lines[-1] | regex_replace('[^0-9]', '') | int) < k8s_upgrade_min_sysroot_free_gb
+
+- name: Check control-plane certificates are not about to expire
+  ansible.builtin.command: >
+    openssl x509 -noout -checkend {{ k8s_upgrade_cert_min_days * 86400 }}
+    -in /etc/kubernetes/pki/{{ item }}
+  loop:
+    - ca.crt
+    - apiserver.crt
+    - apiserver-kubelet-client.crt
+    - front-proxy-client.crt
+    - etcd/server.crt
+    - etcd/peer.crt
+  changed_when: false
+  when: inventory_hostname in k8s_cluster_cps
+
+# Server-side dry run evaluates real evictions, so a PodDisruptionBudget that
+# would block the drain fails here instead of halfway through the roll.
+# A dry run never sees its pods go away, so it always runs into --timeout and
+# exits non-zero: judge it by its eviction errors, not its exit code.
+# Longhorn's instance-manager-* PDBs always allow 0 disruptions until the node
+# is ACTUALLY cordoned (Longhorn lifts them then, per node-drain-policy), so
+# they are expected here; volume health is checked before each worker instead.
+- name: Dry-run the drain of every node
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+    drain {{ inventory_hostname }} --ignore-daemonsets --delete-emptydir-data
+    --force --dry-run=server --timeout=20s
+  register: _k8s_drain_dry_run
+  changed_when: false
+  failed_when: >-
+    (_k8s_drain_dry_run.stdout_lines + _k8s_drain_dry_run.stderr_lines)
+    | select('search', 'error when evicting')
+    | reject('search', '"instance-manager-[0-9a-f]+" -n "longhorn-system"')
+    | list | length > 0
+  delegate_to: "{{ k8s_primary_cp }}"
+
+# --- Images in Katello ------------------------------------------------------
+- name: Resolve the target node image digests
+  ansible.builtin.command: "skopeo inspect --no-tags docker://{{ item }}:{{ k8s_image_tag }}"
+  loop:
+    - "{{ k8s_node_image_cp }}"
+    - "{{ k8s_node_image_worker }}"
+  register: _k8s_node_images
+  changed_when: false
+  delegate_to: "{{ k8s_primary_cp }}"
+  run_once: true
+
+- name: Record the target node image digests
+  ansible.builtin.set_fact:
+    k8s_target_digest_cp: "{{ (_k8s_node_images.results[0].stdout | from_json).Digest }}"
+    k8s_target_digest_worker: "{{ (_k8s_node_images.results[1].stdout | from_json).Digest }}"
+
+- name: Check the target kube-apiserver image is in the Katello mirror
+  ansible.builtin.command: "skopeo inspect --no-tags docker://{{ k8s_image_repository }}/kube-apiserver:v{{ k8s_target_version }}"
+  changed_when: false
+  delegate_to: "{{ k8s_primary_cp }}"
+  run_once: true
+
+- name: List the current version's core images
+  ansible.builtin.command: >
+    kubeadm config images list --kubernetes-version v{{ k8s_cluster_version }}
+    --image-repository {{ k8s_image_repository }}
+  register: _k8s_current_images
+  changed_when: false
+  delegate_to: "{{ k8s_primary_cp }}"
+  run_once: true
+
+- name: Pull the current version's core images from Katello (rollback cache)
+  ansible.builtin.command: "crictl pull {{ item }}"
+  loop: "{{ _k8s_current_images.stdout_lines }}"
+  changed_when: false
+  delegate_to: "{{ k8s_primary_cp }}"
+  run_once: true
+
+- name: Preflight summary
+  ansible.builtin.debug:
+    msg:
+      - "Cluster          : {{ cluster_env }} ({{ k8s_cluster_cps | length }} CP / {{ k8s_cluster_workers | length }} workers)"
+      - "Control plane    : v{{ k8s_cluster_version }} -> v{{ k8s_target_version }}"
+      - "Image repository : {{ k8s_cluster_image_repository }} -> {{ k8s_image_repository }}"
+      - "CP image         : {{ k8s_node_image_cp }}:{{ k8s_image_tag }}@{{ k8s_target_digest_cp }}"
+      - "Worker image     : {{ k8s_node_image_worker }}:{{ k8s_image_tag }}@{{ k8s_target_digest_worker }}"
+  run_once: true

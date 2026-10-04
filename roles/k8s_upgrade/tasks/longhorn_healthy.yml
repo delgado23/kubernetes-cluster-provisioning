@@ -1,0 +1,19 @@
+---
+# Before draining a worker: every Longhorn volume healthy (all replicas up), so
+# taking this node's replica away never leaves a volume on its last copy.
+# Longhorn's node-drain-policy (block-if-contains-last-replica) would block the
+# drain anyway; waiting here turns a stuck drain into a clear message.
+- name: Wait for every Longhorn volume to be healthy
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n longhorn-system
+    get volumes.longhorn.io -o json
+  register: _k8s_lh_volumes
+  changed_when: false
+  until: >-
+    _k8s_lh_volumes.rc == 0 and
+    ((_k8s_lh_volumes.stdout | from_json)['items']
+      | rejectattr('status.robustness', 'equalto', 'healthy')
+      | selectattr('status.state', 'equalto', 'attached') | list | length) == 0
+  retries: 40
+  delay: 15
+  delegate_to: "{{ k8s_primary_cp }}"

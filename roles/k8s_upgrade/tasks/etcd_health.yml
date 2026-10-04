@@ -1,0 +1,20 @@
+---
+# All etcd members healthy, and as many members as this cluster has control
+# planes. Runs etcdctl inside the primary control plane's etcd static pod.
+- name: Check etcd member health
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system
+    exec etcd-{{ k8s_primary_cp }} --
+    etcdctl --endpoints=https://127.0.0.1:2379
+    --cacert=/etc/kubernetes/pki/etcd/ca.crt
+    --cert=/etc/kubernetes/pki/etcd/healthcheck-client.crt
+    --key=/etc/kubernetes/pki/etcd/healthcheck-client.key
+    endpoint health --cluster -w json
+  register: _k8s_etcd_health
+  changed_when: false
+  until: >-
+    _k8s_etcd_health.rc == 0 and
+    (_k8s_etcd_health.stdout | from_json | selectattr('health') | list | length) == (k8s_cluster_cps | length)
+  retries: 20
+  delay: 15
+  delegate_to: "{{ k8s_primary_cp }}"

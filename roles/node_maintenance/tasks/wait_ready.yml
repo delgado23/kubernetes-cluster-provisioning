@@ -1,0 +1,23 @@
+---
+# After a reboot: wait for kubelet, then for the node to report Ready.
+# Shared with the k8s_upgrade role (include_role tasks_from). Expects
+# kubectl_bin, kubeconfig and, for workers, control_plane_host.
+- name: Wait for kubelet service to be active
+  ansible.builtin.systemd:
+    name: kubelet
+  register: kubelet_status
+  until: kubelet_status.status.ActiveState == "active"
+  retries: 20
+  delay: 15
+
+- name: Wait for node to become Ready in the cluster
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+    get node {{ inventory_hostname }}
+    --output=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+  delegate_to: "{{ control_plane_host | default(omit) }}"
+  register: node_ready
+  until: node_ready.stdout == "True"
+  retries: 30
+  delay: 15
+  changed_when: false

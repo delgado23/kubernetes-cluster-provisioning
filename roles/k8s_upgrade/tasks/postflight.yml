@@ -1,0 +1,73 @@
+---
+# After the roll: every node on the target, the control plane and its add-ons
+# pulling from the Katello mirror, and the cluster healthy.
+- name: Read this node's booted image and kubelet
+  ansible.builtin.command: bootc status --json
+  register: _k8s_post_bootc
+  changed_when: false
+
+- name: Require this node on the target image
+  ansible.builtin.assert:
+    that: >-
+      (_k8s_post_bootc.stdout | from_json).status.booted.image.imageDigest in
+      [k8s_target_digest_cp, k8s_target_digest_worker]
+    fail_msg: "{{ inventory_hostname }} is not booted on the target image."
+
+- name: Read the cluster's kubeadm ClusterConfiguration
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system
+    get configmap kubeadm-config -o jsonpath={.data.ClusterConfiguration}
+  register: _k8s_post_cc
+  changed_when: false
+  delegate_to: "{{ k8s_primary_cp }}"
+  run_once: true
+
+- name: Read the images kubeadm manages
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system get pods
+    -l 'tier=control-plane' -o jsonpath={.items[*].spec.containers[*].image}
+  register: _k8s_post_cp_images
+  changed_when: false
+  delegate_to: "{{ k8s_primary_cp }}"
+  run_once: true
+
+- name: Read the kube-proxy and CoreDNS images
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system get ds/kube-proxy deploy/coredns
+    -o jsonpath={.items[*].spec.template.spec.containers[*].image}
+  register: _k8s_post_addon_images
+  changed_when: false
+  delegate_to: "{{ k8s_primary_cp }}"
+  run_once: true
+
+- name: Require the target version, from the Katello mirror
+  vars:
+    _images: "{{ (_k8s_post_cp_images.stdout ~ ' ' ~ _k8s_post_addon_images.stdout).split() }}"
+  ansible.builtin.assert:
+    that:
+      - (_k8s_post_cc.stdout | from_yaml).kubernetesVersion == 'v' ~ k8s_target_version
+      - (_k8s_post_cc.stdout | from_yaml).imageRepository == k8s_image_repository
+      - _images | length > 0
+      - _images | reject('match', k8s_image_repository ~ '/') | list | length == 0
+    fail_msg: >-
+      kubeadm config {{ (_k8s_post_cc.stdout | from_yaml).kubernetesVersion }} /
+      {{ (_k8s_post_cc.stdout | from_yaml).imageRepository | default('registry.k8s.io') }};
+      images not from the mirror: {{ _images | reject('match', k8s_image_repository ~ '/') | list }}
+  run_once: true
+
+- name: Check etcd member health
+  ansible.builtin.include_tasks: etcd_health.yml
+  when: inventory_hostname == k8s_cluster_cps[0]
+
+- name: Final gate
+  ansible.builtin.include_tasks: smoke.yml
+  when: inventory_hostname == k8s_cluster_cps[0]
+
+- name: Upgrade summary
+  ansible.builtin.debug:
+    msg:
+      - "Cluster       : {{ cluster_env }} is on v{{ k8s_target_version }}"
+      - "Core images   : {{ k8s_image_repository }}"
+      - "Backups       : {{ k8s_upgrade_backup_dir }} on each node (etcd snapshot on every control plane)"
+      - "Next          : point the host groups at :{{ k8s_image_tag }} (foreman-bootc setup_kubernetes_image_mode.rb) and re-enable the schedules"
+  run_once: true

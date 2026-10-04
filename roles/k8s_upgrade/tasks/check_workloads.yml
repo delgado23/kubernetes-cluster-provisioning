@@ -1,0 +1,31 @@
+---
+# Every Deployment/StatefulSet fully available and every DaemonSet without
+# unavailable pods. Retries let a just-uncordoned node's pods settle.
+# Vars: k8s_workload_retries (0 = check once).
+- name: Wait for every workload to be fully available
+  vars:
+    _bad: >-
+      {%- set out = [] -%}
+      {%- if _k8s_workloads.stdout | default('') | length > 0 -%}
+      {%- for w in (_k8s_workloads.stdout | from_json)['items'] -%}
+        {%- set s = w.status | default({}) -%}
+        {%- if w.kind == 'DaemonSet' -%}
+          {%- if (s.numberUnavailable | default(0)) > 0 -%}{%- set _ = out.append('DaemonSet ' ~ w.metadata.namespace ~ '/' ~ w.metadata.name) -%}{%- endif -%}
+        {%- elif (w.spec.replicas | default(1)) > 0 and (s.availableReplicas | default(0)) < (w.spec.replicas | default(1)) -%}
+          {%- set _ = out.append(w.kind ~ ' ' ~ w.metadata.namespace ~ '/' ~ w.metadata.name) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- else -%}{%- set _ = out.append('could not list workloads') -%}{%- endif -%}
+      {{ out }}
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get deploy,sts,ds -A -o json
+  register: _k8s_workloads
+  changed_when: false
+  until: _bad | length == 0
+  retries: "{{ k8s_workload_retries | default(20) }}"
+  delay: 15
+  delegate_to: "{{ k8s_primary_cp }}"
+
+- name: Workloads available
+  ansible.builtin.debug:
+    msg: "All Deployments, StatefulSets and DaemonSets are fully available."
