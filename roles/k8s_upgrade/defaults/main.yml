@@ -31,3 +31,7 @@ k8s_upgrade_settle_retries: 40      # a cordoned node normally means a previous 
 k8s_upgrade_smoke_urls: >-
   {{ ['https://headlamp.k8s.garaventaville.com/'] if cluster_env == 'prod' else [] }}
 k8s_upgrade_smoke_validate_certs: "{{ cluster_env == 'prod' }}"
+
+# Pause this cluster's autoscale schedules for the run (needs vars/vault.yml,
+# i.e. the Ascender vault credential); false for CLI runs without the vault.
+k8s_upgrade_manage_autoscale: true
