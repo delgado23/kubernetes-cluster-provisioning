@@ -1,0 +1,313 @@
+---
+# Upgrade ONE node (the calling play runs serial: 1). This follows the kubeadm
+# procedure, with bootc supplying the new binaries:
+#
+#   stage the target image (no reboot) -> pre-pull core images -> [first CP:
+#   etcd snapshot] -> drain -> kubeadm upgrade apply|node using the STAGED
+#   kubeadm -> containerd config -> reboot into the new image (new kubelet)
+#   -> Ready -> uncordon
+#
+# kubeadm upgrades the control plane BEFORE the node boots the new kubelet, so
+# the kubelet is never newer than the API server. Until the reboot the node
+# still runs its old image. A failure before the reboot discards the staged
+# deployment and leaves the node cordoned for a human. After a first control
+# plane's `kubeadm upgrade apply`, the way back is the etcd snapshot (README).
+#
+# Vars from the play: k8s_node_image (repo, no tag), k8s_target_digest.
+
+- name: Read this node's bootc status
+  ansible.builtin.command: bootc status --json
+  register: _k8s_bootc
+  changed_when: false
+
+- name: Read this node's kubelet version and schedulability
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get node {{ inventory_hostname }}
+    -o jsonpath={.status.nodeInfo.kubeletVersion},{.spec.unschedulable}
+  register: _k8s_node_state
+  changed_when: false
+  delegate_to: "{{ k8s_primary_cp }}"
+
+- name: Work out where this node stands
+  ansible.builtin.set_fact:
+    _k8s_booted_digest: "{{ (_k8s_bootc.stdout | from_json).status.booted.image.imageDigest }}"
+    _k8s_node_on_target: >-
+      {{ _k8s_node_state.stdout.split(',')[0] == 'v' ~ k8s_target_version
+         and (_k8s_bootc.stdout | from_json).status.booted.image.imageDigest == k8s_target_digest }}
+    _k8s_ts: "{{ now(utc=true, fmt='%Y%m%dT%H%M%SZ') }}"
+
+# Re-running after a partial failure: a node that already booted the target
+# image only needs to be schedulable again.
+- name: Finish a node that is already on the target
+  when: _k8s_node_on_target | bool
+  block:
+    - name: Uncordon a node that is already on the target
+      ansible.builtin.include_role:
+        name: node_maintenance
+        tasks_from: uncordon.yml
+
+    - name: Skip the rest for this node
+      ansible.builtin.meta: end_host
+
+# --- Back up node state (before anything changes) ---------------------------
+- name: Create the backup directory
+  ansible.builtin.file:
+    path: "{{ k8s_upgrade_backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# /var/lib/kubelet is NOT part of the bootc deployment, so a rollback of the
+# image keeps the kubelet config `kubeadm upgrade node` rewrote; this is what
+# upgrade-rollback.yml restores.
+- name: Back up kubeadm, kubelet and containerd state
+  ansible.builtin.command: >
+    tar --ignore-failed-read -czf
+    {{ k8s_upgrade_backup_dir }}/node-state-{{ _k8s_ts }}-v{{ _k8s_node_state.stdout.split(',')[0] | regex_replace('^v', '') }}.tgz
+    /etc/kubernetes /var/lib/kubelet/config.yaml /var/lib/kubelet/kubeadm-flags.env
+    /etc/containerd/config.toml
+  args:
+    creates: "{{ k8s_upgrade_backup_dir }}/node-state-{{ _k8s_ts }}-v{{ _k8s_node_state.stdout.split(',')[0] | regex_replace('^v', '') }}.tgz"
+
+# The tarball holds the cluster CA and the Secret encryption config.
+- name: Lock down the node-state backup
+  ansible.builtin.file:
+    path: "{{ k8s_upgrade_backup_dir }}/node-state-{{ _k8s_ts }}-v{{ _k8s_node_state.stdout.split(',')[0] | regex_replace('^v', '') }}.tgz"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Upgrade the node (discarding the staged image on failure)
+  block:
+    # --- Stage the target image --------------------------------------------
+    - name: Stage the target image (no reboot)
+      ansible.builtin.command: "bootc switch {{ k8s_node_image }}:{{ k8s_image_tag }}"
+      changed_when: true
+
+    - name: Read the staged deployment
+      ansible.builtin.command: bootc status --json
+      register: _k8s_bootc_staged
+      changed_when: false
+
+    - name: Locate the staged deployment
+      ansible.builtin.set_fact:
+        _k8s_staged: "{{ (_k8s_bootc_staged.stdout | from_json).status.staged }}"
+
+    # The tag is mutable (every image build re-pushes it): insist on the digest
+    # preflight resolved, so every node in this run gets the same image.
+    - name: Require the staged image to be the preflight digest
+      ansible.builtin.assert:
+        that:
+          - _k8s_staged is not none
+          - _k8s_staged.image.image.image == k8s_node_image ~ ':' ~ k8s_image_tag
+          - _k8s_staged.image.imageDigest == k8s_target_digest
+        fail_msg: >-
+          Staged {{ _k8s_staged.image.image.image | default('nothing') }}@{{ _k8s_staged.image.imageDigest | default('-') }},
+          expected {{ k8s_node_image }}:{{ k8s_image_tag }}@{{ k8s_target_digest }}.
+          Was the image rebuilt mid-run (JT 62 / OS Update Workflow)?
+
+    - name: Point at the staged deployment's kubeadm
+      ansible.builtin.set_fact:
+        k8s_staged_kubeadm: >-
+          /ostree/deploy/{{ _k8s_staged.ostree.stateroot }}/deploy/{{ _k8s_staged.ostree.checksum }}.{{ _k8s_staged.ostree.deploySerial }}/usr/bin/kubeadm
+
+    - name: Check the staged kubeadm is the target version
+      ansible.builtin.command: "{{ k8s_staged_kubeadm }} version -o short"
+      register: _k8s_staged_version
+      changed_when: false
+      failed_when: _k8s_staged_version.stdout | trim != 'v' ~ k8s_target_version
+
+    # --- Pre-pull (still schedulable, nothing disrupted yet) ----------------
+    - name: List the target version's core images
+      ansible.builtin.command: >
+        {{ k8s_staged_kubeadm }} config images list
+        --kubernetes-version v{{ k8s_target_version }}
+        --image-repository {{ k8s_image_repository }}
+      register: _k8s_target_images
+      changed_when: false
+
+    # Control planes need every image; workers only run kube-proxy, CoreDNS
+    # and the pause sandbox.
+    - name: Pull the target version's core images from Katello
+      ansible.builtin.command: "crictl pull {{ item }}"
+      loop: >-
+        {{ _k8s_target_images.stdout_lines if node_role == 'control-plane'
+           else _k8s_target_images.stdout_lines | select('search', '/(kube-proxy|coredns|pause):') | list }}
+      register: _k8s_pull
+      until: _k8s_pull.rc == 0
+      retries: 3
+      delay: 10
+      changed_when: false
+
+    # --- Cluster state as of now (resumable runs re-read it) ----------------
+    - name: Read the cluster's kubeadm ClusterConfiguration
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system
+        get configmap kubeadm-config -o jsonpath={.data.ClusterConfiguration}
+      register: _k8s_cc_now
+      changed_when: false
+      delegate_to: "{{ k8s_primary_cp }}"
+
+    - name: Decide between `upgrade apply` and `upgrade node`
+      ansible.builtin.set_fact:
+        _k8s_cc_doc: "{{ _k8s_cc_now.stdout | from_yaml }}"
+        _k8s_do_apply: >-
+          {{ inventory_hostname == k8s_primary_cp
+             and (_k8s_cc_now.stdout | from_yaml).kubernetesVersion != 'v' ~ k8s_target_version }}
+
+    - name: Snapshot etcd before the point of no return
+      ansible.builtin.include_tasks: etcd_snapshot.yml
+      when: _k8s_do_apply | bool
+
+    # --- Drain ---------------------------------------------------------------
+    - name: Cordon and drain
+      ansible.builtin.include_role:
+        name: node_maintenance
+        tasks_from: drain.yml
+
+    # One-time switch of the cluster to the Katello mirror: `upgrade apply`
+    # regenerates every static pod, kube-proxy and CoreDNS from this config.
+    - name: Point kubeadm's imageRepository at the Katello mirror
+      ansible.builtin.command: >-
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system
+        patch configmap kubeadm-config --type merge
+        -p {{ {'data': {'ClusterConfiguration': (_k8s_cc_doc | combine({'imageRepository': k8s_image_repository}) | to_nice_yaml(indent=2))}} | to_json | quote }}
+      when:
+        - _k8s_do_apply | bool
+        - _k8s_cc_doc.imageRepository | default('registry.k8s.io') != k8s_image_repository
+      changed_when: true
+
+    # --- kubeadm (staged binary) ----------------------------------------------
+    # The apiserver liveness patch lives in kubeadm-patches (control planes
+    # only); it has to be passed again or the regenerated manifest drops it.
+    - name: Look for kubeadm patches
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubeadm-patches
+      register: _k8s_patches
+
+    - name: kubeadm upgrade plan
+      ansible.builtin.command: "{{ k8s_staged_kubeadm }} upgrade plan v{{ k8s_target_version }}"
+      register: _k8s_plan
+      changed_when: false
+      when: _k8s_do_apply | bool
+
+    - name: Show the upgrade plan
+      ansible.builtin.debug:
+        var: _k8s_plan.stdout_lines
+      when: _k8s_do_apply | bool
+
+    - name: kubeadm upgrade apply (first control plane — point of no return)
+      ansible.builtin.command: >-
+        {{ k8s_staged_kubeadm }} upgrade apply v{{ k8s_target_version }} --yes
+        {{ '--patches /etc/kubernetes/kubeadm-patches' if _k8s_patches.stat.exists else '' }}
+      register: _k8s_apply
+      changed_when: true
+      when: _k8s_do_apply | bool
+
+    - name: kubeadm upgrade node
+      ansible.builtin.command: >-
+        {{ k8s_staged_kubeadm }} upgrade node
+        {{ '--patches /etc/kubernetes/kubeadm-patches' if _k8s_patches.stat.exists else '' }}
+      register: _k8s_upgrade_node
+      changed_when: true
+      when: not (_k8s_do_apply | bool)
+
+    - name: Show kubeadm output
+      ansible.builtin.debug:
+        msg: "{{ _k8s_apply.stdout_lines if _k8s_do_apply | bool else _k8s_upgrade_node.stdout_lines }}"
+
+    # Same template roles/common deploys; picks up the Katello pause image.
+    # The reboot below starts containerd with it.
+    - name: Render containerd config
+      ansible.builtin.template:
+        src: "{{ role_path }}/../common/templates/containerd-config.toml.j2"
+        dest: /etc/containerd/config.toml
+        owner: root
+        group: root
+        mode: "0644"
+
+  rescue:
+    - name: Discard the staged image (the node keeps booting its current one)
+      ansible.builtin.command: rpm-ostree cleanup --pending
+      changed_when: true
+      failed_when: false
+
+    - name: Confirm nothing is staged any more
+      ansible.builtin.command: bootc status --json
+      register: _k8s_bootc_after_rescue
+      changed_when: false
+
+    - name: Stop the roll at this node
+      ansible.builtin.fail:
+        msg: >-
+          Upgrade of {{ inventory_hostname }} failed before its reboot; the roll
+          stops here and later nodes were not touched. Staged image discarded:
+          {{ (_k8s_bootc_after_rescue.stdout | from_json).status.staged is none }}.
+          The node still boots {{ _k8s_booted_digest }} and is left CORDONED
+          (if it got that far) for a human to inspect.
+          kubeadm upgrade apply ran: {{ _k8s_apply is defined and _k8s_apply is not skipped and _k8s_apply is succeeded }}
+          -- if it did, the control plane is already on v{{ k8s_target_version }}
+          (an older kubelet is a supported skew); continue by re-running, or roll
+          back with the etcd snapshot (README). Failed task: {{ ansible_failed_task.name | default('?') }}:
+          {{ ansible_failed_result.msg | default(ansible_failed_result.stderr | default('')) }}
+
+# --- Reboot into the new image ---------------------------------------------
+- name: Reboot into the target image
+  ansible.builtin.reboot:
+    reboot_timeout: "{{ reboot_timeout }}"
+    msg: "Rebooting into Kubernetes v{{ k8s_target_version }}"
+    pre_reboot_delay: 5
+    post_reboot_delay: 30
+
+- name: Wait for the node to come back Ready
+  ansible.builtin.include_role:
+    name: node_maintenance
+    tasks_from: wait_ready.yml
+
+- name: Read the booted image
+  ansible.builtin.command: bootc status --json
+  register: _k8s_bootc_after
+  changed_when: false
+
+- name: Require the target image and kubelet
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get node {{ inventory_hostname }}
+    -o jsonpath={.status.nodeInfo.kubeletVersion}
+  register: _k8s_kubelet_after
+  changed_when: false
+  delegate_to: "{{ control_plane_host | default(omit) }}"
+  failed_when: >-
+    _k8s_kubelet_after.stdout != 'v' ~ k8s_target_version
+    or (_k8s_bootc_after.stdout | from_json).status.booted.image.imageDigest != k8s_target_digest
+
+- name: Wait for this control plane's static pods
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system wait
+    --for=condition=Ready --timeout=300s
+    pod/kube-apiserver-{{ inventory_hostname }}
+    pod/kube-controller-manager-{{ inventory_hostname }}
+    pod/kube-scheduler-{{ inventory_hostname }}
+    pod/etcd-{{ inventory_hostname }}
+  changed_when: false
+  when: node_role == 'control-plane'
+
+- name: Check etcd member health
+  ansible.builtin.include_tasks: etcd_health.yml
+  when: node_role == 'control-plane'
+
+- name: Uncordon
+  ansible.builtin.include_role:
+    name: node_maintenance
+    tasks_from: uncordon.yml
+
+- name: Let the cluster settle before the next node
+  ansible.builtin.include_tasks: settle.yml
+
+- name: Node upgrade summary
+  ansible.builtin.debug:
+    msg:
+      - "Node    : {{ inventory_hostname }} ({{ node_role }})"
+      - "kubelet : {{ _k8s_kubelet_after.stdout }}"
+      - "Image   : {{ k8s_node_image }}:{{ k8s_image_tag }}@{{ k8s_target_digest }}"
+      - "Backup  : {{ k8s_upgrade_backup_dir }}"

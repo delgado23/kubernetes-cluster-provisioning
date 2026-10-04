@@ -1,0 +1,21 @@
+---
+# Uncordon the node and verify it is schedulable again.
+# Shared with the k8s_upgrade role (include_role tasks_from). Expects
+# kubectl_bin, kubeconfig and, for workers, control_plane_host.
+- name: Uncordon node (mark schedulable)
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+    uncordon {{ inventory_hostname }}
+  delegate_to: "{{ control_plane_host | default(omit) }}"
+  register: uncordon_result
+  changed_when: "'uncordoned' in uncordon_result.stdout"
+
+- name: Verify node is uncordoned and Ready
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }}
+    get node {{ inventory_hostname }}
+    --output=jsonpath='{.spec.unschedulable}'
+  delegate_to: "{{ control_plane_host | default(omit) }}"
+  register: uncordon_check
+  changed_when: false
+  failed_when: uncordon_check.stdout == "true"

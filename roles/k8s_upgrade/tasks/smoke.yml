@@ -1,0 +1,77 @@
+---
+# Gate: the cluster is healthy enough to keep rolling. Runs after the first
+# control plane, after the first worker, and in postflight. A failure stops the
+# play (any_errors_fatal), leaving the remaining nodes untouched.
+- name: API server ready through the VIP
+  ansible.builtin.command: "{{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get --raw /readyz"
+  register: _k8s_readyz
+  changed_when: false
+  until: _k8s_readyz.stdout == 'ok'
+  retries: 20
+  delay: 15
+  delegate_to: "{{ k8s_primary_cp }}"
+
+- name: Every node Ready
+  ansible.builtin.command: "{{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get nodes -o json"
+  register: _k8s_gate_nodes
+  changed_when: false
+  vars:
+    _not_ready: >-
+      {%- set out = [] -%}
+      {%- for n in (((_k8s_gate_nodes.stdout | default('')) or '{}') | from_json).get('items', []) -%}
+        {%- if n.status.conditions | selectattr('type', 'equalto', 'Ready')
+               | selectattr('status', 'equalto', 'True') | list | length == 0 -%}
+          {%- set _ = out.append(n.metadata.name) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  until: _k8s_gate_nodes.rc == 0 and _not_ready | length == 0
+  retries: 20
+  delay: 15
+  delegate_to: "{{ k8s_primary_cp }}"
+
+- name: Every workload available
+  ansible.builtin.include_tasks: check_workloads.yml
+
+- name: Argo CD applications healthy
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} get applications.argoproj.io -A -o json
+  register: _k8s_argo_apps
+  changed_when: false
+  failed_when: false
+  until: >-
+    _k8s_argo_apps.rc != 0 or
+    ((_k8s_argo_apps.stdout | from_json)['items']
+      | rejectattr('status.health.status', 'equalto', 'Healthy') | list | length) == 0
+  retries: 20
+  delay: 15
+  delegate_to: "{{ k8s_primary_cp }}"
+
+- name: Require Argo CD applications healthy
+  ansible.builtin.assert:
+    that: >-
+      _k8s_argo_apps.rc != 0 or
+      ((_k8s_argo_apps.stdout | from_json)['items']
+        | rejectattr('status.health.status', 'equalto', 'Healthy') | list | length) == 0
+    fail_msg: >-
+      Unhealthy Argo CD applications:
+      {{ (_k8s_argo_apps.stdout | from_json)['items'] | rejectattr('status.health.status', 'equalto', 'Healthy')
+         | map(attribute='metadata.name') | list }}
+
+- name: Smoke-test HTTPS endpoints
+  ansible.builtin.uri:
+    url: "{{ item }}"
+    method: GET
+    follow_redirects: none
+    validate_certs: "{{ k8s_upgrade_smoke_validate_certs | bool }}"
+    status_code: [200, 301, 302, 303, 307, 308, 401]
+  loop: "{{ k8s_upgrade_smoke_urls }}"
+  register: _k8s_smoke
+  until: _k8s_smoke is succeeded
+  retries: 10
+  delay: 15
+  delegate_to: "{{ k8s_primary_cp }}"
+
+- name: Gate passed
+  ansible.builtin.debug:
+    msg: "Gate passed after {{ inventory_hostname }}: API ready, nodes Ready, workloads available, Argo healthy, endpoints answering."

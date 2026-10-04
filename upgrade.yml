@@ -1,0 +1,172 @@
+---
+# =============================================================================
+# upgrade.yml — Rolling Kubernetes upgrade for image-mode (bootc) clusters
+# =============================================================================
+# Moves one cluster ONE minor up (or to a later patch of its minor), a node at a
+# time, with no rebuild and no data movement:
+#
+#   preflight (read-only) -> control planes one by one -> gate after the first
+#   -> workers one by one -> gate after the first -> postflight
+#
+# Per node (roles/k8s_upgrade/tasks/node.yml): `bootc switch` stages the
+# foreman-bootc image for the target version, kubeadm from that STAGED image
+# upgrades the node's control-plane/kubelet config while it still runs the old
+# image, and the reboot brings up the new kubelet. The first control plane's
+# `kubeadm upgrade apply` is preceded by an etcd snapshot copied to every
+# control plane. Core images come from the Katello mirror of registry.k8s.io
+# (vars/kubernetes.yml); the first upgrade switches the cluster to it.
+#
+# Prerequisites:
+#   - foreman-content-views has synced the target minor (RPM repo + core images)
+#   - foreman-bootc has built + promoted kubernetes-{controlplane,worker}:<tag>
+#   - (autoscale schedules for this cluster are paused by the run itself and
+#     re-enabled after a successful postflight; -e k8s_upgrade_manage_autoscale=false
+#     to skip, e.g. a CLI run without the vault)
+#   - no bootc image build (JT 62 / OS Update Workflow) during the run: it
+#     re-pushes the tag, and the run insists on the preflight digest
+#
+# Usage (cluster_env has NO default -- this playbook never assumes prod):
+#   ansible-playbook upgrade.yml -e cluster_env=test -e k8s_target_version=1.36.5
+#
+# Re-running after a failure is safe: nodes already on the target image are only
+# uncordoned, and `upgrade apply` runs only while the cluster's kubeadm config
+# is still on the old version. Rollback: upgrade-rollback.yml and the README.
+# =============================================================================
+
+- name: Kubernetes upgrade — pause autoscaling
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Require cluster_env
+      ansible.builtin.assert:
+        that: cluster_env is defined and cluster_env in ['test', 'prod']
+        fail_msg: "Pass -e cluster_env=test|prod -- upgrade.yml has no default cluster."
+
+    - name: Pause this cluster's autoscale schedules
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: autoscale_pause.yml
+
+- name: Kubernetes upgrade — preflight
+  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  vars_files:
+    - vars/kubernetes.yml
+    - vars/upgrade.yml
+  pre_tasks:
+    - name: Require cluster_env
+      ansible.builtin.assert:
+        that: cluster_env is defined and cluster_env in ['test', 'prod']
+        fail_msg: "Pass -e cluster_env=test|prod -- upgrade.yml has no default cluster."
+      run_once: true
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+  tasks:
+    - name: Preflight checks
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: preflight.yml
+
+- name: Kubernetes upgrade — control planes
+  hosts: foreman_almalinux10_kubernetescontrolplanenode
+  serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
+  gather_facts: false
+  become: true
+  vars_files:
+    - vars/kubernetes.yml
+    - vars/upgrade.yml
+  vars:
+    node_role: control-plane
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+  tasks:
+    - name: Upgrade this control plane
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: node.yml
+      vars:
+        k8s_node_image: "{{ k8s_node_image_cp }}"
+        k8s_target_digest: "{{ k8s_target_digest_cp }}"
+
+    - name: Gate after the first control plane
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: smoke.yml
+      when: inventory_hostname == k8s_primary_cp
+
+- name: Kubernetes upgrade — workers
+  hosts: foreman_almalinux10_kubernetesworkernode
+  serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
+  gather_facts: false
+  become: true
+  vars_files:
+    - vars/kubernetes.yml
+    - vars/upgrade.yml
+  vars:
+    node_role: worker
+    # kubectl for workers runs on this cluster's primary control plane
+    # (node_maintenance's drain/uncordon key off delegate_kubectl, as in
+    # maintenance.yml -- workers have no admin.conf).
+    delegate_kubectl: true
+    control_plane_host: "{{ k8s_primary_cp }}"
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+  tasks:
+    - name: Wait for Longhorn volumes to be healthy
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: longhorn_healthy.yml
+
+    - name: Upgrade this worker
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: node.yml
+      vars:
+        k8s_node_image: "{{ k8s_node_image_worker }}"
+        k8s_target_digest: "{{ k8s_target_digest_worker }}"
+
+    - name: Gate after the first worker
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: smoke.yml
+      when: inventory_hostname == k8s_cluster_workers[0]
+
+- name: Kubernetes upgrade — postflight
+  hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  vars_files:
+    - vars/kubernetes.yml
+    - vars/upgrade.yml
+  pre_tasks:
+    - name: Skip nodes that belong to a different cluster
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+  tasks:
+    - name: Postflight checks
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: postflight.yml
+
+- name: Kubernetes upgrade — resume autoscaling
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Re-enable the schedules this run paused
+      ansible.builtin.include_role:
+        name: k8s_upgrade
+        tasks_from: autoscale_resume.yml

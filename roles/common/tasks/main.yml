@@ -62,9 +62,12 @@
     group: root
     mode: '0755'
 
+# Templated only for the sandbox (pause) image, which comes from the Katello
+# mirror of registry.k8s.io (vars/kubernetes.yml). The k8s_upgrade role renders
+# this same template during an upgrade.
 - name: Deploy containerd config.toml
-  ansible.builtin.copy:
-    src: containerd/config.toml
+  ansible.builtin.template:
+    src: containerd-config.toml.j2
     dest: /etc/containerd/config.toml
     owner: root
     group: root

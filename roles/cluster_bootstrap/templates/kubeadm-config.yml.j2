@@ -17,6 +17,12 @@ patches:
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
 clusterName: "k8s-{{ foreman_params.cluster_env }}"
+# Pin the control plane to the node image's own kubeadm (the image tag is the
+# Kubernetes version). Unpinned, kubeadm init asks dl.k8s.io for the newest
+# patch, which left a 1.35.5 image running a v1.35.9 control plane.
+kubernetesVersion: "{{ kubeadm_binary_version }}"
+# Core images come from the Katello mirror of registry.k8s.io (vars/kubernetes.yml).
+imageRepository: "{{ k8s_image_repository }}"
 controlPlaneEndpoint: "{{ foreman_params.k8s_api_endpoint }}:6443"
 networking:
   podSubnet: "{{ k8s_pod_cidr }}"
