@@ -42,3 +42,14 @@ authentik_outpost_url: "http://{{ authentik_url | regex_replace('^https?://', ''
 authentik_argocd_issuer: "{{ authentik_url }}/application/o/argocd/"
 authentik_headlamp_issuer: "{{ authentik_url }}/application/o/headlamp/"
 
+# Longhorn backups (off-cluster, NFS export on the Synology). Only prod gets a
+# target: a throwaway test cluster doesn't need backups, and sharing one
+# backupstore between clusters would mix their backup lists.
+longhorn_backup_nfs_host: 172.16.0.8
+longhorn_backup_nfs_export: /volume1/k8s-longhorn-backup   # Synology shared folder, NFS rw for 172.16.0.0/23
+longhorn_backup_target: >-
+  {{ ('nfs://' ~ longhorn_backup_nfs_host ~ ':' ~ longhorn_backup_nfs_export)
+     if (cluster_env == 'prod' and longhorn_backup_nfs_export | length > 0) else '' }}
+longhorn_backup_cron: "0 2 * * *"       # nightly
+longhorn_backup_retain: 7
+

@@ -589,6 +589,30 @@ The `@headlamp-k8s/prometheus-metrics` plugin is installed automatically via the
 2. Set the Prometheus URL to `https://prometheus.{{ ingress_domain }}`
 3. Charts will appear on node and pod detail pages
 
+## Longhorn Backups
+
+Prod backs up every Longhorn volume off-cluster, to an NFS export on the
+Synology (`longhorn_backup_nfs_host` / `longhorn_backup_nfs_export` in
+`roles/cluster_addons/defaults/main.yml`):
+
+- The default `BackupTarget` points at `nfs://<host>:<export>`. It's set through
+  the Helm value `defaultBackupStore` and also patched on the CR, so an existing
+  cluster follows the variable too.
+- The `backup-daily` RecurringJob (group `default`, so every volume) runs at
+  `longhorn_backup_cron` (02:00) and keeps `longhorn_backup_retain` (7) backups.
+- `upgrade.yml` runs that job on demand in preflight, and waits until every
+  attached volume has a backup strictly newer than the run. It's always
+  mandatory on prod (no override: fix the target before a planned upgrade).
+  Elsewhere it's optional, unless `k8s_upgrade_require_backup=true`.
+- Test clusters get no target: a throwaway cluster needs no backups, and one
+  shared backupstore would mix two clusters' backup lists.
+
+**NFS export (on the Synology):** a shared folder with an NFS rule for
+`172.16.0.0/23`, read/write, squash "Map all users to admin".
+
+**Restore:** Longhorn UI → Backup → pick the backup → Restore. Or create a
+`Volume` with `spec.fromBackup` set to the backup URL.
+
 ## Descheduler
 
 The descheduler runs as a CronJob every 6 hours in the `descheduler` namespace. It watches the cluster for pods that the initial scheduler placed sub-optimally and evicts them so they are rescheduled more evenly. The evicted pods are recreated by their controller (Deployment, DaemonSet, etc.) — no data is lost, and disruption is minimal for workloads with more than one replica.

@@ -1,0 +1,71 @@
+---
+# Before anything changes: an off-cluster backup of every attached Longhorn
+# volume, by running the nightly backup RecurringJob (cluster_addons) now and
+# waiting until each attached volume reports a backup newer than this run.
+# Always required on prod; elsewhere required only with
+# k8s_upgrade_require_backup=true, otherwise skipped without a backup target.
+- name: Read Longhorn's backup target
+  ansible.builtin.command: >
+    {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n longhorn-system
+    get backuptargets.longhorn.io default -o json
+  register: _k8s_bt
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ k8s_primary_cp }}"
+
+- name: Work out whether to back up
+  ansible.builtin.set_fact:
+    _k8s_bt_available: >-
+      {{ _k8s_bt.rc == 0 and ((_k8s_bt.stdout | from_json).status.available | default(false)) | bool }}
+
+- name: Require a working backup target where backups are mandatory
+  ansible.builtin.assert:
+    that: _k8s_bt_available | bool
+    fail_msg: >-
+      Longhorn has no available backup target on {{ cluster_env }}
+      ({{ (_k8s_bt.stdout | from_json).status.conditions | default([]) | map(attribute='message') | list if _k8s_bt.rc == 0 else _k8s_bt.stderr }}).
+      Configure longhorn_backup_nfs_export (cluster_addons) and make the
+      backup target available before upgrading{{ ' -- prod never upgrades without a fresh backup' if cluster_env == 'prod' else '' }}.
+  when: cluster_env == 'prod' or k8s_upgrade_require_backup | bool
+
+- name: Back up every attached Longhorn volume now
+  when: _k8s_bt_available | bool
+  block:
+    - name: Note the start time
+      ansible.builtin.set_fact:
+        _k8s_backup_since: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+
+    - name: Run the backup RecurringJob on demand
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n longhorn-system
+        create job --from=cronjob/{{ k8s_upgrade_backup_recurringjob }}
+        k8s-upgrade-backup-{{ now(utc=true, fmt='%Y%m%d%H%M%S') }}
+      changed_when: true
+      delegate_to: "{{ k8s_primary_cp }}"
+
+    # lastBackupAt is RFC 3339 UTC, so string comparison orders correctly. A
+    # backup stamped at or before the start is from an earlier run: pending.
+    - name: Wait for every attached volume to have a backup from this run
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n longhorn-system
+        get volumes.longhorn.io -o json
+      register: _k8s_backup_vols
+      changed_when: false
+      vars:
+        _pending: >-
+          {%- set out = [] -%}
+          {%- for v in (_k8s_backup_vols.stdout | default('{}') | from_json).get('items', []) -%}
+            {%- if v.status.state | default('') == 'attached'
+                  and (v.status.lastBackupAt | default('')) <= _k8s_backup_since -%}
+              {%- set _ = out.append(v.metadata.name) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+      until: _k8s_backup_vols.rc == 0 and _pending | length == 0
+      retries: "{{ k8s_upgrade_backup_retries }}"
+      delay: 15
+      delegate_to: "{{ k8s_primary_cp }}"
+
+    - name: Longhorn backup done
+      ansible.builtin.debug:
+        msg: "Every attached Longhorn volume has an off-cluster backup newer than {{ _k8s_backup_since }}."

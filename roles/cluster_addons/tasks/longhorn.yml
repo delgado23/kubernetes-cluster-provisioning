@@ -27,6 +27,12 @@
     content: |
       defaultSettings:
         defaultDataPath: /var/lib/longhorn
+      {% if longhorn_backup_target | length > 0 %}
+
+      defaultBackupStore:
+        backupTarget: "{{ longhorn_backup_target }}"
+        pollInterval: 300
+      {% endif %}
 
       longhornManager:
         resources:
@@ -264,3 +270,63 @@
 - name: Print Longhorn NetworkPolicy apply output
   ansible.builtin.debug:
     var: longhorn_netpol_output.stdout_lines
+
+# --- Off-cluster backups (prod only; see defaults/main.yml) -----------------
+# The Helm value only seeds the BackupTarget on install; patching the CR keeps
+# an existing cluster in step with longhorn_backup_target too.
+- name: Point Longhorn's default BackupTarget at the NFS export
+  ansible.builtin.command:
+    cmd: >-
+      kubectl -n {{ longhorn_namespace }} patch backuptargets.longhorn.io default
+      --type merge -p {{ {'spec': {'backupTargetURL': longhorn_backup_target, 'pollInterval': '5m0s'}} | to_json | quote }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: longhorn_backup_target_patch
+  changed_when: "'no change' not in longhorn_backup_target_patch.stdout"
+  when: longhorn_backup_target | length > 0
+
+- name: Wait for the BackupTarget to become available
+  ansible.builtin.command:
+    cmd: >-
+      kubectl -n {{ longhorn_namespace }} get backuptargets.longhorn.io default
+      -o jsonpath={.status.available}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: longhorn_backup_target_status
+  until: longhorn_backup_target_status.stdout == 'true'
+  retries: 20
+  delay: 15
+  changed_when: false
+  when: longhorn_backup_target | length > 0
+
+# Group "default" covers every volume without its own recurring-job labels.
+# k8s_upgrade's preflight also triggers this job on demand before an upgrade.
+- name: Write the nightly Longhorn backup RecurringJob
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/longhorn/recurringjob-backup.yml"
+    mode: "0600"
+    content: |
+      apiVersion: longhorn.io/v1beta2
+      kind: RecurringJob
+      metadata:
+        name: backup-daily
+        namespace: {{ longhorn_namespace }}
+      spec:
+        name: backup-daily
+        task: backup
+        cron: "{{ longhorn_backup_cron }}"
+        retain: {{ longhorn_backup_retain }}
+        concurrency: 1
+        groups:
+          - default
+        labels: {}
+  when: longhorn_backup_target | length > 0
+
+- name: Apply the nightly Longhorn backup RecurringJob
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ k8s_manifests_dir }}/longhorn/recurringjob-backup.yml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: longhorn_recurringjob_output
+  changed_when: "'unchanged' not in longhorn_recurringjob_output.stdout"
+  when: longhorn_backup_target | length > 0

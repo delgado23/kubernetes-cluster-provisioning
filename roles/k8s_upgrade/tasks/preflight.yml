@@ -1,6 +1,7 @@
 ---
-# Preflight: everything here is read-only for the cluster. The only side effect
-# is pulling the CURRENT version's core images on the primary control plane,
+# Preflight: read-only for the cluster except two deliberate side effects:
+# an off-cluster Longhorn backup of every attached volume (longhorn_backup.yml),
+# and pulling the CURRENT version's core images on the primary control plane,
 # which proves the Katello mirror serves them and caches their blobs there (the
 # mirror is on_demand) so a rollback never depends on registry.k8s.io.
 # Any failure stops the run before a node is cordoned.
@@ -189,6 +190,10 @@
   changed_when: false
   delegate_to: "{{ k8s_primary_cp }}"
   run_once: true
+
+- name: Off-cluster Longhorn backup
+  ansible.builtin.include_tasks: longhorn_backup.yml
+  when: inventory_hostname == k8s_cluster_cps[0]
 
 - name: Preflight summary
   ansible.builtin.debug:
