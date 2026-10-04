@@ -20,6 +20,8 @@
 # Usage:
 #   ansible-playbook upgrade-rollback.yml -e cluster_env=test \
 #     -e k8s_rollback_nodes=k8s-test-worker-01.garaventaville.com
+#   # every worker newer than the (restored) control plane:
+#   ansible-playbook upgrade-rollback.yml -e cluster_env=test -e k8s_rollback_nodes=auto
 #   # if the rollback slot was replaced since (e.g. by JT 49 maintenance):
 #   ansible-playbook upgrade-rollback.yml -e cluster_env=test \
 #     -e k8s_rollback_nodes=... -e k8s_rollback_image=<repo>:1.35.5
@@ -56,11 +58,46 @@
         fail_msg: "Pass -e cluster_env=test|prod and -e k8s_rollback_nodes=<fqdn>[,<fqdn>...]"
       run_once: true
 
+    - name: Skip nodes of other clusters
+      ansible.builtin.meta: end_host
+      when: foreman_params.cluster_env | default('') != cluster_env
+
+    # k8s_rollback_nodes=auto (used by upgrade-dr-restore.yml): every worker
+    # whose kubelet is a newer minor than the control plane, i.e. the workers
+    # an etcd-snapshot restore left on an unsupported skew.
+    - name: Read the cluster's nodes and kubeadm config (auto selection)
+      ansible.builtin.command: >
+        {{ kubectl_bin }} --kubeconfig={{ kubeconfig }} -n kube-system
+        get nodes,configmap/kubeadm-config -o json
+      register: _rb_auto
+      changed_when: false
+      delegate_to: "{{ k8s_primary_cp }}"
+      run_once: true
+      when: k8s_rollback_nodes == 'auto'
+
+    - name: Pick the workers ahead of the control plane (auto selection)
+      vars:
+        _items: "{{ (_rb_auto.stdout | from_json)['items'] }}"
+        _cluster_minor: >-
+          {{ ((_items | selectattr('kind', 'equalto', 'ConfigMap') | first).data.ClusterConfiguration
+              | from_yaml).kubernetesVersion.split('.')[1] | int }}
+      ansible.builtin.set_fact:
+        _rollback_nodes_auto: >-
+          {%- set out = [] -%}
+          {%- for n in _items | selectattr('kind', 'equalto', 'Node') -%}
+            {%- if n.metadata.name in k8s_cluster_workers
+                  and (n.status.nodeInfo.kubeletVersion.split('.')[1] | int) > (_cluster_minor | int) -%}
+              {%- set _ = out.append(n.metadata.name) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+      when: k8s_rollback_nodes == 'auto'
+
     - name: Skip nodes not being rolled back
       ansible.builtin.meta: end_host
       when: >-
-        foreman_params.cluster_env | default('') != cluster_env
-        or inventory_hostname not in _rollback_nodes
+        inventory_hostname not in
+        (_rollback_nodes_auto if k8s_rollback_nodes == 'auto' else _rollback_nodes)
 
   tasks:
     - name: Read this node's bootc status
