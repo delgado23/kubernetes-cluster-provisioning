@@ -86,7 +86,7 @@
       ansible.builtin.set_fact:
         _k8s_staged: "{{ (_k8s_bootc_staged.stdout | from_json).status.staged }}"
 
-    # The tag is mutable (the weekly build re-pushes it): insist on the digest
+    # The tag is mutable (every image build re-pushes it): insist on the digest
     # preflight resolved, so every node in this run gets the same image.
     - name: Require the staged image to be the preflight digest
       ansible.builtin.assert:
@@ -97,7 +97,7 @@
         fail_msg: >-
           Staged {{ _k8s_staged.image.image.image | default('nothing') }}@{{ _k8s_staged.image.imageDigest | default('-') }},
           expected {{ k8s_node_image }}:{{ k8s_image_tag }}@{{ k8s_target_digest }}.
-          Was the image rebuilt mid-run (weekly build is Sunday 03:00 ET)?
+          Was the image rebuilt mid-run (JT 62 / OS Update Workflow)?
 
     - name: Point at the staged deployment's kubeadm
       ansible.builtin.set_fact:

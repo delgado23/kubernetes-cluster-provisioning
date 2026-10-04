@@ -20,7 +20,8 @@
 #   - foreman-content-views has synced the target minor (RPM repo + core images)
 #   - foreman-bootc has built + promoted kubernetes-{controlplane,worker}:<tag>
 #   - autoscale and maintenance (JT 49) schedules for this cluster are disabled
-#   - not during the weekly bootc build (Sunday 03:00 ET), which re-pushes tags
+#   - no bootc image build (JT 62 / OS Update Workflow) during the run: it
+#     re-pushes the tag, and the run insists on the preflight digest
 #
 # Usage (cluster_env has NO default -- this playbook never assumes prod):
 #   ansible-playbook upgrade.yml -e cluster_env=test -e k8s_target_version=1.36.5

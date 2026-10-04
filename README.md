@@ -365,7 +365,7 @@ ansible-playbook upgrade.yml -e cluster_env=test -e k8s_target_version=1.36.5 --
 1. foreman-content-views (JT 33) carries the target minor: the `AlmaLinux 10 - Kubernetes 1.NN` RPM repo and the `Kubernetes Images` core-image mirror.
 2. foreman-bootc has built and promoted `kubernetes-{controlplane,worker}:<target>`. Its Containerfiles pin the kube* NVRs.
 3. Disable this cluster's autoscale schedules and the maintenance job (JT 49), and silence node alerts.
-4. Stay clear of the weekly bootc build (Sunday 03:00 ET), which re-pushes tags. The run insists on the digest it resolved in preflight.
+4. Don't run the bootc image build (Ascender JT 62 / "OS Update Workflow") during the upgrade. It re-pushes the tag, and the run refuses any image whose digest differs from the one preflight resolved.
 5. Check that the deployed add-ons support the target minor.
 
 **What it does** (`roles/k8s_upgrade`):
