@@ -220,6 +220,19 @@
             ports:
               - port: 443
                 protocol: TCP
+          # kube-apiserver via node IP: kube-proxy DNATs 10.96.0.1:443 to
+          # <control-plane>:6443 BEFORE kube-router evaluates egress, so the
+          # rule above alone never matches a new connection. Without this, an
+          # ArgoCD pod only works if it connected in the moment before
+          # kube-router installed its rules; after any restart (or an API
+          # server restart, e.g. every node of a cluster upgrade) it can't
+          # reach the API again. Same rule as the Prometheus policy.
+          - to:
+              - ipBlock:
+                  cidr: {{ k8s_node_cidr }}
+            ports:
+              - port: 6443
+                protocol: TCP
           # Intra-namespace (ArgoCD components talk to each other)
           - to:
               - podSelector: {}
