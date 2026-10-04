@@ -19,7 +19,9 @@
 # Prerequisites:
 #   - foreman-content-views has synced the target minor (RPM repo + core images)
 #   - foreman-bootc has built + promoted kubernetes-{controlplane,worker}:<tag>
-#   - autoscale and maintenance (JT 49) schedules for this cluster are disabled
+#   - (autoscale schedules for this cluster are paused by the run itself and
+#     re-enabled after a successful postflight; -e k8s_upgrade_manage_autoscale=false
+#     to skip, e.g. a CLI run without the vault)
 #   - no bootc image build (JT 62 / OS Update Workflow) during the run: it
 #     re-pushes the tag, and the run insists on the preflight digest
 #
@@ -30,6 +32,63 @@
 # uncordoned, and `upgrade apply` runs only while the cluster's kubeadm config
 # is still on the old version. Rollback: upgrade-rollback.yml and the README.
 # =============================================================================
+
+- name: Kubernetes upgrade — pause autoscaling
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    k8s_upgrade_manage_autoscale: true
+  tasks:
+    - name: Require cluster_env
+      ansible.builtin.assert:
+        that: cluster_env is defined and cluster_env in ['test', 'prod']
+        fail_msg: "Pass -e cluster_env=test|prod -- upgrade.yml has no default cluster."
+
+    # The autoscalers add/remove/resize nodes; doing that mid-roll (or during a
+    # rollback) is how the 1.36 test rehearsal grew an unplanned worker-04.
+    - name: Load Ascender credentials
+      ansible.builtin.include_vars:
+        file: "{{ item }}"
+      loop: [vars/vault.yml, vars/awx.yml]
+      when: k8s_upgrade_manage_autoscale | bool
+
+    - name: Find this cluster's autoscale schedules
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/schedules/?name__icontains=autoscale&page_size=50"
+        headers:
+          Authorization: "Bearer {{ awx_token }}"
+        return_content: true
+      register: _k8s_schedules
+      when: k8s_upgrade_manage_autoscale | bool
+
+    - name: Remember which of them are enabled
+      ansible.builtin.set_fact:
+        # Whole-word match on the schedule name ("Autoscale prod every ...").
+        k8s_paused_schedules: >-
+          {%- set out = [] -%}
+          {%- for sch in (_k8s_schedules.json.results | default([])) | selectattr('enabled') -%}
+            {%- if cluster_env in sch.name.lower().split() -%}{%- set _ = out.append(sch.id) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Pause them for the upgrade
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/schedules/{{ item }}/"
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ awx_token }}"
+        body_format: json
+        body:
+          enabled: false
+      loop: "{{ k8s_paused_schedules }}"
+
+    - name: Autoscaling paused
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Paused autoscale schedules ' ~ (k8s_paused_schedules | join(', ')) ~ ' for ' ~ cluster_env
+             ~ '; re-enabled only after a successful postflight.'
+             if k8s_upgrade_manage_autoscale | bool else 'Autoscale schedules not managed (k8s_upgrade_manage_autoscale=false).' }}
 
 - name: Kubernetes upgrade — preflight
   hosts: foreman_almalinux10_kubernetescontrolplanenode:foreman_almalinux10_kubernetesworkernode
@@ -143,3 +202,25 @@
       ansible.builtin.include_role:
         name: k8s_upgrade
         tasks_from: postflight.yml
+
+- name: Kubernetes upgrade — resume autoscaling
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    k8s_upgrade_manage_autoscale: true
+  tasks:
+    # Only reached when every play above succeeded. After a failure the
+    # schedules stay paused on purpose: re-enable them by hand once the
+    # cluster is whole again (the pause play's output lists their IDs).
+    - name: Re-enable the schedules this run paused
+      ansible.builtin.uri:
+        url: "{{ awx_url }}/api/v2/schedules/{{ item }}/"
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ awx_token }}"
+        body_format: json
+        body:
+          enabled: true
+      loop: "{{ k8s_paused_schedules | default([]) }}"
+      when: k8s_upgrade_manage_autoscale | bool
