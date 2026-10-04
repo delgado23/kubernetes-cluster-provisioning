@@ -601,8 +601,9 @@ Synology (`longhorn_backup_nfs_host` / `longhorn_backup_nfs_export` in
 - The `backup-daily` RecurringJob (group `default`, so every volume) runs at
   `longhorn_backup_cron` (02:00) and keeps `longhorn_backup_retain` (7) backups.
 - `upgrade.yml` runs that job on demand in preflight, and waits until every
-  attached volume has a backup newer than the run. It's mandatory on prod
-  (`k8s_upgrade_require_backup`).
+  attached volume has a backup strictly newer than the run. It's always
+  mandatory on prod (no override: fix the target before a planned upgrade).
+  Elsewhere it's optional, unless `k8s_upgrade_require_backup=true`.
 - Test clusters get no target: a throwaway cluster needs no backups, and one
   shared backupstore would mix two clusters' backup lists.
 

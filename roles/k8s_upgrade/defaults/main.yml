@@ -37,8 +37,9 @@ k8s_upgrade_smoke_validate_certs: "{{ cluster_env == 'prod' }}"
 k8s_upgrade_manage_autoscale: true
 
 # Off-cluster Longhorn backup before any node changes (tasks/longhorn_backup.yml).
-# Mandatory on prod; elsewhere it runs only if the cluster has a backup target.
-k8s_upgrade_require_backup: "{{ cluster_env == 'prod' }}"
+# Always mandatory on prod (not overridable: fix the target before a planned
+# upgrade). Elsewhere it runs if the cluster has a target; set true to require it.
+k8s_upgrade_require_backup: false
 k8s_upgrade_backup_recurringjob: backup-daily     # created by cluster_addons
 k8s_upgrade_backup_retries: 80                    # x 15s = 20 min
 
