@@ -23,11 +23,12 @@ alertmanager_storage_size: 2Gi
 # Pinned addon versions. Most addon versions are auto-resolved to the latest
 # upstream release by fetch_versions.yml. Pin one here to freeze it when a newer
 # release is broken; set to "" to resume tracking latest.
-# argo-cd 9.5.17 (app v3.4.3) is the last release verified working on a
-# from-scratch build (2026-06-04). Newer charts bundled a dex image whose
-# argocd-dex binary crash-looped (SIGSEGV); we also disable that unused dex in
-# argocd.yml, but pinning keeps the build deterministic.
-argocd_version_pin: "9.5.17"
+# argo-cd 10.9.6 (app v3.5.3): the in-place upgrade from 9.5.17 was rehearsed
+# on the test cluster before prod (2026-10). Charts after 9.5.17 bundled a dex
+# image whose argocd-dex binary crash-looped (SIGSEGV); argocd.yml disables that
+# unused dex, and chart 10.x's own NetworkPolicies are turned off there too.
+# Pinning keeps the build deterministic across chart majors.
+argocd_version_pin: "10.9.6"
 
 # Authentik SSO — set vault_authentik_url in vault before running addons
 k8s_manifests_dir: /root/k8s-manifests
