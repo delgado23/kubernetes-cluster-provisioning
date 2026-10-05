@@ -17,6 +17,8 @@
 # whose `--wait` hangs indefinitely (ignoring --timeout) on charts that bundle CRDs
 # in the tracked manifest (cert-manager crds.enabled, kube-prometheus-stack), wedging
 # the cluster build. Bump this deliberately after validating newer Helm releases.
+# Helm 4 only accepts plugin post-renderers: cluster_addons/tasks/longhorn.yml
+# passes an executable (postrender.py), which must become a plugin first.
 - name: Set Helm version fact (pinned)
   ansible.builtin.set_fact:
     helm_version: "v3.21.1"

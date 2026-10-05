@@ -309,6 +309,9 @@ ansible-playbook main.yml --tags bootstrap
 ansible-playbook main.yml --tags workers
 
 # Phase 5: Install add-ons (MetalLB, Traefik, Longhorn, reflector, cert-manager, Prometheus, Headlamp, ArgoCD, Descheduler)
+# This is also how a live cluster's add-ons are upgraded: each run resolves the newest
+# stable release from the Gitea mirrors (or the pin in cluster_addons/defaults) and
+# helm-upgrades in place. In AWX: JT 50 with job_tags=addons, wipe_cluster=false.
 ansible-playbook main.yml --tags addons
 
 # Skip VM provisioning for re-runs against existing nodes

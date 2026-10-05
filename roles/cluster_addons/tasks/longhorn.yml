@@ -61,56 +61,23 @@
             cpu: 200m
             memory: 128Mi
 
-- name: Install or upgrade Longhorn via Helm
-  ansible.builtin.command:
-    cmd: >
-      /usr/local/bin/helm upgrade --install longhorn longhorn/longhorn
-      --namespace {{ longhorn_namespace }}
-      --create-namespace
-      --version {{ longhorn_version }}
-      --values {{ k8s_manifests_dir }}/longhorn/values.yml
-      --wait
-      --timeout 10m
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: longhorn_helm_output
-  until: longhorn_helm_output.rc == 0
-  retries: 3
-  delay: 30
-  changed_when: true
-
-- name: Print Longhorn Helm output
-  ansible.builtin.debug:
-    var: longhorn_helm_output.stdout_lines
-
-- name: Wait for Longhorn manager DaemonSet to be ready
-  ansible.builtin.command:
-    cmd: >
-      kubectl rollout status daemonset/longhorn-manager
-      --namespace {{ longhorn_namespace }}
-      --timeout=300s
-  environment:
-    KUBECONFIG: /root/.kube/config
-  changed_when: false
-
+# CIS C-01: the Longhorn chart binds the support-bundle SA to cluster-admin.
+# A Helm post-renderer rewrites that binding to a least-privilege read-only role
+# before anything reaches the API server, so Helm itself owns the restricted
+# binding. (Patching the live object after install instead broke every chart
+# upgrade: Helm tried to move the binding's immutable roleRef back to
+# cluster-admin, and the SA held cluster-admin for the whole --wait window.)
 - name: Write Longhorn support-bundle restricted ClusterRole manifest
   ansible.builtin.copy:
-    dest: "{{ k8s_manifests_dir }}/longhorn/support-bundle-rbac.yml"
+    dest: "{{ k8s_manifests_dir }}/longhorn/support-bundle-clusterrole.yml"
     mode: "0600"
     content: |
-      # CIS C-01: Replace cluster-admin binding with least-privilege read-only role.
-      # The Longhorn Helm chart ships with a cluster-admin ClusterRoleBinding for the
-      # support-bundle SA. We override it post-install with a scoped read-only role.
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRole
       metadata:
         name: longhorn-support-bundle
         labels:
-          app.kubernetes.io/managed-by: Helm
           app.kubernetes.io/name: longhorn
-        annotations:
-          meta.helm.sh/release-name: longhorn
-          meta.helm.sh/release-namespace: {{ longhorn_namespace }}
       rules:
       - apiGroups: [""]
         resources:
@@ -149,44 +116,113 @@
       - apiGroups: ["longhorn.io"]
         resources: ["*"]
         verbs: ["get", "list", "watch"]
-      ---
-      apiVersion: rbac.authorization.k8s.io/v1
-      kind: ClusterRoleBinding
-      metadata:
-        name: longhorn-support-bundle
-        labels:
-          app.kubernetes.io/managed-by: Helm
-          app.kubernetes.io/name: longhorn
-        annotations:
-          meta.helm.sh/release-name: longhorn
-          meta.helm.sh/release-namespace: {{ longhorn_namespace }}
-      roleRef:
-        apiGroup: rbac.authorization.k8s.io
-        kind: ClusterRole
-        name: longhorn-support-bundle
-      subjects:
-      - kind: ServiceAccount
-        name: longhorn-support-bundle
-        namespace: {{ longhorn_namespace }}
 
-- name: Delete existing longhorn-support-bundle ClusterRoleBinding so roleRef can be replaced (CIS C-01)
+- name: Write Longhorn Helm post-renderer (CIS C-01)
+  ansible.builtin.copy:
+    dest: "{{ k8s_manifests_dir }}/longhorn/postrender.py"
+    mode: "0700"
+    content: |
+      #!/usr/bin/python3
+      """Helm post-renderer for Longhorn (CIS C-01).
+
+      Points the chart's longhorn-support-bundle ClusterRoleBinding at the
+      restricted ClusterRole in support-bundle-clusterrole.yml (appended to the
+      release) instead of cluster-admin. Every other document passes through
+      byte-for-byte: re-serialising the whole chart through YAML 1.1 could turn
+      unquoted values such as on/no into booleans.
+      """
+      import os
+      import re
+      import sys
+
+      import yaml
+
+      NAME = "longhorn-support-bundle"
+      HERE = os.path.dirname(os.path.abspath(__file__))
+
+      def main():
+          docs = re.split(r"(?m)^---[ \t]*$", sys.stdin.read())
+          out, rewritten, have_role = [], 0, False
+          for text in docs:
+              try:
+                  obj = yaml.safe_load(text)
+              except yaml.YAMLError:
+                  obj = None
+              if isinstance(obj, dict):
+                  kind = obj.get("kind")
+                  name = (obj.get("metadata") or {}).get("name")
+                  if kind == "ClusterRoleBinding" and name == NAME:
+                      obj["roleRef"] = {
+                          "apiGroup": "rbac.authorization.k8s.io",
+                          "kind": "ClusterRole",
+                          "name": NAME,
+                      }
+                      text = "\n" + yaml.safe_dump(obj, sort_keys=False)
+                      rewritten += 1
+                  elif kind == "ClusterRole" and name == NAME:
+                      have_role = True
+                  if kind in ("ClusterRoleBinding", "RoleBinding") and \
+                          (obj.get("roleRef") or {}).get("name") == "cluster-admin" and \
+                          any(s.get("name") == NAME for s in obj.get("subjects") or []):
+                      sys.exit("postrender: %s would still bind %s to cluster-admin" % (name, NAME))
+              out.append(text)
+          if rewritten != 1:
+              sys.exit("postrender: expected 1 %s ClusterRoleBinding, found %d; "
+                       "the chart changed, review CIS C-01" % (NAME, rewritten))
+          if not have_role:
+              with open(os.path.join(HERE, "support-bundle-clusterrole.yml")) as f:
+                  out.append("\n" + f.read())
+          sys.stdout.write("---".join(out))
+
+      main()
+
+- name: Install or upgrade Longhorn via Helm
   ansible.builtin.command:
-    cmd: kubectl delete clusterrolebinding longhorn-support-bundle --ignore-not-found
+    cmd: >
+      /usr/local/bin/helm upgrade --install longhorn longhorn/longhorn
+      --namespace {{ longhorn_namespace }}
+      --create-namespace
+      --version {{ longhorn_version }}
+      --values {{ k8s_manifests_dir }}/longhorn/values.yml
+      --post-renderer {{ k8s_manifests_dir }}/longhorn/postrender.py
+      --wait
+      --timeout 10m
   environment:
     KUBECONFIG: /root/.kube/config
+  register: longhorn_helm_output
+  until: longhorn_helm_output.rc == 0
+  retries: 3
+  delay: 30
   changed_when: true
 
-- name: Apply Longhorn support-bundle restricted RBAC (CIS C-01)
-  ansible.builtin.command:
-    cmd: kubectl apply -f {{ k8s_manifests_dir }}/longhorn/support-bundle-rbac.yml
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: longhorn_rbac_output
-  changed_when: true
-
-- name: Print Longhorn RBAC apply output
+- name: Print Longhorn Helm output
   ansible.builtin.debug:
-    var: longhorn_rbac_output.stdout_lines
+    var: longhorn_helm_output.stdout_lines
+
+- name: Wait for Longhorn manager DaemonSet to be ready
+  ansible.builtin.command:
+    cmd: >
+      kubectl rollout status daemonset/longhorn-manager
+      --namespace {{ longhorn_namespace }}
+      --timeout=300s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Read the live longhorn-support-bundle ClusterRoleBinding
+  ansible.builtin.command:
+    cmd: kubectl get clusterrolebinding longhorn-support-bundle -o jsonpath={.roleRef.name}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: longhorn_sb_roleref
+  changed_when: false
+
+- name: Require the restricted support-bundle role (CIS C-01)
+  ansible.builtin.assert:
+    that: longhorn_sb_roleref.stdout == 'longhorn-support-bundle'
+    fail_msg: >-
+      longhorn-support-bundle is bound to '{{ longhorn_sb_roleref.stdout }}', not the
+      restricted longhorn-support-bundle ClusterRole. Check postrender.py.
 
 - name: Write Longhorn NetworkPolicy manifest
   ansible.builtin.copy:
