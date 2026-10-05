@@ -2,9 +2,18 @@
 # =============================================================================
 # autoscale.yml — Vertical autoscaler: hot-add CPU cores and RAM to cluster VMs
 # =============================================================================
-# Queries the metrics-server for current node utilisation and hot-adds CPU
-# or memory via the Proxmox API when utilisation exceeds the configured
-# thresholds — up to per-role maximums.
+# Queries the metrics-server for current node utilisation and adjusts each VM
+# through the Proxmox API, within per-role minimums and maximums:
+#   CPU    — vcpus hot-plugged up and down.
+#   Memory — scaled UP live (raise the balloon floor, then hot-add RAM), and
+#            scaled DOWN only by lowering the balloon floor that Proxmox
+#            auto-ballooning may reclaim to under host memory pressure.
+#            `memory` itself is never lowered on a running VM: the guests
+#            online hot-added DIMMs into ZONE_NORMAL, so hot-unplug fails
+#            ("Offline failed") and leaves a stuck pending change. Any pending
+#            memory/balloon change found is reverted.
+#
+# Set autoscale_dry_run=true to report every decision without changing a VM.
 #
 # Designed to run on an AWX schedule (e.g. every 30 minutes).
 # Requires: metrics-server running in the target cluster, hotplug=cpu,memory
@@ -68,7 +77,12 @@
     cpu_scaledown_threshold:      30    # scale down CPU  when utilisation drops below this %
     memory_scaledown_threshold:   40    # scale down RAM  when utilisation drops below this %
     cpu_scaledown_step:           1     # vCPU cores to remove per run
-    memory_scaledown_step_mb:     1024  # MB to remove per run (1 GB)
+    memory_scaledown_step_mb:     1024  # MB to lower the balloon floor per run (1 GB)
+    # Never lower the floor so far that current usage would exceed this % of it,
+    # so a scale-down can't immediately trip memory_scale_threshold again.
+    memory_scaledown_floor_pct:   70
+
+    autoscale_dry_run:            false # true = report decisions, change nothing
 
     controlplane_min_cores:     2
     controlplane_min_memory_mb: 2048   # 2 GB
@@ -131,12 +145,14 @@
               {%- set use_mem = m.usage.memory | regex_replace('Ki$', '') | int -%}
               {%- set cpu_pct = (cpu_m / (cap_cpu * 1000) * 100) | round(0) | int -%}
               {%- set mem_pct = (use_mem / cap_mem * 100) | round(0) | int -%}
+              {%- set used_mb = (use_mem / 1024) | round(0) | int -%}
               {%- set _ = result.append({
                 'name':       name,
                 'short':      short,
                 'is_cp':      is_cp,
                 'cpu_pct':    cpu_pct,
                 'mem_pct':    mem_pct,
+                'used_mb':    used_mb,
                 'min_cores':  controlplane_min_cores     if is_cp else worker_min_cores,
                 'min_mem_mb': controlplane_min_memory_mb if is_cp else worker_min_memory_mb,
                 'max_cores':  controlplane_max_cores     if is_cp else worker_max_cores,
@@ -178,11 +194,14 @@
           {%- endfor -%}
           {{ result }}
 
-    # ── 4. Fetch current Proxmox config for each cluster node ───────────────
+    # ── 4. Fetch each VM's running config, pending changes and live size ───
+    # /config returns values with PENDING changes applied; ?current=1 returns
+    # what the VM is actually running. status/current.balloon is the guest's
+    # actual memory size after any auto-ballooning.
 
-    - name: Fetch Proxmox VM config for each node
+    - name: Fetch Proxmox VM running config for each node
       ansible.builtin.uri:
-        url: "{{ _pve_api }}/nodes/{{ _vm_map[item.short].pve_node }}/qemu/{{ _vm_map[item.short].vmid }}/config"
+        url: "{{ _pve_api }}/nodes/{{ _vm_map[item.short].pve_node }}/qemu/{{ _vm_map[item.short].vmid }}/config?current=1"
         method: GET
         headers:
           Authorization: "{{ _pve_auth }}"
@@ -195,7 +214,41 @@
       when: item.short in _vm_map
       no_log: "{{ 'debug' not in ansible_run_tags }}"
 
-    # ── 5. Combine utilisation + Proxmox config into scale decision list ────
+    - name: Fetch Proxmox VM pending changes for each node
+      ansible.builtin.uri:
+        url: "{{ _pve_api }}/nodes/{{ _vm_map[item.short].pve_node }}/qemu/{{ _vm_map[item.short].vmid }}/pending"
+        method: GET
+        headers:
+          Authorization: "{{ _pve_auth }}"
+        validate_certs: true
+        return_content: true
+      register: _pve_pending
+      loop: "{{ _node_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+      when: item.short in _vm_map
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Fetch Proxmox VM live status for each node
+      ansible.builtin.uri:
+        url: "{{ _pve_api }}/nodes/{{ _vm_map[item.short].pve_node }}/qemu/{{ _vm_map[item.short].vmid }}/status/current"
+        method: GET
+        headers:
+          Authorization: "{{ _pve_auth }}"
+        validate_certs: true
+        return_content: true
+      register: _pve_status
+      loop: "{{ _node_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+      when: item.short in _vm_map
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    # ── 5. Combine utilisation + Proxmox state into scale decisions ─────────
+    # Memory decisions use the guest's actual size (live_mb), not the k8s node
+    # capacity, which is fixed when the kubelet starts. floor_mb is the balloon
+    # floor (balloon=0 or unset means no ballooning: floor = memory). A guest
+    # more than 256 MB below `memory` has been reclaimed by auto-ballooning.
 
     - name: Build scale decision list
       ansible.builtin.set_fact:
@@ -205,18 +258,82 @@
             {%- set node = _node_list[i] -%}
             {%- set res  = _pve_cfgs.results[i] -%}
             {%- if not (res.skipped | default(false)) -%}
-              {%- set cfg = res.json.data -%}
+              {%- set cfg     = res.json.data -%}
+              {%- set pend    = _pve_pending.results[i].json.data -%}
+              {%- set st      = _pve_status.results[i].json.data -%}
+              {%- set mem_mb  = (cfg.memory | string | regex_search('[0-9]+')) | int -%}
+              {%- set bal     = cfg.balloon | default(0) | int -%}
+              {%- set floor   = bal if (bal > 0 and bal < mem_mb) else mem_mb -%}
+              {%- set live    = ((st.balloon | default(0) | int) / 1048576) | round(0) | int -%}
+              {%- set live_mb = live if (live > 0 and live <= mem_mb) else mem_mb -%}
+              {%- set vm_pct  = (node.used_mb / live_mb * 100) | round(0) | int -%}
+              {%- set stuck   = pend | selectattr('key', 'in', ['memory', 'balloon'])
+                                     | selectattr('pending', 'defined') | map(attribute='key') | list
+                                + pend | selectattr('key', 'in', ['memory', 'balloon'])
+                                     | selectattr('delete', 'defined') | map(attribute='key') | list -%}
+              {%- set safe_floor = ((node.used_mb * 100 / memory_scaledown_floor_pct) / 256) | round(0, 'ceil') | int * 256 -%}
+              {%- set up   = (stuck | length == 0) and vm_pct > memory_scale_threshold | int -%}
+              {%- set down = (stuck | length == 0) and vm_pct < memory_scaledown_threshold | int -%}
+              {%- set reclaimed = live_mb < mem_mb - 256 -%}
+              {%- set new_mem        = [mem_mb + memory_scale_step_mb, node.max_mem_mb] | min -%}
+              {%- set new_floor_down = [floor - memory_scaledown_step_mb, node.min_mem_mb, safe_floor] | max -%}
               {%- set _ = result.append(node | combine({
-                'vmid':       _vm_map[node.short].vmid,
-                'pve_node':   _vm_map[node.short].pve_node,
-                'cur_cores':  (cfg.vcpus | default(cfg.cores)) | int,
-                'cur_mem_mb': cfg.memory | int
+                'vmid':        _vm_map[node.short].vmid,
+                'pve_node':    _vm_map[node.short].pve_node,
+                'cur_cores':   (cfg.vcpus | default(cfg.cores)) | int,
+                'cur_mem_mb':  mem_mb,
+                'floor_mb':    floor,
+                'live_mb':     live_mb,
+                'vm_mem_pct':  vm_pct,
+                'stuck':       stuck | unique | list,
+                'raise_floor': mem_mb if (up and floor < mem_mb and (reclaimed or mem_mb >= node.max_mem_mb)) else none,
+                'hotadd_mem':  new_mem if (up and not reclaimed and mem_mb < node.max_mem_mb) else none,
+                'lower_floor': new_floor_down if (down and new_floor_down < floor) else none
               })) -%}
             {%- endif -%}
           {%- endfor -%}
           {{ result }}
 
-    # ── 6. Hot-add CPU cores where needed ───────────────────────────────────
+    - name: Report memory state per VM
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.short }}: used {{ item.used_mb }} MB of {{ item.live_mb }} MB live
+          ({{ item.vm_mem_pct }}%) — memory {{ item.cur_mem_mb }} MB, balloon floor {{ item.floor_mb }} MB
+          {{- (' — STUCK PENDING: ' ~ (item.stuck | join(','))) if item.stuck else '' }}
+          {{- (' — plan: raise floor to ' ~ item.raise_floor ~ ' MB') if item.raise_floor else '' }}
+          {{- (' — plan: hot-add memory to ' ~ item.hotadd_mem ~ ' MB') if item.hotadd_mem else '' }}
+          {{- (' — plan: lower floor to ' ~ item.lower_floor ~ ' MB') if item.lower_floor else '' }}
+          {{- ' [DRY RUN]' if autoscale_dry_run | bool else '' }}
+      loop: "{{ _scale_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+
+    # ── 6. Revert stuck pending memory/balloon changes ──────────────────────
+    # A pending memory change means an earlier hot-unplug failed; applying it
+    # at the next cold start would silently shrink the node. Revert it, and
+    # leave that VM's memory alone until the next run.
+
+    - name: Revert stuck pending memory/balloon changes
+      ansible.builtin.uri:
+        url: "{{ _pve_api }}/nodes/{{ item.pve_node }}/qemu/{{ item.vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _pve_auth }}"
+        body_format: form-urlencoded
+        body:
+          revert: "{{ item.stuck | join(',') }}"
+        validate_certs: true
+        status_code: [200]
+      loop: "{{ _scale_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+      when:
+        - item.stuck | length > 0
+        - not autoscale_dry_run | bool
+      register: _mem_reverted
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    # ── 7. Hot-add CPU cores where needed ───────────────────────────────────
 
     - name: Scale up CPU cores
       ansible.builtin.uri:
@@ -235,6 +352,7 @@
       when:
         - item.cpu_pct | int > cpu_scale_threshold | int
         - item.cur_cores < item.max_cores
+        - not autoscale_dry_run | bool
       register: _cpu_scaled
       no_log: "{{ 'debug' not in ansible_run_tags }}"
 
@@ -249,10 +367,13 @@
         label: "{{ item.item.short }}"
       when: not (item.skipped | default(false))
 
-    # ── 7. Hot-add memory where needed ──────────────────────────────────────
-    # Scale-up: set memory first (balloon stays below new value), then balloon.
+    # ── 8. Memory scale-up ──────────────────────────────────────────────────
+    # Under pressure: if the host has ballooned the guest below `memory`, lift
+    # the floor back to full memory (returns the RAM). Otherwise hot-add up to
+    # max_mem_mb, with the floor following. At max, at least lift the floor so
+    # the host can't reclaim from a busy guest.
 
-    - name: Scale up memory
+    - name: Raise balloon floor
       ansible.builtin.uri:
         url: "{{ _pve_api }}/nodes/{{ item.pve_node }}/qemu/{{ item.vmid }}/config"
         method: PUT
@@ -260,49 +381,68 @@
           Authorization: "{{ _pve_auth }}"
         body_format: form-urlencoded
         body:
-          memory: "{{ [item.cur_mem_mb + memory_scale_step_mb, item.max_mem_mb] | min }}"
+          balloon: "{{ item.raise_floor }}"
         validate_certs: true
         status_code: [200]
       loop: "{{ _scale_list }}"
       loop_control:
         label: "{{ item.short }}"
       when:
-        - item.mem_pct | int > memory_scale_threshold | int
-        - item.cur_mem_mb < item.max_mem_mb
+        - item.raise_floor is not none
+        - not autoscale_dry_run | bool
+      register: _floor_raised
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
+
+    - name: Hot-add memory
+      ansible.builtin.uri:
+        url: "{{ _pve_api }}/nodes/{{ item.pve_node }}/qemu/{{ item.vmid }}/config"
+        method: PUT
+        headers:
+          Authorization: "{{ _pve_auth }}"
+        body_format: form-urlencoded
+        body:
+          memory: "{{ item.hotadd_mem }}"
+        validate_certs: true
+        status_code: [200]
+      loop: "{{ _scale_list }}"
+      loop_control:
+        label: "{{ item.short }}"
+      when:
+        - item.hotadd_mem is not none
+        - not autoscale_dry_run | bool
       register: _mem_scaled
       no_log: "{{ 'debug' not in ansible_run_tags }}"
 
-    - name: Scale up balloon to match new memory
+    # Keep the floor at the new memory size so the added RAM isn't immediately
+    # reclaimable; a later scale-down lowers it again.
+    - name: Raise balloon floor to the hot-added memory
       ansible.builtin.uri:
-        url: "{{ _pve_api }}/nodes/{{ item.pve_node }}/qemu/{{ item.vmid }}/config"
+        url: "{{ _pve_api }}/nodes/{{ item.item.pve_node }}/qemu/{{ item.item.vmid }}/config"
         method: PUT
         headers:
           Authorization: "{{ _pve_auth }}"
         body_format: form-urlencoded
         body:
-          balloon: "{{ [item.cur_mem_mb + memory_scale_step_mb, item.max_mem_mb] | min }}"
+          balloon: "{{ item.item.hotadd_mem }}"
         validate_certs: true
         status_code: [200]
-      loop: "{{ _scale_list }}"
-      loop_control:
-        label: "{{ item.short }}"
-      when:
-        - item.mem_pct | int > memory_scale_threshold | int
-        - item.cur_mem_mb < item.max_mem_mb
-      no_log: "{{ 'debug' not in ansible_run_tags }}"
-
-    - name: Report memory scaling actions
-      ansible.builtin.debug:
-        msg: >-
-          {{ item.item.short }}: RAM scaled
-          {{ item.item.cur_mem_mb }} → {{ [item.item.cur_mem_mb + memory_scale_step_mb, item.item.max_mem_mb] | min }} MB
-          (was {{ item.item.mem_pct }}% utilised, threshold {{ memory_scale_threshold }}%)
       loop: "{{ _mem_scaled.results }}"
       loop_control:
         label: "{{ item.item.short }}"
       when: not (item.skipped | default(false))
+      no_log: "{{ 'debug' not in ansible_run_tags }}"
 
-    # ── 8. Scale down CPU cores where utilisation is low ────────────────────
+    - name: Report memory scale-up actions
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.short }}: {{ ('balloon floor ' ~ item.item.floor_mb ~ ' → ' ~ item.item.raise_floor ~ ' MB') if item.item.raise_floor is not none else ('RAM hot-added ' ~ item.item.cur_mem_mb ~ ' → ' ~ item.item.hotadd_mem ~ ' MB') }}
+          (guest {{ item.item.vm_mem_pct }}% used, threshold {{ memory_scale_threshold }}%)
+      loop: "{{ _floor_raised.results + _mem_scaled.results }}"
+      loop_control:
+        label: "{{ item.item.short }}"
+      when: not (item.skipped | default(false))
+
+    # ── 9. Scale down CPU cores where utilisation is low ────────────────────
 
     - name: Scale down CPU cores
       ansible.builtin.uri:
@@ -321,6 +461,7 @@
       when:
         - item.cpu_pct | int < cpu_scaledown_threshold | int
         - item.cur_cores > item.min_cores
+        - not autoscale_dry_run | bool
       register: _cpu_scaled_down
       no_log: "{{ 'debug' not in ansible_run_tags }}"
 
@@ -335,10 +476,11 @@
         label: "{{ item.item.short }}"
       when: not (item.skipped | default(false))
 
-    # ── 9. Scale down memory where utilisation is low ────────────────────────
-    # Scale-down: reduce balloon first (must stay <= memory), then memory.
+    # ── 10. Memory scale-down: lower the balloon floor only ─────────────────
+    # Never PUT a lower `memory` on a running VM (see header). Lowering the
+    # floor lets Proxmox auto-ballooning reclaim RAM under host pressure.
 
-    - name: Scale down balloon before memory
+    - name: Lower balloon floor
       ansible.builtin.uri:
         url: "{{ _pve_api }}/nodes/{{ item.pve_node }}/qemu/{{ item.vmid }}/config"
         method: PUT
@@ -346,53 +488,42 @@
           Authorization: "{{ _pve_auth }}"
         body_format: form-urlencoded
         body:
-          balloon: "{{ [item.cur_mem_mb - memory_scaledown_step_mb, item.min_mem_mb] | max }}"
+          balloon: "{{ item.lower_floor }}"
         validate_certs: true
         status_code: [200]
       loop: "{{ _scale_list }}"
       loop_control:
         label: "{{ item.short }}"
       when:
-        - item.mem_pct | int < memory_scaledown_threshold | int
-        - item.cur_mem_mb > item.min_mem_mb
-      no_log: "{{ 'debug' not in ansible_run_tags }}"
-
-    - name: Scale down memory
-      ansible.builtin.uri:
-        url: "{{ _pve_api }}/nodes/{{ item.pve_node }}/qemu/{{ item.vmid }}/config"
-        method: PUT
-        headers:
-          Authorization: "{{ _pve_auth }}"
-        body_format: form-urlencoded
-        body:
-          memory: "{{ [item.cur_mem_mb - memory_scaledown_step_mb, item.min_mem_mb] | max }}"
-        validate_certs: true
-        status_code: [200]
-      loop: "{{ _scale_list }}"
-      loop_control:
-        label: "{{ item.short }}"
-      when:
-        - item.mem_pct | int < memory_scaledown_threshold | int
-        - item.cur_mem_mb > item.min_mem_mb
+        - item.lower_floor is not none
+        - not autoscale_dry_run | bool
       register: _mem_scaled_down
       no_log: "{{ 'debug' not in ansible_run_tags }}"
 
     - name: Report memory scale-down actions
       ansible.builtin.debug:
         msg: >-
-          {{ item.item.short }}: RAM scaled down
-          {{ item.item.cur_mem_mb }} → {{ [item.item.cur_mem_mb - memory_scaledown_step_mb, item.item.min_mem_mb] | max }} MB
-          (was {{ item.item.mem_pct }}% utilised, threshold {{ memory_scaledown_threshold }}%)
+          {{ item.item.short }}: balloon floor {{ item.item.floor_mb }} → {{ item.item.lower_floor }} MB
+          (guest {{ item.item.vm_mem_pct }}% used, threshold {{ memory_scaledown_threshold }}%)
       loop: "{{ _mem_scaled_down.results }}"
+      loop_control:
+        label: "{{ item.item.short }}"
+      when: not (item.skipped | default(false))
+
+    - name: Report reverted pending changes
+      ansible.builtin.debug:
+        msg: "{{ item.item.short }}: reverted stuck pending {{ item.item.stuck | join(',') }}"
+      loop: "{{ _mem_reverted.results }}"
       loop_control:
         label: "{{ item.item.short }}"
       when: not (item.skipped | default(false))
 
     - name: No scaling needed
       ansible.builtin.debug:
-        msg: "All nodes within thresholds — no scaling applied."
-      when:
-        - _cpu_scaled.results      | selectattr('skipped', 'defined') | list | length == _cpu_scaled.results      | list | length
-        - _mem_scaled.results      | selectattr('skipped', 'defined') | list | length == _mem_scaled.results      | list | length
-        - _cpu_scaled_down.results | selectattr('skipped', 'defined') | list | length == _cpu_scaled_down.results | list | length
-        - _mem_scaled_down.results | selectattr('skipped', 'defined') | list | length == _mem_scaled_down.results | list | length
+        msg: >-
+          {{ 'Dry run — no changes made (decisions are in "Report memory state per VM").'
+             if autoscale_dry_run | bool else 'All nodes within thresholds — no scaling applied.' }}
+      when: >-
+        (_cpu_scaled.results + _cpu_scaled_down.results + _floor_raised.results
+         + _mem_scaled.results + _mem_scaled_down.results + _mem_reverted.results)
+        | rejectattr('skipped', 'defined') | list | length == 0
