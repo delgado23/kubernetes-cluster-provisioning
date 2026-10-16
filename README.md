@@ -244,7 +244,14 @@ ansible-playbook main.yml --ask-vault-pass -e "controlplane_node_count=0 worker_
 
 ### Vertical Autoscaling
 
-`autoscale.yml` queries the metrics-server for current CPU and memory utilisation on each node and adjusts resources via the Proxmox API — scaling up when utilisation is high, and reclaiming when it is low. The VM does not reboot — CPU changes are delivered live by adjusting `vcpus` (Proxmox hotplug), and memory changes are delivered live via memory hotplug. Both are enabled automatically during the provision phase, which also sets `cores` to the per-role maximum so the full range is available for hotplug from first boot.
+`autoscale.yml` queries the metrics-server for current CPU and memory utilisation on each node and adjusts resources via the Proxmox API — scaling up when utilisation is high, and reclaiming when it is low. The VM does not reboot. CPU changes are delivered live by adjusting `vcpus` (Proxmox hotplug). Hotplug is enabled automatically during the provision phase, which also sets `cores` to the per-role maximum so the full range is available from first boot.
+
+Memory is handled asymmetrically, because the guests online hot-added RAM into `ZONE_NORMAL`, so memory hot-*unplug* fails inside the guest ("Offline failed") and Proxmox leaves the lower value as a stuck pending change:
+
+- **Scale up** (guest above `memory_scale_threshold` of its live size): if Proxmox auto-ballooning has reclaimed the guest below `memory`, the balloon floor is lifted back to full `memory`. Otherwise RAM is hot-added up to the role maximum, with the floor following.
+- **Scale down** (below `memory_scaledown_threshold`): only the balloon floor is lowered, never `memory`. Proxmox reclaims down to that floor only when the host is under memory pressure. The floor never drops so far that current usage would exceed `memory_scaledown_floor_pct` (70%) of it.
+- Any pending `memory`/`balloon` change is reverted, and that VM's memory is left alone for the run. Decisions use the VM's running config (`config?current=1`) and actual size, not the pending view.
+- `-e autoscale_dry_run=true` reports every decision without changing any VM.
 
 | Role | CPU min | CPU max | RAM min | RAM max |
 |---|---|---|---|---|
@@ -309,6 +316,9 @@ ansible-playbook main.yml --tags bootstrap
 ansible-playbook main.yml --tags workers
 
 # Phase 5: Install add-ons (MetalLB, Traefik, Longhorn, reflector, cert-manager, Prometheus, Headlamp, ArgoCD, Descheduler)
+# This is also how a live cluster's add-ons are upgraded: each run resolves the newest
+# stable release from the Gitea mirrors (or the pin in cluster_addons/defaults) and
+# helm-upgrades in place. In AWX: JT 50 with job_tags=addons, wipe_cluster=false.
 ansible-playbook main.yml --tags addons
 
 # Skip VM provisioning for re-runs against existing nodes
@@ -588,6 +598,30 @@ The `@headlamp-k8s/prometheus-metrics` plugin is installed automatically via the
 1. Open Headlamp and navigate to **Settings → Plugins → Prometheus Metrics**
 2. Set the Prometheus URL to `https://prometheus.{{ ingress_domain }}`
 3. Charts will appear on node and pod detail pages
+
+## Longhorn Backups
+
+Prod backs up every Longhorn volume off-cluster, to an NFS export on the
+Synology (`longhorn_backup_nfs_host` / `longhorn_backup_nfs_export` in
+`roles/cluster_addons/defaults/main.yml`):
+
+- The default `BackupTarget` points at `nfs://<host>:<export>`. It's set through
+  the Helm value `defaultBackupStore` and also patched on the CR, so an existing
+  cluster follows the variable too.
+- The `backup-daily` RecurringJob (group `default`, so every volume) runs at
+  `longhorn_backup_cron` (02:00) and keeps `longhorn_backup_retain` (7) backups.
+- `upgrade.yml` runs that job on demand in preflight, and waits until every
+  attached volume has a backup strictly newer than the run. It's always
+  mandatory on prod (no override: fix the target before a planned upgrade).
+  Elsewhere it's optional, unless `k8s_upgrade_require_backup=true`.
+- Test clusters get no target: a throwaway cluster needs no backups, and one
+  shared backupstore would mix two clusters' backup lists.
+
+**NFS export (on the Synology):** a shared folder with an NFS rule for
+`172.16.0.0/23`, read/write, squash "Map all users to admin".
+
+**Restore:** Longhorn UI → Backup → pick the backup → Restore. Or create a
+`Volume` with `spec.fromBackup` set to the backup URL.
 
 ## Descheduler
 

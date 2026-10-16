@@ -144,6 +144,15 @@
       dex:
         enabled: false
 
+      # Chart 10.0 turned global.networkPolicy.create on by default. Keep it off:
+      # argocd/networkpolicy.yml (applied below) is this cluster's one ArgoCD
+      # policy set, written for kube-router, including the egress rule for
+      # kube-proxy DNATing API traffic to node:6443. A second, chart-owned set
+      # would layer untested rules on top of it.
+      global:
+        networkPolicy:
+          create: false
+
       notifications:
         resources:
           requests:
