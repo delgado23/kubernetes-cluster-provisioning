@@ -168,7 +168,7 @@
   roles:
     - role: vm_provisioning
 
-- name: Configure Proxmox VM settings (EFI disk, rename, tags)
+- name: Configure Proxmox VM settings (firmware check, rename, tags)
   hosts: k8s_nodes
   gather_facts: false
   serial: 1
