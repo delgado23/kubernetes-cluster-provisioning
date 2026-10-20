@@ -71,7 +71,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 └── roles/
     ├── gitea_mirrors/        # Create/refresh GitHub pull-mirrors + republish release assets in Gitea
     ├── vm_provisioning/       # Create VMs in Foreman/Proxmox, filters by node counts
-    ├── proxmox_postconfig/    # EFI disk, rename, tags, CPU/memory hotplug via Proxmox API
+    ├── proxmox_postconfig/    # efidisk0/rng0 check, rename, tags, CPU/memory hotplug via Proxmox API
     ├── enterprise_linux/      # Base OS provisioning: repos, packages, atop, DUO install
     ├── common/                # K8s prerequisites: containerd, kubelet, firewall
     ├── controlplane_infra/    # HAProxy, keepalived, controlplane firewall rules

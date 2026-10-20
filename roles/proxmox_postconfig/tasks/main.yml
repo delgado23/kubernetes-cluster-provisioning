@@ -86,11 +86,32 @@
   delay: 5
   delegate_to: localhost
 
-- name: Check if efidisk0 already exists
-  ansible.builtin.set_fact:
-    efidisk_exists: "{{ 'efidisk0' in vm_info }}"
+# Foreman's compute profile now creates efidisk0 (Secure Boot keys pre-enrolled)
+# and rng0 together with the VM (foreman-bootc foreman/setup_proxmox_firmware.rb):
+# an efidisk moves the VM onto Proxmox's current 4M OVMF, which disables PXE for
+# guests without a random number generator, and x86-64-v3 has no RDRAND. This
+# play cold-cycles the VM anyway (hotplug/NUMA/cores), so it adds either device
+# only if the profile did not, and warns, because a VM that PXE-installed
+# without them came from a profile missing that setup. Read the VM's own config:
+# /cluster/resources carries no config keys, so checking vm_info always said
+# "missing" and would have replaced an existing efidisk.
+- name: Get the VM's config
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/config"
+    method: GET
+    headers:
+      Authorization: "{{ _auth }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    return_content: true
+  register: _vm_config
+  delegate_to: localhost
 
-- name: Add EFI disk (skip if already present)
+- name: Check for efidisk0 and rng0
+  ansible.builtin.set_fact:
+    efidisk_exists: "{{ 'efidisk0' in _vm_config.json.data }}"
+    rng_exists: "{{ 'rng0' in _vm_config.json.data }}"
+
+- name: Add EFI disk (only if the compute profile did not create one)
   ansible.builtin.uri:
     url: "{{ _base }}/qemu/{{ vmid }}/config"
     method: PUT
@@ -104,10 +125,28 @@
   delegate_to: localhost
   when: not efidisk_exists
 
-- name: Skip EFI disk notice (already present)
+- name: Add VirtIO RNG (only if the compute profile did not create one)
+  ansible.builtin.uri:
+    url: "{{ _base }}/qemu/{{ vmid }}/config"
+    method: PUT
+    headers:
+      Authorization: "{{ _auth }}"
+    body_format: form-urlencoded
+    body:
+      rng0: "source=/dev/urandom"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200]
+  delegate_to: localhost
+  when: not rng_exists
+
+- name: Warn that the compute profile is missing its firmware setup
   ansible.builtin.debug:
-    msg: "efidisk0 already exists on VMID {{ vmid }} — skipping."
-  when: efidisk_exists
+    msg: >-
+      WARNING: VMID {{ vmid }} was created without
+      {{ ((['efidisk0'] if not efidisk_exists else []) + (['rng0'] if not rng_exists else [])) | join(' and ') }};
+      added here. Run foreman-bootc foreman/setup_proxmox_firmware.rb so its
+      Foreman compute profile creates them.
+  when: not (efidisk_exists and rng_exists)
 
 - name: Enable CPU and memory hotplug with NUMA
   ansible.builtin.uri:
@@ -223,6 +262,7 @@
   ansible.builtin.debug:
     msg: >
       VMID {{ vmid }} | Name: {{ vm_new_name }} | Tags: {{ vm_tags }}
-      | EFI disk: {{ efi_storage }} (4m, pre-enrolled) | Hotplug: cpu,memory | NUMA: enabled
+      | efidisk0: {{ 'from profile' if efidisk_exists else 'added (' + efi_storage + ', 4m, pre-enrolled)' }}
+      | rng0: {{ 'from profile' if rng_exists else 'added' }} | Hotplug: cpu,memory | NUMA: enabled
       | cores/vcpus: {{ controlplane_max_cores if 'Controlplane' in foreman_hostgroup else worker_max_cores }}
       | Status: running
