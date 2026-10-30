@@ -66,6 +66,15 @@ DRY_RUN=0
 
 die() { echo "!! $*" >&2; exit 1; }
 
+# Every blob reachable from the remaining refs, one "<sha> <path>" per line.
+# The path is everything after the first space, so paths containing spaces
+# are kept (filtering rev-list output on field count would silently drop them).
+list_blobs() {
+  git rev-list --objects --all \
+    | git cat-file --batch-check='%(objecttype) %(objectname) %(rest)' \
+    | sed -n 's/^blob //p'
+}
+
 if [[ -n "${FILTER_REPO:-}" ]]; then
   read -r -a filter_repo <<<"$FILTER_REPO"
 elif git filter-repo --version >/dev/null 2>&1; then
@@ -90,7 +99,7 @@ done
 echo ">> pruning non-published refs"
 keep_re="$(printf 'refs/heads/%s\n' "${BRANCHES[@]}" | paste -sd'|' -)"
 git for-each-ref --format='%(refname)' \
-  | grep -Ev "^(${keep_re})$" \
+  | { grep -Ev "^(${keep_re})$" || true; } \
   | sed 's/^/delete /' \
   | git update-ref --stdin
 
@@ -98,9 +107,8 @@ git for-each-ref --format='%(refname)' \
 # whole-file encrypted for a while) is dropped as well, by blob id.
 : > "$work/vault-blobs.txt"
 while read -r sha _; do
-  [[ "$(git cat-file -t "$sha")" == blob ]] || continue
   [[ "$(git cat-file -p "$sha" | head -c 15)" == "\$ANSIBLE_VAULT;"* ]] && echo "$sha" >> "$work/vault-blobs.txt"
-done < <(git rev-list --objects --all | awk 'NF==2')
+done < <(list_blobs)
 
 echo ">> stripping ${EXCLUDE_PATHS[*]} and $(wc -l < "$work/vault-blobs.txt") vault-encrypted blob(s); redacting known credential patterns"
 path_args=()
@@ -123,7 +131,6 @@ echo ">> scanning rewritten history for secrets"
 hits=0
 any="$(printf '(%s)|' "${SCAN_PATTERNS[@]}")"; any="${any%|}"
 while read -r sha path; do
-  [[ "$(git cat-file -t "$sha")" == blob ]] || continue
   body="$(git cat-file -p "$sha" | tr -d '\0')"
   grep -qE -- "$any" <<<"$body" || continue
   for pat in "${SCAN_PATTERNS[@]}"; do
@@ -132,7 +139,7 @@ while read -r sha path; do
       hits=$((hits + 1))
     fi
   done
-done < <(git rev-list --objects --all | awk 'NF==2')
+done < <(list_blobs)
 if command -v gitleaks >/dev/null 2>&1; then
   gitleaks git --no-banner --redact --log-level warn . || hits=$((hits + 1))
 elif [[ "${REQUIRE_GITLEAKS:-0}" == 1 ]]; then
