@@ -12,7 +12,10 @@ set -euo pipefail
 SCRIPT="$(cd "$(dirname "$0")/.." && pwd)/push-to-github.sh"
 BRANCHES=(master production cis-benchmark docs/provisioning-diagram image-mode
           maintenance-bootc-upgrade test-clusters)
-UUID="11111111-2222-3333-4444-555555555555"
+# Built at runtime so the dummy values never appear literally in this file,
+# which the clean case publishes along with the script.
+UUID="$(printf '%s-%s-%s-%s-%s' 11111111 2222 3333 4444 555555555555)"
+PW="hunter2$(printf pass)"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -59,8 +62,12 @@ mkdir -p "$src/vars"
 printf '$ANSIBLE_VAULT;1.1;AES256\n3132\n' > "$src/vars/vault.yml"
 printf '$ANSIBLE_VAULT;1.1;AES256\n3334\n' > "$src/vault copy.yml"
 printf 'proxmox_api_token: "%s"  # leaked\n' "$UUID" > "$src/my vars.yml"
-printf 'foreman_password: REDACTED   # store in vault\n' > "$src/vars/foreman.yml"
+printf 'foreman_password: REDACTED   # store in vault\n' "$PW" > "$src/vars/foreman.yml"
 printf 'hello\n' > "$src/README.md"
+# The real repo publishes this script and its tests, which mention the vault
+# header and the secret patterns; they must not trip the gate themselves.
+cp "$SCRIPT" "$src/push-to-github.sh"
+mkdir -p "$src/tests" && cp "$0" "$src/tests/test-push-to-github.sh"
 commit_all "seed with secrets"
 # Later commits replace the literals, as in the real history.
 printf 'proxmox_api_token: "{{ vault_proxmox_api_token }}"\n' > "$src/my vars.yml"
@@ -96,10 +103,10 @@ else
   fail "could not read the target's blobs/paths"
 fi
 if ! grep -qF -- "$UUID" <<<"$blobs"; then ok "no literal token UUID anywhere in published history"; else fail "UUID reached the target"; fi
-if ! grep -qF -- '$ANSIBLE_VAULT;' <<<"$blobs"; then ok "no vault-encrypted blob in published history"; else fail "vault blob reached the target"; fi
+if ! grep -qE -- '^[[:space:]]*[$]ANSIBLE_VAULT;[0-9.]+;' <<<"$blobs"; then ok "no vault-encrypted blob in published history"; else fail "vault blob reached the target"; fi
 if ! grep -qxF 'vars/vault.yml' <<<"$paths"; then ok "vars/vault.yml absent from history"; else fail "vars/vault.yml reached the target"; fi
 if ! grep -qxF 'leak.yml' <<<"$paths"; then ok "non-published branch content pruned"; else fail "leak.yml reached the target"; fi
-if ! grep -qF 'hunter2pass' <<<"$blobs"; then ok "plaintext foreman_password redacted"; else fail "foreman_password reached the target"; fi
+if ! grep -qF -- "$PW" <<<"$blobs"; then ok "plaintext foreman_password redacted"; else fail "foreman_password reached the target"; fi
 if grep -qF 'proxmox_api_token: "REDACTED"' <<<"$blobs" \
    && grep -qF 'proxmox_api_token: "{{ vault_proxmox_api_token }}"' <<<"$blobs" \
    && grep -qxF 'my vars.yml' <<<"$paths"; then
@@ -122,7 +129,20 @@ else
   fail "dirty repo (rc=$rc): $out"
 fi
 
-# --- case 3: a missing published branch is a hard error ----------------------
+# --- case 3: an inline !vault value in a YAML file aborts ---------------------
+new_case inline
+printf 'db_password: !vault |\n  $ANSIBLE_VAULT;1.1;AES256\n  3132\n' > "$src/group vars.yml"
+commit_all "inline vault value"
+publish_branches
+run_script
+if [[ $rc -ne 0 ]] && grep -q 'HIT .*group vars.yml' <<<"$out" \
+   && [[ -z "$(git -C "$dst" for-each-ref)" ]]; then
+  ok "inline !vault value aborts the push and the target stays empty"
+else
+  fail "inline vault (rc=$rc): $out"
+fi
+
+# --- case 4: a missing published branch is a hard error ----------------------
 new_case missing
 printf 'hello\n' > "$src/README.md"
 commit_all init
