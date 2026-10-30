@@ -1,0 +1,33 @@
+name: push-to-github
+
+# The reviewer's offline sandbox has no git-filter-repo, so the end-to-end
+# tests of push-to-github.sh (synthetic repos, real filter-repo rewrite, push
+# to a local bare repo) run here. CI holds no secrets and never reaches GitHub.
+on:
+  pull_request:
+    paths:
+      - push-to-github.sh
+      - tests/test-push-to-github.sh
+      - .gitea/workflows/push-to-github.yml
+  push:
+    branches: [master]
+    paths:
+      - push-to-github.sh
+      - tests/test-push-to-github.sh
+      - .gitea/workflows/push-to-github.yml
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck git python3-venv >/dev/null
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install -q git-filter-repo==2.47.0
+      - name: shellcheck
+        run: shellcheck push-to-github.sh tests/test-push-to-github.sh
+      - name: End-to-end tests
+        run: FILTER_REPO=/tmp/venv/bin/git-filter-repo bash tests/test-push-to-github.sh
