@@ -54,6 +54,7 @@ Node counts are defined in `vars/vms.yml` and filtered at runtime via `controlpl
 ├── upgrade-dr-restore.yml # After `kubeadm upgrade apply`: restore the pre-upgrade etcd snapshot
 ├── wipe.yml              # Remove all nodes from Foreman, FreeIPA, and Zabbix
 ├── mirror-github-repos.yml # Pull-mirror upstream GitHub deps into local Gitea
+├── push-to-github.sh     # Publish to the public GitHub copy with secrets scrubbed from history
 ├── handlers/
 │   └── main.yml          # Shared handlers (e.g. Reload ssh)
 ├── templates/
@@ -144,7 +145,7 @@ Encrypt `vars/vault.yml` with `ansible-vault encrypt vars/vault.yml`. Required k
 
 | Variable | Description |
 |---|---|
-| `vault_proxmox_api_token` | Proxmox API token secret |
+| `vault_proxmox_api_token` | Proxmox API token secret. In Ascender this is **overridden** by the "Proxmox foreman token (k8s)" credential (type "Proxmox API Token (extra vars)"), which injects it as an extra var on every job template that uses "Kubernetes Vault"; any value left in `vars/vault.yml` is ignored there. The token is also stored in OpenBao at `secret/automation/proxmox-foreman-token`. |
 | `vault_proxmox_host` | Proxmox host and port (e.g. `pve-01.example.com:8006`) |
 | `vault_proxmox_user` | Proxmox user for API auth (e.g. `user@Authentik`) |
 | `vault_cloudflare_api_token` | Cloudflare API token for DNS-01 |
@@ -521,11 +522,40 @@ controlplane_configs:
 
 ## Proxmox API Token Setup
 
-Create the token once in Proxmox before running the playbooks:
+The playbooks authenticate as `{{ vault_proxmox_user }}!foreman` (`proxmox_token_id` is `foreman` in
+`autoscale.yml` and `roles/proxmox_postconfig/defaults/main.yml`). The same token is used by
+Foreman's Proxmox compute resource. It is a privilege-separated token with its own ACL
+(`PVEAdmin` on `/`).
 
-1. Datacenter → Permissions → API Tokens → Add
-2. User: `root@pam`, Token ID: `ansible`, Privilege Separation: **No**
-3. Copy the displayed secret (shown only once) into vault as `vault_proxmox_api_token`
+To create it:
+
+1. Datacenter → Permissions → API Tokens → Add, Token ID `foreman`, Privilege Separation **Yes**
+2. Datacenter → Permissions → Add → API Token Permission: path `/`, role `PVEAdmin`
+3. Copy the displayed secret (shown only once) to the places listed under *Rotating it*
+
+**Rotating it** (`pveum user token modify <user> foreman --regenerate 1` keeps the token ID and ACL;
+the old secret stops working immediately, so pause the autoscale schedules first):
+
+1. Foreman → Infrastructure → Compute Resources → Proxmox → Edit → new token → Test Connection
+2. Ascender → Credentials → "Proxmox foreman token (k8s)" → new secret
+3. OpenBao `secret/automation/proxmox-foreman-token`
+
+## Publishing to GitHub
+
+Gitea is the source of truth; `github.com/delgado23/kubernetes-cluster-provisioning` is a public
+copy. Only ever update it with `push-to-github.sh`, never with a plain push or a Gitea push mirror:
+
+```bash
+pip install git-filter-repo==2.47.0   # once
+./push-to-github.sh --dry-run          # clone, scrub, scan; push nothing
+./push-to-github.sh                    # same, then force-push the listed branches
+```
+
+The script mirror-clones Gitea into a temp dir, keeps only `BRANCHES`, removes `vars/vault.yml`
+and every other ansible-vault encrypted file version from history, and redacts known plaintext
+credential patterns (`REPLACE_RULES`). It then scans the rewritten history and pushes **only if
+the scan is clean** (gitleaks is also run when installed; `REQUIRE_GITLEAKS=1` makes it
+mandatory). Commit SHAs on GitHub therefore differ from Gitea's.
 
 ## Authentik SSO Setup
 
