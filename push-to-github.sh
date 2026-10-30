@@ -47,7 +47,7 @@ REPLACE_RULES=(
 )
 
 # High-signal secret patterns; any hit in the rewritten history aborts the push.
-# shellcheck disable=SC2016  # '\$ANSIBLE_VAULT;' is a literal $, not an expansion
+# shellcheck disable=SC2016  # the '\$ANSIBLE_VAULT' pattern is a literal $, not an expansion
 SCAN_PATTERNS=(
   '-----BEGIN [A-Z ]*PRIVATE KEY-----'
   'AKIA[0-9A-Z]{16}'
@@ -55,7 +55,9 @@ SCAN_PATTERNS=(
   'glpat-[A-Za-z0-9_-]{20}'
   'xox[baprs]-[A-Za-z0-9-]{10,}'
   '\bhvs\.[A-Za-z0-9]{24,}'
-  '\$ANSIBLE_VAULT;'
+  # Vault data: the header opens a line (whole file, or indented under `!vault |`)
+  # and carries a version and cipher, so mentions of the string (like this one) don't match.
+  '^[[:space:]]*\$ANSIBLE_VAULT;[0-9.]+;[A-Z0-9]+'
   'PVEAPIToken=[^ =]+=[0-9a-fA-F]{8}-'
   '(token|password|secret)[A-Za-z_]*["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
 )
@@ -107,7 +109,7 @@ git for-each-ref --format='%(refname)' \
 # whole-file encrypted for a while) is dropped as well, by blob id.
 : > "$work/vault-blobs.txt"
 while read -r sha _; do
-  [[ "$(git cat-file -p "$sha" | head -c 15)" == "\$ANSIBLE_VAULT;"* ]] && echo "$sha" >> "$work/vault-blobs.txt"
+  [[ "$(git cat-file -p "$sha" | head -c 15 | tr -d '\0')" == "\$ANSIBLE_VAULT;"* ]] && echo "$sha" >> "$work/vault-blobs.txt"
 done < <(list_blobs)
 
 echo ">> stripping ${EXCLUDE_PATHS[*]} and $(wc -l < "$work/vault-blobs.txt") vault-encrypted blob(s); redacting known credential patterns"
